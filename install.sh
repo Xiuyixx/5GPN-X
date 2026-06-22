@@ -349,15 +349,34 @@ get_public_ip() {
     info "Public IP detected: $PUBLIC_IP"
 }
 
+port53_pids() {
+    ss -H -lnptu 2>/dev/null | awk '$5 ~ /(^|\[|:)53$/ {print}' | grep -oP 'pid=\K[0-9]+' | sort -u || true
+}
+
+port53_owner_summary() {
+    local pids pid proc unit summaries=()
+    pids=$(port53_pids)
+    for pid in $pids; do
+        proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+        unit=$(systemd_unit_for_pid "$pid")
+        if [[ -n "$unit" ]]; then
+            summaries+=("$proc (PID: $pid, unit: $unit)")
+        else
+            summaries+=("$proc (PID: $pid)")
+        fi
+    done
+    (IFS=', '; echo "${summaries[*]}")
+}
+
 check_port_53() {
     info "Checking port 53 availability..."
-    local pid
-    pid=$(ss -lnptu 2>/dev/null | grep ':53 ' | head -n1 | grep -oP 'pid=\K[0-9]+' || true)
+    local pid pids proc remaining
+    pids=$(port53_pids)
 
-    if [[ -n "$pid" ]]; then
-        local proc
+    if [[ -n "$pids" ]]; then
+        pid=$(printf '%s\n' "$pids" | head -n1)
         proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
-        warn "Port 53 is already in use by: $proc (PID: $pid)"
+        warn "Port 53 is already in use by: $(port53_owner_summary)"
 
         read -r -p "Stop and disable '$proc' to free port 53? [Y/n]: " confirm
         if [[ "$confirm" =~ ^[Nn]$ ]]; then
@@ -365,19 +384,49 @@ check_port_53() {
             exit 1
         fi
 
-        stop_port53_owner "$pid" "$proc"
-        sleep 1
+        for pid in $pids; do
+            proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+            stop_port53_owner "$pid" "$proc"
+        done
+        wait_for_port53_free 10
 
-        # Double check
-        pid=$(ss -lnptu 2>/dev/null | grep ':53 ' | head -n1 | grep -oP 'pid=\K[0-9]+' || true)
-        if [[ -n "$pid" ]]; then
-            err "Failed to free port 53. Please manually stop the service using it."
+        remaining=$(port53_pids)
+        if [[ -n "$remaining" ]]; then
+            warn "Port 53 is still in use by: $(port53_owner_summary)"
+            warn "Trying SIGTERM/SIGKILL on remaining port 53 owners..."
+            for pid in $remaining; do
+                kill "$pid" 2>/dev/null || true
+            done
+            wait_for_port53_free 5
+        fi
+
+        remaining=$(port53_pids)
+        if [[ -n "$remaining" ]]; then
+            for pid in $remaining; do
+                kill -9 "$pid" 2>/dev/null || true
+            done
+            wait_for_port53_free 3
+        fi
+
+        remaining=$(port53_pids)
+        if [[ -n "$remaining" ]]; then
+            err "Failed to free port 53. Still in use by: $(port53_owner_summary)"
+            err "Check with: ss -lnptu 'sport = :53' ; systemctl status <unit> ; journalctl -u <unit> -n 50"
             exit 1
         fi
         ok "Port 53 is now free"
     else
         ok "Port 53 is available"
     fi
+}
+
+wait_for_port53_free() {
+    local timeout="${1:-10}" i
+    for ((i=0; i<timeout; i++)); do
+        [[ -z "$(port53_pids)" ]] && return 0
+        sleep 1
+    done
+    [[ -z "$(port53_pids)" ]]
 }
 
 systemd_unit_for_pid() {
@@ -393,9 +442,7 @@ stop_port53_owner() {
     unit=$(systemd_unit_for_pid "$pid")
 
     if [[ -n "$unit" ]]; then
-        info "Stopping systemd unit owning port 53: $unit"
-        systemctl stop "$unit" 2>/dev/null || true
-        systemctl disable "$unit" 2>/dev/null || true
+        stop_systemd_unit_and_socket "$unit"
     fi
 
     case "$proc" in
@@ -414,22 +461,30 @@ EOF
                     info "Rewrote /etc/resolv.conf to public DNS servers for installer stability"
                 fi
             fi
-            systemctl stop systemd-resolved.service 2>/dev/null || true
-            systemctl disable systemd-resolved.service 2>/dev/null || true
+            stop_systemd_unit_and_socket systemd-resolved.service
+            ;;
+        dnsdist)
+            stop_systemd_unit_and_socket dnsdist.service
             ;;
         dnsmasq)
-            systemctl stop dnsmasq.service 2>/dev/null || true
-            systemctl disable dnsmasq.service 2>/dev/null || true
+            stop_systemd_unit_and_socket dnsmasq.service
             ;;
         named)
-            systemctl stop named.service bind9.service 2>/dev/null || true
-            systemctl disable named.service bind9.service 2>/dev/null || true
+            stop_systemd_unit_and_socket named.service
+            stop_systemd_unit_and_socket bind9.service
             ;;
     esac
+}
 
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null || true
-    fi
+stop_systemd_unit_and_socket() {
+    local unit="${1:-}"
+    [[ -z "$unit" ]] && return 0
+    local socket="${unit%.service}.socket"
+
+    info "Stopping systemd unit owning port 53: $unit"
+    systemctl stop "$socket" 2>/dev/null || true
+    systemctl stop "$unit" 2>/dev/null || true
+    systemctl disable "$unit" "$socket" 2>/dev/null || true
 }
 
 # =============================================================================
