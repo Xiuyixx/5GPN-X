@@ -10,6 +10,7 @@ set -euo pipefail
 # =============================================================================
 # Configurable defaults
 # =============================================================================
+REPO_URL="https://github.com/Xiuyixx/5GPN-X.git"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "$0")"
 BASE_DIR="/opt/proxy-gateway"
@@ -41,6 +42,38 @@ GFWLIST_URL="https://github.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
 CHINALIST_URL="https://github.com/felixonmars/dnsmasq-china-list/raw/master/accelerated-domains.china.conf"
 DEFAULT_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
 DEFAULT_PUBLIC_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8")
+
+bootstrap_from_repo_if_needed() {
+    local required=(
+        install.sh renew-hook.sh sniproxy.conf quic-proxy.go china-dns-race-proxy.go
+        dnsdist.conf.template update-rules.sh ios-http.py tgbot.py rules-import.py
+        singbox-exit-config.py singbox-router-config.py rules-default.conf
+    )
+    local missing=0 f tmpdir
+
+    for f in "${required[@]}"; do
+        [[ -f "${SCRIPT_DIR}/${f}" ]] || { missing=1; break; }
+    done
+
+    if [[ $missing -eq 0 ]]; then
+        return 0
+    fi
+
+    if [[ -n "${G5PNX_BOOTSTRAPPED:-}" ]]; then
+        return 0
+    fi
+
+    tmpdir="$(mktemp -d /tmp/5gpnx-src.XXXXXX)"
+    if git clone --depth=1 --branch main "$REPO_URL" "$tmpdir" >/dev/null 2>&1; then
+        export G5PNX_BOOTSTRAPPED=1
+        exec bash "$tmpdir/install.sh" "$@"
+    fi
+
+    err "无法自动获取完整源码树。请用 git clone 后再运行 install.sh。"
+    exit 1
+}
+
+bootstrap_from_repo_if_needed "$@"
 
 # =============================================================================
 # Colors
