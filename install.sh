@@ -401,6 +401,19 @@ stop_port53_owner() {
     case "$proc" in
         systemd-resolve|systemd-resolved)
             info "Stopping systemd-resolved service to release DNS stub port 53"
+            # Preserve DNS after disabling the local stub resolver; otherwise
+            # apt/curl/certbot may lose name resolution on Debian 13.
+            if [[ -L /etc/resolv.conf || -f /etc/resolv.conf ]]; then
+                if ! grep -q '1.1.1.1' /etc/resolv.conf 2>/dev/null; then
+                    cp -a /etc/resolv.conf /etc/resolv.conf.pgw.bak 2>/dev/null || true
+                    cat > /etc/resolv.conf <<'EOF'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 9.9.9.9
+EOF
+                    info "Rewrote /etc/resolv.conf to public DNS servers for installer stability"
+                fi
+            fi
             systemctl stop systemd-resolved.service 2>/dev/null || true
             systemctl disable systemd-resolved.service 2>/dev/null || true
             ;;
@@ -425,13 +438,27 @@ stop_port53_owner() {
 install_deps() {
     info "Installing system dependencies..."
 
+    local pcre_dev_pkg="libpcre3-dev"
+    if [[ "${OS:-}" == "debian" && "${VER%%.*}" -ge 13 ]]; then
+        pcre_dev_pkg="libpcre2-dev"
+    fi
+
     case "$PKG_MGR" in
         apt-get)
             export DEBIAN_FRONTEND=noninteractive
-            apt-get update -qq
+            if ! apt-get update -qq; then
+                warn "apt update failed; trying a direct public DNS path for Debian mirrors..."
+                if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
+                    sed -i 's/^URIs: .*/URIs: http:\/\/deb.debian.org\/debian/' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+                fi
+                if [[ -f /etc/apt/sources.list ]]; then
+                    sed -i 's|^[[:space:]]*deb[[:space:]]\+mirror+file:/etc/apt/mirrors/.*|deb http://deb.debian.org/debian trixie main|g' /etc/apt/sources.list 2>/dev/null || true
+                fi
+                apt-get update -qq
+            fi
             apt-get install -y -qq \
                 build-essential git wget curl ca-certificates \
-                libev-dev libpcre3-dev libudns-dev libssl-dev \
+                libev-dev "${pcre_dev_pkg}" libudns-dev libssl-dev \
                 autoconf automake libtool pkg-config \
                 dnsdist certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap2-bin \
