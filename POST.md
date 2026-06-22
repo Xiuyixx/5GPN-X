@@ -67,6 +67,3 @@ Ubuntu 20.04+ / Debian 11+ / CentOS·Rocky·Alma 7-9 / RHEL 8-9 / Fedora 39+,x86
 ---
 
 仓库:https://github.com/lingchenfs1/5gpn,MIT 协议,欢迎 issue / PR。
-
-
-> Debian 13 适配：安装流程会先装依赖、再释放 53 端口；停用 systemd-resolved 前会先写入静态 /etc/resolv.conf，并自动切换到 libpcre2-dev。

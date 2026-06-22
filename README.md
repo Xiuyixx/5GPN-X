@@ -12,7 +12,6 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Xiuyixx/5GPN-X/main/inst
 
 会自动拉取仓库到 `/opt/5gpn` 并运行安装脚本（交互输入你自己的域名）。装好后可随时重进 `/opt/5gpn` 跑 `./install.sh --status` 等管理命令；额外参数会透传给安装脚本，例如 `sudo bash /tmp/5gpn.sh --status`（参数透传给安装脚本）。
 
-> 兼容说明：安装脚本会先装依赖、再处理 53 端口；在 Debian 13 上会自动切换到 `libpcre2-dev`，并在停用 `systemd-resolved` 前写入静态 `/etc/resolv.conf`，避免安装过程断网。
 
 ## 系统要求
 
