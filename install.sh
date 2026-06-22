@@ -2342,7 +2342,6 @@ main_install() {
     detect_memory_profile
     ensure_swap
     get_public_ip
-    check_port_53
 
     echo ""
     echo "=========================================="
@@ -2351,6 +2350,7 @@ main_install() {
     echo ""
 
     install_deps
+    check_port_53
     generate_domain
     verify_domain_dns
     install_cert
