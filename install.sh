@@ -313,10 +313,16 @@ swap_size_to_bytes() {
 prompt_swap_size() {
     local input="${SWAP_SIZE:-}"
     if [[ -z "$input" && -t 0 ]]; then
-        read -r -p "请输入 swap 大小（如 0.5/1/2 或 0.5G/1G/2G，回车默认 1）: " input || true
+        read -r -p "请输入 swap 大小（如 0.5/1/2 或 0.5G/1G/2G；输入 0/n/skip 可跳过，回车默认 1）: " input || true
     fi
     input="${input:-1}"
     input="${input^^}"
+    case "$input" in
+        0|N|NO|SKIP)
+            printf 'SKIP'
+            return 0
+            ;;
+    esac
     if [[ "$input" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         input="${input}G"
     fi
@@ -338,6 +344,10 @@ ensure_swap() {
 
     local swap_size swap_bytes swap_mib required_mb avail_mb
     swap_size="$(prompt_swap_size)"
+    if [[ "$swap_size" == "SKIP" ]]; then
+        info "Skipping swap creation by user request."
+        return 0
+    fi
     swap_bytes="$(swap_size_to_bytes "$swap_size")"
     if [[ "$swap_bytes" -le 0 ]]; then
         warn "无法解析 swap 大小，已回退到 1G。"
