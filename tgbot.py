@@ -793,7 +793,7 @@ def handle_message(msg):
     # A slash command always aborts any in-progress flow.
     if text.startswith("/"):
         PENDING.pop(chat_id, None)
-        if text.startswith(("/start", "/help", "/menu")):
+        if text.startswith(("/start", "/menu")):
             send(chat_id, "<b>proxy-gateway 控制台</b>\n选择一个操作：", main_menu())
         elif text.startswith("/status"):
             send(chat_id, op_status())
@@ -801,8 +801,6 @@ def handle_message(msg):
             send(chat_id, "选择要切换到的出口：", exits_menu())
         elif text.startswith("/rules"):
             send(chat_id, "🧭 <b>智能分流</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
-        elif text.startswith("/api"):
-            send(chat_id, op_api_info(), back_kb("menu:main"))
         else:
             send(chat_id, "未知命令。发送 /menu 打开操作面板。")
         return
@@ -923,8 +921,6 @@ def handle_callback(cb):
         edit(cb, op_show_rules(), back_kb("menu:rules"))
     elif data == "act:status":
         edit(cb, op_status(), back_kb("menu:main"))
-    elif data == "act:api":
-        edit(cb, op_api_info(), back_kb("menu:main"))
     elif data.startswith("logs:"):
         svc = data[len("logs:"):]
         edit(cb, "📜 正在取 <b>%s</b> 日志…" % html.escape(svc))
@@ -999,7 +995,6 @@ BOT_COMMANDS = [
     ("rules", "智能分流规则"),
     ("cancel", "取消当前操作"),
     ("id", "获取我的 Telegram ID"),
-    ("help", "帮助说明"),
 ]
 
 
