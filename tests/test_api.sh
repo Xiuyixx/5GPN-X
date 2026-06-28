@@ -5,6 +5,17 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 fail() { echo "FAIL: $*"; exit 1; }
 
 install_body="$(cat "${here}/install.sh")"
+
+if [[ ! -f "${here}/api-server.py" && ! -f "${here}/webui/index.html" ]]; then
+    if [[ "${install_body}" == *'setup_api()'* || "${install_body}" == *'--setup-api)'* ]]; then
+        fail "API install wiring exists but api-server.py/webui are missing"
+    fi
+    echo "api control surface skipped (not shipped in this tree)"
+    exit 0
+fi
+
+[[ -f "${here}/api-server.py" ]] || fail "api-server.py missing while API/webui files are partially present"
+[[ -f "${here}/webui/index.html" ]] || fail "webui/index.html missing while API files are partially present"
 api_body="$(cat "${here}/api-server.py")"
 
 # --- api-server.py: compiles and enforces auth/TLS --------------------------
