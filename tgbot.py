@@ -718,11 +718,11 @@ def parse_exit_names():
 
 def op_ios_send(chat_id):
     """Send the iOS profile QR as an image (with the URL as caption)."""
-    url = _read_file(os.path.join(WWW_DIR, "ios-profile-url.txt"))
-    if not url:
-        domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
-        if domain:
-            url = "http://%s:8111/ios-dot.mobileconfig" % domain
+    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    if domain:
+        url = "http://%s:8111/ios-dot.mobileconfig" % domain
+    else:
+        url = _read_file(os.path.join(WWW_DIR, "ios-profile-url.txt"))
     if not url:
         return "未找到 iOS 描述文件地址,先在服务器上 `--ios` 生成。"
     cap = ("📱 <b>iOS DoT 描述文件</b>\n扫码安装(仅蜂窝网启用):\n<code>%s</code>" % html.escape(url))

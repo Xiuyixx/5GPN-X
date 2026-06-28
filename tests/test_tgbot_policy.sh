@@ -40,6 +40,7 @@ bot_body="$(cat "${bot}")"
 [[ "${bot_body}" == *'--set-dot-domain'* ]] || fail "tgbot.py must call the fixed DoT domain management command"
 [[ "${bot_body}" == *'--set-dns'* ]] || fail "tgbot.py must call the fixed DNS management command"
 [[ "${bot_body}" != *'最多发送三行：private、public、sniproxy'* ]] || fail "tgbot.py DNS flow should use one unified DNS input"
+[[ "${bot_body}" == *'url = "http://%s:8111/ios-dot.mobileconfig" % domain'* ]] || fail "tgbot.py iOS QR must prefer the current DoT domain over cached URL files"
 
 # --- install wiring ---------------------------------------------------------
 [[ "${install_body}" == *'setup_tgbot()'* ]] || fail "install.sh must define setup_tgbot"
