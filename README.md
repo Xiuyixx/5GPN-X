@@ -395,7 +395,7 @@ dnsdist 会先检查来源 IP 和查询端口：
 - **sysctl 缩小**:`nf_conntrack_max` → 13 万、`somaxconn` → 4096、`file-max` → 100 万、TCP buffer 上限 128MB → 16MB 等,避免大机器参数在小内存上分配过大的内核结构。
 - **iOS 描述文件服务改为 systemd socket 按需启动**:平时 0 进程,手机扫码访问时才临时拉起一个短命 Python(省 ~15-20MB 常驻)。
 - **Go 代理加内存上限**:quic-proxy / china-dns-race-proxy 注入 `GOMEMLIMIT=64MiB GOGC=50` drop-in。
-- **自动提示创建自定义大小 swap**(磁盘够且无现有 swap 时)：安装时可输入 `0.5` / `1` / `2` / `4` 这类数字（默认按 `G` 处理），也支持直接输入 `0.5G` / `1G` / `2G`；如果不想创建 swap，可输入 `0`、`n`、`no` 或 `skip` 跳过。创建后会自动写入对应 `/swapfile`，并把编译并行度限到 `-j1`，避免安装期 `make` / `go build` OOM。
+- **先确认再创建自定义大小 swap**(磁盘够且无现有 swap 时)：安装时会先询问是否创建 swap；输入 `y` 后再输入 `0.5` / `1` / `2` / `4` 这类数字（默认按 `G` 处理），也支持直接输入 `0.5G` / `1G` / `2G`，回车默认 `1G`。创建后会自动写入 `/swapfile`，并把编译并行度限到 `-j1`，避免安装期 `make` / `go build` OOM；不输入 `y` 则跳过创建。
 
 标准内存(> 1GB)主机保持原有大参数,不受影响。当前档位可用 `./install.sh --status` 查看(`Mem profile` 行)。
 

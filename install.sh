@@ -310,10 +310,22 @@ swap_size_to_bytes() {
     python3 -c 'import re, sys; raw = sys.argv[1].strip().upper(); raw = raw if raw.endswith("G") else (raw + "G" if raw else raw); m = re.fullmatch(r"([0-9]+(?:\\.[0-9]+)?)G", raw); print(0 if not m else int(float(m.group(1)) * 1024 * 1024 * 1024))' "$1"
 }
 
+confirm_swap_creation() {
+    local input="${SWAP_ENABLE:-}"
+    if [[ -z "$input" && -t 0 ]]; then
+        read -r -p "检测到低内存且当前没有 swap，是否创建 swap？输入 y 开启，其它输入跳过 [y/N]: " input || true
+    fi
+    input="${input^^}"
+    case "$input" in
+        Y|YES) return 0 ;;
+        *)     return 1 ;;
+    esac
+}
+
 prompt_swap_size() {
     local input="${SWAP_SIZE:-}"
     if [[ -z "$input" && -t 0 ]]; then
-        read -r -p "请输入 swap 大小（如 0.5/1/2 或 0.5G/1G/2G；输入 0/n/skip 可跳过，回车默认 1）: " input || true
+        read -r -p "请输入 swap 大小（如 0.5/1/2 或 0.5G/1G/2G；回车默认 1）: " input || true
     fi
     input="${input:-1}"
     input="${input^^}"
@@ -343,6 +355,10 @@ ensure_swap() {
     [[ -e /swapfile ]] && return 0
 
     local swap_size swap_bytes swap_mib required_mb avail_mb
+    if ! confirm_swap_creation; then
+        info "Skipping swap creation by user request."
+        return 0
+    fi
     swap_size="$(prompt_swap_size)"
     if [[ "$swap_size" == "SKIP" ]]; then
         info "Skipping swap creation by user request."
