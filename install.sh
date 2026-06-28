@@ -176,6 +176,39 @@ with open(path, "w", encoding="utf-8") as f:
 PYEOF
 }
 
+resolve_domain_a_records() {
+    local domain="${1:-}" resolver="" out=""
+    local records=()
+    local public_resolvers=(1.1.1.1 8.8.8.8 9.9.9.9 223.5.5.5 114.114.114.114)
+
+    if command -v dig >/dev/null 2>&1; then
+        for resolver in "${public_resolvers[@]}"; do
+            while IFS= read -r out; do
+                [[ "$out" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && records+=("$out")
+            done < <(dig +time=2 +tries=1 +short A "$domain" @"$resolver" 2>/dev/null || true)
+        done
+    fi
+
+    if command -v getent >/dev/null 2>&1; then
+        while IFS= read -r out; do
+            [[ "$out" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && records+=("$out")
+        done < <(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' || true)
+    fi
+
+    if [[ ${#records[@]} -gt 0 ]]; then
+        printf '%s\n' "${records[@]}" | awk '!seen[$0]++'
+    fi
+}
+
+domain_resolves_to_public_ip() {
+    local domain="${1:-}" expected_ip="${2:-}" ip=""
+    [[ -n "$domain" && -n "$expected_ip" ]] || return 1
+    while IFS= read -r ip; do
+        [[ "$ip" == "$expected_ip" ]] && return 0
+    done < <(resolve_domain_a_records "$domain")
+    return 1
+}
+
 configure_overseas_dns() {
     local legacy="${OVERSEAS_DNS:-}"
     local private_selected="${PRIVATE_OVERSEAS_DNS:-$legacy}"
@@ -766,8 +799,8 @@ verify_domain_dns() {
     info "等待 DNS 解析生效（最多 120 秒）..."
     local waited=0 resolved=""
     while [[ $waited -lt 120 ]]; do
-        resolved=$(dig +short A "$DOMAIN" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | head -n1 || echo "")
-        if [[ "$resolved" == "$PUBLIC_IP" ]]; then
+        resolved=$(resolve_domain_a_records "$DOMAIN" | paste -sd',' - || true)
+        if domain_resolves_to_public_ip "$DOMAIN" "$PUBLIC_IP"; then
             ok "DNS 解析验证通过: $DOMAIN -> $PUBLIC_IP"
             mkdir -p "$CONF_DIR"
             echo "$DOMAIN" > "${CONF_DIR}/.domain"
@@ -2512,8 +2545,8 @@ set_dot_domain() {
     info "DNS 解析检查"
     info "域名: $new_domain"
     info "需要的 A 记录值: $PUBLIC_IP"
-    resolved=$(dig +short A "$new_domain" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | head -n1 || true)
-    if [[ "$resolved" != "$PUBLIC_IP" ]]; then
+    resolved=$(resolve_domain_a_records "$new_domain" | paste -sd',' - || true)
+    if ! domain_resolves_to_public_ip "$new_domain" "$PUBLIC_IP"; then
         err "$new_domain 当前解析到 ${resolved:-无}，不是本机 $PUBLIC_IP"
         err "请先把 A 记录指向本机公网 IP 后重试。"
         exit 1
