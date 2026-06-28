@@ -26,8 +26,9 @@ function Assert-NotContains {
     }
 }
 
-# A DOMAIN env var must still skip the interactive prompt.
-Assert-Contains 'DOMAIN_PRECONFIGURED=1' 'preconfigured domain flag'
+# A DOMAIN env var must still skip the interactive prompt and persist the domain.
+Assert-Contains 'Using pre-configured domain: $DOMAIN' 'preconfigured domain path'
+Assert-Contains 'echo "$DOMAIN" > "${CONF_DIR}/.domain"' 'preconfigured domain persistence'
 # Non-interactive installs without DOMAIN must fail fast instead of hanging on a read.
 Assert-Contains 'Set the DOMAIN environment variable' 'noninteractive missing-domain guard'
 # The custom-domain flow must verify the operator's own A record.

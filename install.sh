@@ -15,7 +15,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "$0")"
 BASE_DIR="/opt/proxy-gateway"
 CONF_DIR="${BASE_DIR}/etc"
-LOG_DIR="${BASE_DIR}/log"
 SRC_DIR="${BASE_DIR}/src"
 WWW_DIR="${BASE_DIR}/www"
 IOS_PROFILE_PORT=8111
@@ -38,8 +37,6 @@ SINGBOX_CFG_GEN="/opt/proxy-gateway/bin/singbox-exit-config.py"
 SINGBOX_ROUTER_GEN="/opt/proxy-gateway/bin/singbox-router-config.py"
 RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
 SINGBOX_VERSION_DEFAULT="1.10.7"
-GFWLIST_URL="https://github.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
-CHINALIST_URL="https://github.com/felixonmars/dnsmasq-china-list/raw/master/accelerated-domains.china.conf"
 DEFAULT_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
 DEFAULT_PUBLIC_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8")
 
@@ -69,7 +66,7 @@ bootstrap_from_repo_if_needed() {
         exec bash "$tmpdir/install.sh" "$@"
     fi
 
-    err "无法自动获取完整源码树。请用 git clone 后再运行 install.sh。"
+    echo "[ERR]  无法自动获取完整源码树。请用 git clone 后再运行 install.sh。" >&2
     exit 1
 }
 
@@ -297,7 +294,7 @@ detect_memory_profile() {
     if [[ "$LOWMEM" == "1" ]]; then
         MAKE_JOBS=1
         PACKET_CACHE_SIZE=20000
-        warn "Low-memory mode ENABLED (RAM: ${MEM_TOTAL_MB}MB). Reducing caches, sysctl, build jobs; iOS server is on-demand; swap will be ensured."
+        warn "Low-memory mode ENABLED (RAM: ${MEM_TOTAL_MB}MB). Reducing caches, sysctl, build jobs; iOS server is on-demand; swap will be checked."
     else
         MAKE_JOBS="$(nproc 2>/dev/null || echo 2)"
         PACKET_CACHE_SIZE=500000
@@ -644,7 +641,6 @@ generate_domain() {
             exit 1
         fi
         info "Using pre-configured domain: $DOMAIN"
-        DOMAIN_PRECONFIGURED=1
         mkdir -p "$CONF_DIR"
         echo "$DOMAIN" > "${CONF_DIR}/.domain"
         return
@@ -1826,7 +1822,8 @@ PYNAME
         rm -f "$tmp"
         [[ -f "${SINGBOX_CFG_GEN}" ]] || { err "Config generator missing: ${SINGBOX_CFG_GEN}"; exit 1; }
         ensure_singbox || exit 1
-        local json="$(exit_singbox_conf "$name")" gen_err
+        local json gen_err
+        json="$(exit_singbox_conf "$name")"
         if ! gen_err="$(PGW_USER="$px_user" PGW_PASS="$px_pass" PGW_REMOTE_DNS="$px_rdns" python3 "${SINGBOX_CFG_GEN}" "$name" "$uri" 2>&1 >"${json}.tmp")"; then
             err "Failed to parse URI: ${gen_err}"; rm -f "${json}.tmp"; exit 1
         fi
@@ -2004,8 +2001,8 @@ import_rules() {
     fi
 
     info "Converting rule list..."
-    local summary
-    summary="$(PGW_KEEP_CATEGORIES="$keep" PGW_DIRECT_CATEGORIES="$direct" python3 "${RULES_IMPORT}" "$src" 2>/tmp/pgw-import.err >"${RULES_FILE}.tmp")" || true
+    PGW_KEEP_CATEGORIES="$keep" PGW_DIRECT_CATEGORIES="$direct" python3 "${RULES_IMPORT}" "$src" \
+        2>/tmp/pgw-import.err >"${RULES_FILE}.tmp" || true
     if [[ ! -s "${RULES_FILE}.tmp" ]]; then
         err "Conversion produced no rules:"; sed 's/^/    /' /tmp/pgw-import.err >&2; rm -f "${RULES_FILE}.tmp"; exit 1
     fi
