@@ -18,8 +18,3 @@ chmod 640 /etc/dnsdist/certs/*.pem
 if systemctl is-active --quiet dnsdist; then
     systemctl restart dnsdist   # dnsdist can't hot-reload (SIGHUP exits it); restart applies the new cert
 fi
-
-# The control API holds the TLS cert in memory; restart it to load the renewed one.
-if systemctl is-active --quiet proxy-gateway-api; then
-    systemctl restart proxy-gateway-api 2>/dev/null || true
-fi

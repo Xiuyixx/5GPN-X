@@ -1314,12 +1314,7 @@ setup_firewall() {
     # ruleset fails to load. (No-op if already created.)
     ensure_proxy_user
 
-    # Allowed inbound TCP ports; add the control-API port if it has been set up.
-    local api_port="" tcp_ports="22, 53, 853, 8111" tcp_ports_ipt="22,53,853,8111"
-    [[ -f "${CONF_DIR}/.api_port" ]] && api_port="$(tr -dc '0-9' < "${CONF_DIR}/.api_port" 2>/dev/null)"
-    if [[ -n "$api_port" ]]; then
-        tcp_ports="${tcp_ports}, ${api_port}"; tcp_ports_ipt="${tcp_ports_ipt},${api_port}"
-    fi
+    local tcp_ports="22, 53, 853, 8111" tcp_ports_ipt="22,53,853,8111"
 
     if command -v nft >/dev/null 2>&1; then
         # nftables
@@ -2329,9 +2324,9 @@ do_uninstall() {
     done
     shopt -u nullglob
 
-    systemctl stop dnsdist sniproxy quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot proxy-gateway-api 2>/dev/null || true
-    systemctl disable dnsdist sniproxy quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot proxy-gateway-api 2>/dev/null || true
-    rm -f /etc/systemd/system/{sniproxy,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-dnsdist-rules,proxy-gateway-exit,proxy-gateway-tgbot,proxy-gateway-api}.*
+    systemctl stop dnsdist sniproxy quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
+    systemctl disable dnsdist sniproxy quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
+    rm -f /etc/systemd/system/{sniproxy,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-dnsdist-rules,proxy-gateway-exit,proxy-gateway-tgbot}.*
     rm -f /etc/systemd/system/proxy-gateway-ios-profile@.service /etc/systemd/system/proxy-gateway-singbox@.service
     rm -rf /etc/systemd/system/quic-proxy.service.d /etc/systemd/system/china-dns-race-proxy.service.d
     systemctl daemon-reload

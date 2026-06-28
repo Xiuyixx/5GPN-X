@@ -43,6 +43,6 @@ bot_body="$(cat "${bot}")"
 [[ "${install_body}" == *'跳过 tgbot'* ]] || fail "install.sh must skip tgbot when no token is provided"
 
 # --- uninstall must remove the bot ------------------------------------------
-[[ "${install_body}" == *'proxy-gateway-tgbot,proxy-gateway-api}.*'* ]] || fail "uninstall must remove the tgbot service unit"
+[[ "${install_body}" == *'proxy-gateway-tgbot}.*'* ]] || fail "uninstall must remove the tgbot service unit"
 
 echo "tgbot policy OK"
