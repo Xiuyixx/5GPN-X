@@ -812,8 +812,8 @@ def exits_del_menu():
 
 def dot_menu():
     return [
-        [{"text": "🌐 自定义域名", "callback_data": "dot:domain"}],
-        [{"text": "🧭 自定义 DNS", "callback_data": "dot:dns"}],
+        [{"text": "🌐 更改域名", "callback_data": "dot:domain"}],
+        [{"text": "🧭 更改 DNS", "callback_data": "dot:dns"}],
         [{"text": "🔄 续期证书", "callback_data": "act:renew"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
@@ -999,7 +999,7 @@ def handle_callback(cb):
     elif data == "dot:dns":
         PENDING[chat_id] = {"action": "dot_dns"}
         edit(cb,
-             "发送自定义 DNS 上游。\n\n"
+             "发送新的 DNS 上游。\n\n"
              "只需要发送一行，多个 DNS 用空格或逗号分隔。\n"
              "这组 DNS 会同时用于私网 DoT、公网 DoT 和 sniproxy。\n\n"
              "示例：\n<pre>1.1.1.1 8.8.8.8 9.9.9.9</pre>\n"
