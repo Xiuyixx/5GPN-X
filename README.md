@@ -166,6 +166,7 @@ http://your-domain.com:8111/ios-dot.mobileconfig
 ./install.sh --update-rules    # 立即更新 GFWList/ChinaList
 ./install.sh --renew-cert      # 立即续期证书并重载服务
 ./install.sh --set-dot-domain dns.example.com  # 更改 DoT 域名并重新签发证书
+./install.sh --set-dot-domain-force dns.example.com  # 强制更改域名（跳过本次证书签发）
 ./install.sh --set-dns "1.1.1.1 8.8.8.8"       # 更改海外 DNS，上游同步用于 DoT/sniproxy
 ./install.sh -ios              # 重新生成 iOS 描述文件并显示二维码
 ./install.sh --list-exits      # 列出所有出口及当前激活的出口
@@ -219,7 +220,7 @@ export TG_ADMIN_IDS="11111111,22222222"   # 你的 Telegram 数字 ID
 
 Bot 面板里的 `🔐 DoT 管理` 包含：
 
-- `🌐 更改域名`：输入新的 DoT 域名。脚本会先校验该域名 A 记录是否已经指向本机公网 IP；证书签发成功后才写入新域名并重载 dnsdist，失败不会覆盖原配置。
+- `🌐 更改域名`：输入新的 DoT 域名。脚本会先校验该域名 A 记录是否已经指向本机公网 IP；证书签发成功后才写入新域名并重载 dnsdist，失败不会覆盖原配置。若证书签发失败但你确认解析无误，Bot 会给出二次确认按钮用于强制更换域名；强制模式会跳过本次证书签发，DoT 客户端可能因证书不匹配暂时无法连接，修复端口 80 / certbot 后应再执行续期证书。
 - `🧭 更改 DNS`：输入一行海外 DNS，例如 `1.1.1.1 8.8.8.8 9.9.9.9`。这组 DNS 会同步用于私网 DoT、公网 DoT 和 sniproxy。高级用法仍可在命令行使用 `--set-dns <dns-list> [public-dns] [sniproxy-dns]` 分别指定三组上游。
 - `🔄 续期证书`：对当前 DoT 域名强制续期证书并重载 dnsdist。
 

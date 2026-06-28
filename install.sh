@@ -274,6 +274,8 @@ Options:
   --renew-cert   Force renew certificates and reload services
   --set-dot-domain <domain>
                  Change DoT domain, issue certificate, reload dnsdist
+  --set-dot-domain-force <domain>
+                 Force-change DoT domain without issuing a certificate first
   --set-dns <dns-list> [public-dns] [sniproxy-dns]
                  Set DNS upstreams and reload dnsdist/sniproxy. By default one
                  DNS list is applied to private DoT, public DoT, and sniproxy;
@@ -823,6 +825,7 @@ verify_domain_dns() {
 # =============================================================================
 install_cert() {
     local certbot_cmd certbot_cmd_force
+    CERTBOT_LAST_OUTPUT=""
     install_certbot_firewall_hooks
 
     # Normal issuance (first time) - no force-renewal to avoid rate limits
@@ -851,8 +854,9 @@ install_cert() {
         # Run certbot ONCE and capture output, so we never re-issue just to probe
         # the error (that wastes Let's Encrypt rate-limit attempts). The `if`
         # keeps the failing run from tripping `set -e` before we can handle it.
-        local out rc
+        local out retry_out rc
         if out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
+        CERTBOT_LAST_OUTPUT="$out"
         printf '%s\n' "$out"
         if [[ $rc -eq 0 ]]; then
             return 0
@@ -863,8 +867,10 @@ install_cert() {
             pip3 install --upgrade --break-system-packages certbot josepy cryptography 2>/dev/null || \
                 pip3 install --upgrade certbot josepy cryptography 2>/dev/null || true
             info "Retrying certificate request..."
-            "${cb_cmd[@]}"
-            return $?
+            if retry_out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
+            CERTBOT_LAST_OUTPUT="$retry_out"
+            printf '%s\n' "$retry_out"
+            return $rc
         fi
         return 1
     }
@@ -875,6 +881,10 @@ install_cert() {
         err "  2. 端口 80 是否被占用"
         err "  3. 防火墙是否放行 80"
         err "  4. 是否触发了 Let's Encrypt 速率限制 (同一域名 7 天内限 5 次)"
+        if [[ -n "${CERTBOT_LAST_OUTPUT:-}" ]]; then
+            err "certbot 最后输出:"
+            printf '%s\n' "$CERTBOT_LAST_OUTPUT" | tail -n 30 >&2
+        fi
         exit 1
     fi
 
@@ -2583,6 +2593,52 @@ set_dot_domain() {
     ok "DoT domain updated: $DOMAIN"
 }
 
+force_set_dot_domain() {
+    local new_domain="${1:-}" resolved="" old_conf_domain="" old_dnsdist_domain="" old_cert_basename=""
+    [[ -n "$new_domain" ]] || { err "Usage: $0 --set-dot-domain-force <domain>"; exit 1; }
+    if ! is_valid_domain "$new_domain"; then
+        err "Invalid domain: '$new_domain'. Provide a fully-qualified domain like dns.example.com"
+        exit 1
+    fi
+
+    get_public_ip
+    resolved=$(resolve_domain_a_records "$new_domain" | paste -sd',' - || true)
+    if ! domain_resolves_to_public_ip "$new_domain" "$PUBLIC_IP"; then
+        warn "$new_domain 当前解析到 ${resolved:-无}，不是本机 $PUBLIC_IP；按强制模式继续。"
+    fi
+
+    old_conf_domain=$(cat "${CONF_DIR}/.domain" 2>/dev/null || true)
+    old_dnsdist_domain=$(cat /etc/dnsdist/.domain 2>/dev/null || true)
+    old_cert_basename=$(cat "${CONF_DIR}/.cert_basename" 2>/dev/null || true)
+
+    DOMAIN="$new_domain"
+    mkdir -p "$CONF_DIR" /etc/dnsdist
+    echo "$DOMAIN" > "${CONF_DIR}/.domain"
+    echo "$DOMAIN" > /etc/dnsdist/.domain
+    rm -f "${CONF_DIR}/.cert_basename"
+
+    if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
+        if ! /usr/local/bin/update-dnsdist-rules.sh; then
+            [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
+            [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
+            [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+            /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
+            err "dnsdist config update failed; DoT domain rolled back"
+            exit 1
+        fi
+    elif ! systemctl restart dnsdist; then
+        [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
+        [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
+        [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+        err "dnsdist restart failed; DoT domain rolled back"
+        exit 1
+    fi
+
+    regenerate_ios_profile || warn "iOS profile regeneration failed"
+    warn "DoT domain forcibly updated without issuing a new certificate. Run --renew-cert after fixing certbot/port 80 issues."
+    ok "DoT domain forcibly updated: $DOMAIN"
+}
+
 set_custom_dns() {
     local private_dns public_dns sniproxy_dns backup_dir sniproxy_backup=""
     [[ -n "${1:-}" ]] || { err "Usage: $0 --set-dns <private-dns> [public-dns] [sniproxy-dns]"; exit 1; }
@@ -2756,6 +2812,10 @@ case "${1:-}" in
     --set-dot-domain)
         check_root
         set_dot_domain "${2:-}"
+        ;;
+    --set-dot-domain-force)
+        check_root
+        force_set_dot_domain "${2:-}"
         ;;
     --set-dns)
         check_root

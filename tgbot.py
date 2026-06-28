@@ -55,6 +55,7 @@ WWW_DIR = "/opt/proxy-gateway/www"
 # Per-chat conversational state for multi-step flows (e.g. add-exit).
 PENDING = {}
 BUSY = set()
+LAST_FAILED_DOT_DOMAIN = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -602,13 +603,36 @@ def op_dot_status():
 def op_set_dot_domain(domain):
     domain = (domain or "").strip().lower().rstrip(".")
     if not DOMAIN_RE.match(domain):
-        return "域名格式无效。请发送类似 <code>dns.example.com</code> 的完整域名。"
+        return ("域名格式无效。请发送类似 <code>dns.example.com</code> 的完整域名。", None)
     ok, out = run2(["bash", MGMT, "--set-dot-domain", domain], timeout=900)
     if ok:
-        return ("✅ <b>DoT 域名已更新</b>\n"
+        return (("✅ <b>DoT 域名已更新</b>\n"
+                 "当前域名：<code>%s</code>\n"
+                 "证书已签发并重载 dnsdist。iOS 用户请重新生成二维码。" % html.escape(domain)), None)
+    text = ("❌ <b>DoT 域名更新失败</b>\n%s\n\n"
+            "如果你确认域名已经解析到本机，也可以强制更换域名。\n"
+            "注意：强制更换会跳过本次证书签发，DoT 客户端可能因为证书不匹配暂时无法连接；修好 80 端口/certbot 问题后请再点续期证书。" %
+            html.escape(_reason(out)))
+    return (text, domain)
+
+
+def op_force_set_dot_domain(domain):
+    domain = (domain or "").strip().lower().rstrip(".")
+    if not DOMAIN_RE.match(domain):
+        return "域名格式无效。"
+    ok, out = run2(["bash", MGMT, "--set-dot-domain-force", domain], timeout=600)
+    if ok:
+        return ("⚠️ <b>DoT 域名已强制更换</b>\n"
                 "当前域名：<code>%s</code>\n"
-                "证书已签发并重载 dnsdist。iOS 用户请重新生成二维码。" % html.escape(domain))
-    return "❌ <b>DoT 域名更新失败</b>\n%s" % html.escape(_reason(out))
+                "本次没有签发新证书。请排查端口 80 / certbot 后，再点 <b>续期证书</b>。" % html.escape(domain))
+    return "❌ <b>强制更换域名失败</b>\n%s" % html.escape(_reason(out))
+
+
+def force_dot_domain_kb():
+    return [
+        [{"text": "⚠️ 仍要强制更换域名", "callback_data": "dot:force_domain"}],
+        [{"text": "« 返回", "callback_data": "menu:dot"}],
+    ]
 
 
 def _dns_arg(text):
@@ -985,7 +1009,16 @@ def handle_message(msg):
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在校验域名 A 记录并签发证书，可能需要 1-2 分钟…")
         domain_text = text
-        send_async(chat_id, lambda: op_set_dot_domain(domain_text), dot_menu())
+        def do_set_dot_domain():
+            result, failed_domain = op_set_dot_domain(domain_text)
+            if failed_domain:
+                LAST_FAILED_DOT_DOMAIN[chat_id] = failed_domain
+                send(chat_id, result, force_dot_domain_kb())
+            else:
+                LAST_FAILED_DOT_DOMAIN.pop(chat_id, None)
+                send(chat_id, result, dot_menu())
+
+        background(do_set_dot_domain)
         return
     if state and state.get("action") == "dot_dns":
         PENDING.pop(chat_id, None)
@@ -1065,6 +1098,19 @@ def handle_callback(cb):
              "这组 DNS 会同时用于私网 DoT、公网 DoT 和 sniproxy。\n\n"
              "示例：\n<pre>1.1.1.1 8.8.8.8 9.9.9.9</pre>\n"
              "发送 /cancel 取消。")
+    elif data == "dot:force_domain":
+        domain = LAST_FAILED_DOT_DOMAIN.get(chat_id)
+        if not domain:
+            edit(cb, "没有可强制更换的域名，请重新点更改域名。", dot_menu())
+        else:
+            edit(cb, "⏳ 正在强制更换 DoT 域名为 <code>%s</code>…" % html.escape(domain))
+            def do_force_domain():
+                result = op_force_set_dot_domain(domain)
+                if "已强制更换" in result:
+                    LAST_FAILED_DOT_DOMAIN.pop(chat_id, None)
+                return result
+
+            edit_async(cb, do_force_domain, dot_menu())
 
     # ---- views ----
     elif data == "rules:show":
