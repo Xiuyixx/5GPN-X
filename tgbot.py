@@ -54,35 +54,48 @@ WWW_DIR = "/opt/proxy-gateway/www"
 
 # Per-chat conversational state for multi-step flows (e.g. add-exit).
 PENDING = {}
+BUSY = set()
 
 
 # --------------------------------------------------------------------------- #
 # Telegram API
 # --------------------------------------------------------------------------- #
-_TG_CONN = None
+_TG_LOCAL = threading.local()
 
 
 def tg(method, **params):
-    global _TG_CONN
     data = json.dumps(params).encode("utf-8")
     path = "/bot%s/%s" % (TOKEN, method)
     headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
     for attempt in (0, 1):
         try:
-            if _TG_CONN is None:
-                _TG_CONN = http.client.HTTPSConnection("api.telegram.org", timeout=70)
-            _TG_CONN.request("POST", path, data, headers)
-            raw = _TG_CONN.getresponse().read()
+            conn = getattr(_TG_LOCAL, "conn", None)
+            if conn is None:
+                conn = http.client.HTTPSConnection("api.telegram.org", timeout=70)
+                _TG_LOCAL.conn = conn
+            conn.request("POST", path, data, headers)
+            raw = conn.getresponse().read()
             return json.loads(raw.decode("utf-8")) if raw else {}
         except Exception as e:
             try:
-                if _TG_CONN:
-                    _TG_CONN.close()
+                conn = getattr(_TG_LOCAL, "conn", None)
+                if conn:
+                    conn.close()
             except Exception:
                 pass
-            _TG_CONN = None
+            _TG_LOCAL.conn = None
             if attempt:
                 return {"ok": False, "error": str(e)}
+
+
+def background(fn, *args):
+    def go():
+        try:
+            fn(*args)
+        except Exception as e:
+            print("[err] background task: %s" % e, file=sys.stderr)
+
+    threading.Thread(target=go, daemon=True).start()
 
 
 def answer_callback_async(cb_id):
@@ -155,6 +168,47 @@ def edit(cb, text, keyboard=None, mono=False):
         # text is already HTML-formatted when mono=True; pass mono=False so send()
         # does not double-escape it.
         send(chat_id, text, keyboard if keyboard else None, mono=False)
+
+
+def _busy_key_from_cb(cb):
+    msg = cb.get("message", {})
+    chat_id = msg.get("chat", {}).get("id")
+    mid = msg.get("message_id")
+    return (chat_id, mid)
+
+
+def edit_async(cb, text_fn, keyboard=None, mono=False):
+    key = _busy_key_from_cb(cb)
+
+    def go():
+        try:
+            edit(cb, text_fn(), keyboard, mono)
+        finally:
+            BUSY.discard(key)
+
+    BUSY.add(key)
+    background(go)
+
+
+def edit_ios_async(cb, chat_id):
+    key = _busy_key_from_cb(cb)
+
+    def go():
+        try:
+            res = op_ios_send(chat_id)
+            if res:
+                edit(cb, res, back_kb("menu:main"))
+            else:
+                edit(cb, "📱 iOS 描述文件二维码已发送 ↓\n\n选择一个操作：", main_menu())
+        finally:
+            BUSY.discard(key)
+
+    BUSY.add(key)
+    background(go)
+
+
+def send_async(chat_id, text_fn, keyboard=None, mono=False):
+    background(lambda: send(chat_id, text_fn(), keyboard, mono))
 
 
 def back_kb(target="menu:main", label="« 返回"):
@@ -910,12 +964,13 @@ def handle_message(msg):
         name = state["name"]
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在添加出口 <b>%s</b>…" % html.escape(name))
-        send(chat_id, op_add_exit(name, config), exits_menu())
+        send_async(chat_id, lambda: op_add_exit(name, config), exits_menu())
         return
     if state and state.get("action") == "rules_set":
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在校验并应用规则…")
-        send(chat_id, op_set_rules(msg.get("text") or ""), rules_menu())
+        rules_text = msg.get("text") or ""
+        send_async(chat_id, lambda: op_set_rules(rules_text), rules_menu())
         return
     if state and state.get("action") == "rules_add":
         PENDING.pop(chat_id, None)
@@ -929,12 +984,14 @@ def handle_message(msg):
     if state and state.get("action") == "dot_domain":
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在校验域名 A 记录并签发证书，可能需要 1-2 分钟…")
-        send(chat_id, op_set_dot_domain(text), dot_menu())
+        domain_text = text
+        send_async(chat_id, lambda: op_set_dot_domain(domain_text), dot_menu())
         return
     if state and state.get("action") == "dot_dns":
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在更新 DNS 上游并重载 dnsdist/sniproxy…")
-        send(chat_id, op_set_dns(text), dot_menu())
+        dns_text = text
+        send_async(chat_id, lambda: op_set_dns(dns_text), dot_menu())
         return
 
     send(chat_id, "未知命令。发送 /menu 打开操作面板。")
@@ -948,6 +1005,10 @@ def handle_callback(cb):
 
     if not authorized(uid):
         tg("answerCallbackQuery", callback_query_id=cb_id, text="⛔ 未授权", show_alert=True)
+        return
+
+    if _busy_key_from_cb(cb) in BUSY:
+        tg("answerCallbackQuery", callback_query_id=cb_id, text="正在处理上一项操作，请稍候…", show_alert=False)
         return
 
     # Stop the button spinner without adding another Telegram round-trip before the edit.
@@ -1013,40 +1074,36 @@ def handle_callback(cb):
     elif data.startswith("logs:"):
         svc = data[len("logs:"):]
         edit(cb, "📜 正在取 <b>%s</b> 日志…" % html.escape(svc))
-        edit(cb, op_logs(svc), back_kb("menu:logs"), mono=True)
+        edit_async(cb, lambda: op_logs(svc), back_kb("menu:logs"), mono=True)
     elif data == "exits:check":
         edit(cb, "⏳ 正在检查出口连通性…")
-        edit(cb, op_check_exits(), back_kb("menu:exits"))
+        edit_async(cb, op_check_exits, back_kb("menu:exits"))
 
     # ---- actions (⏳ then result, all in one bubble) ----
     elif data == "act:update_rules":
         edit(cb, "⏳ 正在更新规则，请稍候…")
-        edit(cb, op_update_rules(), back_kb("menu:main"))
+        edit_async(cb, op_update_rules, back_kb("menu:main"))
     elif data == "act:renew":
         edit(cb, "⏳ 正在续期证书，请稍候…")
-        edit(cb, op_renew_cert(), back_kb("menu:main"))
+        edit_async(cb, op_renew_cert, back_kb("menu:main"))
     elif data == "rules:enable":
         edit(cb, "⏳ 正在启用智能分流…")
-        edit(cb, op_set_exit("smart"), back_kb("menu:rules"))
+        edit_async(cb, lambda: op_set_exit("smart"), back_kb("menu:rules"))
     elif data.startswith("exit:"):
         name = data[len("exit:"):]
         edit(cb, "⏳ 正在切换出口到 <b>%s</b>…" % html.escape(name))
-        edit(cb, op_set_exit(name), back_kb("menu:exits"))
+        edit_async(cb, lambda: op_set_exit(name), back_kb("menu:exits"))
     elif data.startswith("exitdel:"):
         name = data[len("exitdel:"):]
         edit(cb, "⏳ 正在删除出口 <b>%s</b>…" % html.escape(name))
-        edit(cb, op_del_exit(name), back_kb("menu:exits"))
+        edit_async(cb, lambda: op_del_exit(name), back_kb("menu:exits"))
     elif data.startswith("restart:"):
         svc = data[len("restart:"):]
         edit(cb, "⏳ 正在重启 <b>%s</b>…" % html.escape(svc))
-        edit(cb, op_restart(svc), back_kb("menu:restart"))
+        edit_async(cb, lambda: op_restart(svc), back_kb("menu:restart"))
     elif data == "act:ios":
         edit(cb, "⏳ 正在生成 iOS 二维码…")
-        res = op_ios_send(chat_id)
-        if res:                       # photo failed -> show URL text
-            edit(cb, res, back_kb("menu:main"))
-        else:
-            edit(cb, "📱 iOS 描述文件二维码已发送 ↓\n\n选择一个操作：", main_menu())
+        edit_ios_async(cb, chat_id)
     elif data.startswith("pol:"):
         try:
             idx = int(data.split(":")[1])
@@ -1069,7 +1126,7 @@ def handle_callback(cb):
             cat = pm[idx][0]
             edit(cb, "⏳ 正在设置 <b>%s</b> → <b>%s</b> 并重建分流（可能较久）…"
                  % (html.escape(cat), html.escape(target)))
-            edit(cb, op_set_policy(cat, target), back_kb("menu:policy"))
+            edit_async(cb, lambda: op_set_policy(cat, target), back_kb("menu:policy"))
         else:
             edit(cb, "分类已变化，请重新打开。", policy_menu())
     else:
