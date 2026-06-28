@@ -123,7 +123,7 @@ export EMAIL="admin@example.com"   # 用于 Let's Encrypt
 
 > 非交互式运行（无 TTY）时必须设置 `DOMAIN`，否则脚本会直接报错退出，而不会卡在输入提示上。A 记录仍需你提前配置好。
 
-### 自定义海外上游 DNS 与反代 resolver
+### 更改海外上游 DNS 与反代 resolver
 
 默认只需要设置一组海外 DNS，上游会同时用于私网 DoT、公网 DoT 和 TCP 反代 resolver，支持逗号或空格分隔：
 
@@ -165,6 +165,8 @@ http://your-domain.com:8111/ios-dot.mobileconfig
 ./install.sh --status          # 查看运行状态（含当前出口）
 ./install.sh --update-rules    # 立即更新 GFWList/ChinaList
 ./install.sh --renew-cert      # 立即续期证书并重载服务
+./install.sh --set-dot-domain dns.example.com  # 更改 DoT 域名并重新签发证书
+./install.sh --set-dns "1.1.1.1 8.8.8.8"       # 更改海外 DNS，上游同步用于 DoT/sniproxy
 ./install.sh -ios              # 重新生成 iOS 描述文件并显示二维码
 ./install.sh --list-exits      # 列出所有出口及当前激活的出口
 ./install.sh --add-exit <名字> <wg.conf>   # 注册一个 WireGuard 出口
@@ -177,13 +179,14 @@ http://your-domain.com:8111/ios-dot.mobileconfig
 
 ## Telegram 控制 Bot（可选）
 
-安装一个 Telegram Bot,**直接在 Telegram 上用按钮完成运维**:查看状态、切换出口、更新规则、续期证书、重启服务、查看日志、调出 iOS 二维码。
+安装一个 Telegram Bot,**直接在 Telegram 上用按钮完成运维**:查看状态、切换出口、更新规则、DoT 管理、重启服务、查看日志、调出 iOS 二维码。
 
 **安全模型**:
 - Bot Token 存放在 root-only 的 `/opt/proxy-gateway/etc/tgbot.env`(`chmod 600`),由 systemd `EnvironmentFile` 注入。
 - **只有白名单数字 ID(`TG_ADMIN_IDS`)能操作**,其余消息一律忽略。
 - 所有操作映射到**固定命令白名单**,出口名/服务名经严格正则与允许列表校验,**绝不把用户输入拼进 shell**(无 `shell=True`、无 `os.system`)。
-- Bot 支持**切换 / 添加 / 删除出口**。添加出口时需要把 WireGuard 客户端配置（含私钥）粘贴给 Bot——该内容会经 Telegram 传输,Bot 会在引导时提示;仅白名单管理员可操作。
+- Bot 支持**切换 / 添加 / 删除出口**。添加出口时可以粘贴 WireGuard 客户端配置、SOCKS5 URI 或 Shadowsocks URI；敏感配置会经 Telegram 传输,Bot 会在引导时提示;仅白名单管理员可操作。
+- Bot 的长任务（更新规则、续期证书、更改域名、更改 DNS、检查出口、查看日志、生成 iOS 二维码等）会在后台执行，点击后先立即停止按钮转圈并显示处理中，主轮询不会被长命令卡住。
 - 出于安全,Bot **不暴露** `--uninstall`,卸载仅限服务器本地执行。
 
 ### 启用
@@ -206,9 +209,21 @@ export TG_ADMIN_IDS="11111111,22222222"   # 你的 Telegram 数字 ID
 | `/start` `/menu` | 打开操作面板(内联按钮) |
 | `/status` | 查看运行状态与当前出口 |
 | `/exits` | 列出出口并一键切换 |
+| `/rules` | 打开智能分流规则管理 |
+| `/cancel` | 取消当前输入流程 |
 | `/id` | 获取自己的 Telegram 数字 ID(任何人可用,仅返回本人 ID) |
 
-面板按钮:📊 状态 · 🌐 出口(切换/➕添加/🗑删除)· 🔄 更新规则 · 🔐 续期证书 · ♻️ 重启服务 · 📜 日志 · 📱 iOS 二维码。
+面板按钮:📊 状态 · 🌐 出口(切换/➕添加/🗑删除)· 🧭 智能分流 · 🔄 更新规则 · 🔐 DoT 管理 · ♻️ 重启服务 · 📜 日志 · 📱 iOS 二维码。
+
+### DoT 管理
+
+Bot 面板里的 `🔐 DoT 管理` 包含：
+
+- `🌐 更改域名`：输入新的 DoT 域名。脚本会先校验该域名 A 记录是否已经指向本机公网 IP；证书签发成功后才写入新域名并重载 dnsdist，失败不会覆盖原配置。
+- `🧭 更改 DNS`：输入一行海外 DNS，例如 `1.1.1.1 8.8.8.8 9.9.9.9`。这组 DNS 会同步用于私网 DoT、公网 DoT 和 sniproxy。高级用法仍可在命令行使用 `--set-dns <dns-list> [public-dns] [sniproxy-dns]` 分别指定三组上游。
+- `🔄 续期证书`：对当前 DoT 域名强制续期证书并重载 dnsdist。
+
+更改域名成功后，脚本会重新生成 iOS 描述文件；Bot 的 `📱 iOS 二维码` 会优先读取当前 DoT 域名即时生成二维码，避免旧 URL 文件残留导致输出旧二维码。
 
 添加出口流程:点 🌐 出口 → ➕ 添加出口 → 发一个名字(如 `us`)→ 把 `exit-server-setup.sh` 生成的 WireGuard 配置整段粘贴发给 Bot → 完成后在出口列表里点它即可切换。中途随时 `/cancel` 取消。
 
@@ -317,7 +332,7 @@ EOF
 | `singbox-exit-config.py` | 把 socks5://、ss:// URI 转成 sing-box 出口配置 |
 | `singbox-router-config.py` | 把分流规则 + 分类映射转成 sing-box 智能分流（`smart`）配置 |
 | `rules-import.py` | 把规则列表转换为网关分流规则（按分类） |
-| `tgbot.py` | Telegram 控制 Bot（标准库实现） |
+| `tgbot.py` | Telegram 控制 Bot（标准库实现；长任务后台执行） |
 | `ios-http.py` | iOS 描述文件按需 HTTP 响应器（socket 激活） |
 | `quic-proxy.go` | QUIC SNI UDP 代理源码 |
 | `china-dns-race-proxy.go` | ChinaList DNS 上游并发竞速代理源码 |
