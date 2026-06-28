@@ -125,7 +125,7 @@ export EMAIL="admin@example.com"   # 用于 Let's Encrypt
 
 ### 更改海外上游 DNS 与反代 resolver
 
-默认只需要设置一组海外 DNS，上游会同时用于私网 DoT、公网 DoT 和 TCP 反代 resolver，支持逗号或空格分隔：
+安装交互里的 `DNS 设置` 只需要填写一组海外 DNS，上游会同时用于私网 DoT、公网 DoT 和 TCP 反代 resolver，支持逗号或空格分隔：
 
 ```bash
 export DNS_UPSTREAMS="1.1.1.1,8.8.8.8,9.9.9.9"

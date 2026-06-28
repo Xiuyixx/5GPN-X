@@ -182,26 +182,32 @@ configure_overseas_dns() {
     local public_selected="${PUBLIC_OVERSEAS_DNS:-}"
     local sniproxy_selected="${SNIPROXY_DNS:-}"
     local unified_selected="${DNS_UPSTREAMS:-}"
+    local split_dns=0
 
     if [[ -n "$unified_selected" ]]; then
         private_selected="$unified_selected"
-        [[ -n "$public_selected" ]] || public_selected="$unified_selected"
-        [[ -n "$sniproxy_selected" ]] || sniproxy_selected="$unified_selected"
+        public_selected="$unified_selected"
+        sniproxy_selected="$unified_selected"
+    elif [[ -n "${PRIVATE_OVERSEAS_DNS:-}" || -n "${PUBLIC_OVERSEAS_DNS:-}" || -n "${SNIPROXY_DNS:-}" || -n "$legacy" ]]; then
+        split_dns=1
     fi
 
     if [[ -z "$private_selected" && -t 0 ]]; then
         echo ""
-        read -r -p "海外 DNS 上游（用于 DoT 和 sniproxy）[1.1.1.1,8.8.8.8,9.9.9.9]: " private_selected
+        read -r -p "DNS 设置 [1.1.1.1,8.8.8.8,9.9.9.9]: " private_selected
+        unified_selected="$private_selected"
     fi
 
     if [[ -z "$private_selected" ]]; then
         private_selected="${DEFAULT_OVERSEAS_DNS[*]}"
+        [[ $split_dns -eq 0 ]] && unified_selected="$private_selected"
     fi
-    if [[ -z "$public_selected" ]]; then
-        public_selected="${DEFAULT_PUBLIC_OVERSEAS_DNS[*]}"
-    fi
-    if [[ -z "$sniproxy_selected" ]]; then
+    if [[ -n "$unified_selected" || $split_dns -eq 0 ]]; then
+        public_selected="$private_selected"
         sniproxy_selected="$private_selected"
+    else
+        [[ -n "$public_selected" ]] || public_selected="${DEFAULT_PUBLIC_OVERSEAS_DNS[*]}"
+        [[ -n "$sniproxy_selected" ]] || sniproxy_selected="$private_selected"
     fi
 
     OVERSEAS_DNS="$private_selected"
@@ -215,9 +221,9 @@ configure_overseas_dns() {
     echo "$PUBLIC_OVERSEAS_DNS" > "${CONF_DIR}/.overseas_public_dns"
     echo "$SNIPROXY_DNS" > "${CONF_DIR}/.sniproxy_dns"
     if [[ "$PRIVATE_OVERSEAS_DNS" == "$PUBLIC_OVERSEAS_DNS" && "$PRIVATE_OVERSEAS_DNS" == "$SNIPROXY_DNS" ]]; then
-        info "DNS upstreams: $PRIVATE_OVERSEAS_DNS"
+        info "DNS 设置: $PRIVATE_OVERSEAS_DNS"
     else
-        info "DNS upstreams: private=$PRIVATE_OVERSEAS_DNS public=$PUBLIC_OVERSEAS_DNS sniproxy=$SNIPROXY_DNS"
+        info "DNS 设置: private=$PRIVATE_OVERSEAS_DNS public=$PUBLIC_OVERSEAS_DNS sniproxy=$SNIPROXY_DNS"
     fi
 }
 
