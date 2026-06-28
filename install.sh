@@ -861,8 +861,8 @@ install_cert() {
     fi
 
     run_certbot() {
-        open_cert_http_port
-        trap restore_reverse_proxy_firewall RETURN
+        prepare_certbot_standalone
+        trap cleanup_certbot_standalone RETURN
         # Run certbot ONCE and capture output, so we never re-issue just to probe
         # the error (that wastes Let's Encrypt rate-limit attempts). The `if`
         # keeps the failing run from tripping `set -e` before we can handle it.
@@ -1554,12 +1554,33 @@ restore_reverse_proxy_firewall() {
     setup_firewall >/dev/null 2>&1 || true
 }
 
+prepare_certbot_standalone() {
+    CERT_STOPPED_SNIPROXY=0
+    if systemctl is-active --quiet sniproxy 2>/dev/null; then
+        info "Stopping sniproxy temporarily so certbot can bind TCP/80..."
+        systemctl stop sniproxy
+        CERT_STOPPED_SNIPROXY=1
+    fi
+    open_cert_http_port
+}
+
+cleanup_certbot_standalone() {
+    local rc=$?
+    restore_reverse_proxy_firewall
+    if [[ "${CERT_STOPPED_SNIPROXY:-0}" == "1" ]]; then
+        info "Starting sniproxy after certbot..."
+        systemctl start sniproxy || warn "sniproxy failed to restart after certbot; run: systemctl status sniproxy"
+    fi
+    return $rc
+}
+
 install_certbot_firewall_hooks() {
     mkdir -p /etc/letsencrypt/renewal-hooks/pre /etc/letsencrypt/renewal-hooks/post
 
     cat > /usr/local/bin/proxy-gateway-open-cert-http.sh <<'EOF'
 #!/bin/bash
 set -e
+systemctl stop sniproxy 2>/dev/null || true
 if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
     nft insert rule inet filter input tcp dport 80 accept 2>/dev/null || true
 elif command -v iptables >/dev/null 2>&1; then
@@ -1574,6 +1595,7 @@ if command -v nft >/dev/null 2>&1 && [[ -f /etc/nftables.conf ]]; then
 elif command -v iptables >/dev/null 2>&1; then
     while iptables -D INPUT -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null; do :; done
 fi
+systemctl start sniproxy 2>/dev/null || true
 EOF
     chmod +x /usr/local/bin/proxy-gateway-open-cert-http.sh /usr/local/bin/proxy-gateway-restore-firewall.sh
     cp /usr/local/bin/proxy-gateway-open-cert-http.sh /etc/letsencrypt/renewal-hooks/pre/10-proxy-gateway-open-http.sh
@@ -2509,8 +2531,8 @@ force_renew_cert() {
             --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
     fi
 
-    open_cert_http_port
-    trap restore_reverse_proxy_firewall RETURN
+    prepare_certbot_standalone
+    trap cleanup_certbot_standalone RETURN
 
     # Run once and capture output; only retry on the known Python error so we
     # don't burn Let's Encrypt rate-limit attempts probing for it. The `if`
