@@ -2,8 +2,12 @@
 # Let's Encrypt renewal hook - copy certs to dnsdist-readable location and reload
 set -e
 
-# Find the most recently updated live directory
-LIVE_DIR=$(find /etc/letsencrypt/live -maxdepth 1 -type d | grep -v "^/etc/letsencrypt/live$" | head -n1)
+DOMAIN=$(cat /opt/proxy-gateway/etc/.domain 2>/dev/null || cat /etc/dnsdist/.domain 2>/dev/null || true)
+if [[ -n "$DOMAIN" && -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
+    LIVE_DIR="/etc/letsencrypt/live/${DOMAIN}"
+else
+    LIVE_DIR=$(find /etc/letsencrypt/live -maxdepth 1 -type d | grep -v "^/etc/letsencrypt/live$" | head -n1)
+fi
 if [[ -z "$LIVE_DIR" ]]; then
     echo "[!] No certificate live directory found"
     exit 1

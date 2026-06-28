@@ -134,6 +134,48 @@ render_sniproxy_dns_nameservers() {
     done
 }
 
+normalize_dns_list() {
+    local input="${1:-}"
+    local dns_list=() out=() item
+
+    input="${input//,/ }"
+    read -r -a dns_list <<< "$input"
+    for item in "${dns_list[@]}"; do
+        [[ -z "$item" ]] && continue
+        if [[ ! "$item" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+            err "Invalid DNS address: $item"
+            exit 1
+        fi
+        python3 - "$item" <<'PYEOF' || { err "Invalid DNS address: $item"; exit 1; }
+import ipaddress
+import sys
+ipaddress.ip_address(sys.argv[1])
+PYEOF
+        out+=("$item")
+    done
+    [[ ${#out[@]} -gt 0 ]] || { err "DNS list cannot be empty"; exit 1; }
+    printf '%s' "${out[*]}"
+}
+
+rewrite_sniproxy_dns() {
+    local sniproxy_dns="${1:-}" nameservers
+    [[ -f /etc/sniproxy.conf ]] || return 0
+    nameservers=$(render_sniproxy_dns_nameservers "$sniproxy_dns")
+    python3 - /etc/sniproxy.conf "$nameservers" <<'PYEOF'
+import re
+import sys
+
+path, nameservers = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    content = f.read()
+new = re.sub(r"resolver\s*\{.*?\}", "resolver {\n" + nameservers + "\n    mode ipv4_only\n}", content, count=1, flags=re.S)
+if new == content:
+    raise SystemExit("resolver block not found in /etc/sniproxy.conf")
+with open(path, "w", encoding="utf-8") as f:
+    f.write(new)
+PYEOF
+}
+
 configure_overseas_dns() {
     local legacy="${OVERSEAS_DNS:-}"
     local private_selected="${PRIVATE_OVERSEAS_DNS:-$legacy}"
@@ -188,6 +230,10 @@ Options:
   --status       Show service status
   --update-rules Update GFWList/ChinaList and reload dnsdist
   --renew-cert   Force renew certificates and reload services
+  --set-dot-domain <domain>
+                 Change DoT domain, issue certificate, reload dnsdist
+  --set-dns <private-dns> [public-dns] [sniproxy-dns]
+                 Set overseas DNS upstreams and reload dnsdist/sniproxy
   --list-exits   List configured egress exits and which one is active
   --check-exits  Test reachability of each exit's upstream node (UP/DOWN)
   --add-exit <name> [wg.conf | socks5://... | ss://...]
@@ -804,9 +850,14 @@ install_cert() {
 
     # Deploy renewal hook (also handles cert copy on renewal)
     mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-    cp "${SCRIPT_DIR}/renew-hook.sh" /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
-    chmod +x /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
-    ok "证书已就绪，自动续期 Hook 已部署"
+    if [[ -f "${SCRIPT_DIR}/renew-hook.sh" ]]; then
+        cp "${SCRIPT_DIR}/renew-hook.sh" /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
+        chmod +x /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
+        ok "证书已就绪，自动续期 Hook 已部署"
+    else
+        warn "renew-hook.sh not found in ${SCRIPT_DIR}; keeping existing renewal hook"
+        ok "证书已就绪"
+    fi
 }
 
 # =============================================================================
@@ -2438,6 +2489,143 @@ regenerate_ios_profile() {
     generate_ios_profile
 }
 
+set_dot_domain() {
+    local new_domain="${1:-}" resolved="" old_conf_domain="" old_dnsdist_domain="" old_cert_basename=""
+    [[ -n "$new_domain" ]] || { err "Usage: $0 --set-dot-domain <domain>"; exit 1; }
+    if ! is_valid_domain "$new_domain"; then
+        err "Invalid domain: '$new_domain'. Provide a fully-qualified domain like dns.example.com"
+        exit 1
+    fi
+
+    get_public_ip
+    info "DNS 解析检查"
+    info "域名: $new_domain"
+    info "需要的 A 记录值: $PUBLIC_IP"
+    resolved=$(dig +short A "$new_domain" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | head -n1 || true)
+    if [[ "$resolved" != "$PUBLIC_IP" ]]; then
+        err "$new_domain 当前解析到 ${resolved:-无}，不是本机 $PUBLIC_IP"
+        err "请先把 A 记录指向本机公网 IP 后重试。"
+        exit 1
+    fi
+
+    old_conf_domain=$(cat "${CONF_DIR}/.domain" 2>/dev/null || true)
+    old_dnsdist_domain=$(cat /etc/dnsdist/.domain 2>/dev/null || true)
+    old_cert_basename=$(cat "${CONF_DIR}/.cert_basename" 2>/dev/null || true)
+    DOMAIN="$new_domain"
+    install_cert
+
+    mkdir -p "$CONF_DIR" /etc/dnsdist
+    echo "$DOMAIN" > "${CONF_DIR}/.domain"
+    echo "$DOMAIN" > /etc/dnsdist/.domain
+    rm -f "${CONF_DIR}/.cert_basename"
+
+    if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
+        if ! /usr/local/bin/update-dnsdist-rules.sh; then
+            [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
+            [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
+            [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+            /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
+            err "dnsdist config update failed; DoT domain rolled back"
+            exit 1
+        fi
+    elif ! systemctl restart dnsdist; then
+        [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
+        [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
+        [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+        err "dnsdist restart failed; DoT domain rolled back"
+        exit 1
+    fi
+    regenerate_ios_profile || warn "iOS profile regeneration failed"
+    ok "DoT domain updated: $DOMAIN"
+}
+
+set_custom_dns() {
+    local private_dns public_dns sniproxy_dns backup_dir sniproxy_backup=""
+    [[ -n "${1:-}" ]] || { err "Usage: $0 --set-dns <private-dns> [public-dns] [sniproxy-dns]"; exit 1; }
+    private_dns=$(normalize_dns_list "$1")
+    public_dns=$(normalize_dns_list "${2:-$private_dns}")
+    sniproxy_dns=$(normalize_dns_list "${3:-$private_dns}")
+
+    mkdir -p "$CONF_DIR" /etc/dnsdist
+    backup_dir=$(mktemp -d)
+    for f in \
+        "${CONF_DIR}/.overseas_dns" \
+        "${CONF_DIR}/.overseas_private_dns" \
+        "${CONF_DIR}/.overseas_public_dns" \
+        "${CONF_DIR}/.sniproxy_dns" \
+        /etc/dnsdist/.overseas_dns \
+        /etc/dnsdist/.overseas_private_dns \
+        /etc/dnsdist/.overseas_public_dns \
+        /etc/dnsdist/.sniproxy_dns; do
+        [[ -f "$f" ]] && cp -a "$f" "${backup_dir}/$(echo "$f" | sed 's#/#__#g')"
+    done
+    if [[ -f /etc/sniproxy.conf ]]; then
+        sniproxy_backup="${backup_dir}/sniproxy.conf"
+        cp -a /etc/sniproxy.conf "$sniproxy_backup"
+    fi
+
+    restore_dns_backup() {
+        local f b
+        for f in \
+            "${CONF_DIR}/.overseas_dns" \
+            "${CONF_DIR}/.overseas_private_dns" \
+            "${CONF_DIR}/.overseas_public_dns" \
+            "${CONF_DIR}/.sniproxy_dns" \
+            /etc/dnsdist/.overseas_dns \
+            /etc/dnsdist/.overseas_private_dns \
+            /etc/dnsdist/.overseas_public_dns \
+            /etc/dnsdist/.sniproxy_dns; do
+            b="${backup_dir}/$(echo "$f" | sed 's#/#__#g')"
+            if [[ -f "$b" ]]; then
+                cp -a "$b" "$f"
+            else
+                rm -f "$f"
+            fi
+        done
+        if [[ -n "$sniproxy_backup" && -f "$sniproxy_backup" ]]; then
+            cp -a "$sniproxy_backup" /etc/sniproxy.conf
+        fi
+    }
+
+    echo "$private_dns" > "${CONF_DIR}/.overseas_dns"
+    echo "$private_dns" > "${CONF_DIR}/.overseas_private_dns"
+    echo "$public_dns" > "${CONF_DIR}/.overseas_public_dns"
+    echo "$sniproxy_dns" > "${CONF_DIR}/.sniproxy_dns"
+    echo "$private_dns" > /etc/dnsdist/.overseas_dns
+    echo "$private_dns" > /etc/dnsdist/.overseas_private_dns
+    echo "$public_dns" > /etc/dnsdist/.overseas_public_dns
+    echo "$sniproxy_dns" > /etc/dnsdist/.sniproxy_dns
+    if ! rewrite_sniproxy_dns "$sniproxy_dns"; then
+        restore_dns_backup
+        rm -rf "$backup_dir"
+        err "sniproxy config update failed; DNS upstreams rolled back"
+        exit 1
+    fi
+
+    if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
+        if ! /usr/local/bin/update-dnsdist-rules.sh; then
+            restore_dns_backup
+            /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
+            rm -rf "$backup_dir"
+            err "dnsdist config update failed; DNS upstreams rolled back"
+            exit 1
+        fi
+    else
+        if ! systemctl restart dnsdist; then
+            restore_dns_backup
+            rm -rf "$backup_dir"
+            err "dnsdist restart failed; DNS upstreams rolled back"
+            exit 1
+        fi
+    fi
+    systemctl restart sniproxy 2>/dev/null || true
+    rm -rf "$backup_dir"
+    ok "DNS upstreams updated"
+    echo "Private overseas DNS: $private_dns"
+    echo "Public overseas DNS: $public_dns"
+    echo "sniproxy DNS: $sniproxy_dns"
+}
+
 # =============================================================================
 # Main installation flow
 # =============================================================================
@@ -2520,6 +2708,14 @@ case "${1:-}" in
         ;;
     --renew-cert)
         force_renew_cert
+        ;;
+    --set-dot-domain)
+        check_root
+        set_dot_domain "${2:-}"
+        ;;
+    --set-dns)
+        check_root
+        set_custom_dns "${2:-}" "${3:-}" "${4:-}"
         ;;
     --list-exits)
         list_exits

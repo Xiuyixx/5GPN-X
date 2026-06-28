@@ -48,6 +48,8 @@ SERVICES = [
 ]
 EXIT_NAME_RE = re.compile(r"^(local|[\w\-\u4e00-\u9fff]{1,16})$", re.UNICODE)
 EXIT_ADD_NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff]{1,16}$", re.UNICODE)  # 'local' is reserved
+DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
+DNS_LIST_RE = re.compile(r"^[0-9A-Fa-f:.,\s]+$")
 WWW_DIR = "/opt/proxy-gateway/www"
 
 # Per-chat conversational state for multi-step flows (e.g. add-exit).
@@ -528,6 +530,61 @@ def op_renew_cert():
     return "❌ <b>证书续期失败</b>\n%s" % html.escape(_reason(out))
 
 
+def op_dot_status():
+    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
+    private_dns = (_read_file("/etc/dnsdist/.overseas_private_dns") or
+                   _read_file("/etc/dnsdist/.overseas_dns") or "?")
+    public_dns = _read_file("/etc/dnsdist/.overseas_public_dns") or "?"
+    sniproxy_dns = (_read_file("/opt/proxy-gateway/etc/.sniproxy_dns") or
+                    _read_file("/etc/dnsdist/.sniproxy_dns") or "?")
+    return ("🔐 <b>DoT 管理</b>\n"
+            "域名：<code>%s</code>\n"
+            "私网 DoT 海外 DNS：<code>%s</code>\n"
+            "公网 DoT 海外 DNS：<code>%s</code>\n"
+            "sniproxy DNS：<code>%s</code>"
+            % (html.escape(domain), html.escape(private_dns), html.escape(public_dns), html.escape(sniproxy_dns)))
+
+
+def op_set_dot_domain(domain):
+    domain = (domain or "").strip().lower().rstrip(".")
+    if not DOMAIN_RE.match(domain):
+        return "域名格式无效。请发送类似 <code>dns.example.com</code> 的完整域名。"
+    ok, out = run2(["bash", MGMT, "--set-dot-domain", domain], timeout=900)
+    if ok:
+        return ("✅ <b>DoT 域名已更新</b>\n"
+                "当前域名：<code>%s</code>\n"
+                "证书已签发并重载 dnsdist。iOS 用户请重新生成二维码。" % html.escape(domain))
+    return "❌ <b>DoT 域名更新失败</b>\n%s" % html.escape(_reason(out))
+
+
+def _dns_arg(text):
+    value = (text or "").strip()
+    if not value or not DNS_LIST_RE.match(value):
+        return ""
+    return " ".join(value.replace(",", " ").split())
+
+
+def op_set_dns(text):
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    if not lines:
+        return "DNS 不能为空。"
+    if len(lines) > 3:
+        return "最多发送三行：private、public、sniproxy。"
+    private_dns = _dns_arg(lines[0])
+    public_dns = _dns_arg(lines[1]) if len(lines) >= 2 else private_dns
+    sniproxy_dns = _dns_arg(lines[2]) if len(lines) >= 3 else private_dns
+    if not private_dns or not public_dns or not sniproxy_dns:
+        return "DNS 格式无效。只支持 IPv4/IPv6 地址，多个地址用空格或逗号分隔。"
+    ok, out = run2(["bash", MGMT, "--set-dns", private_dns, public_dns, sniproxy_dns], timeout=600)
+    if ok:
+        return ("✅ <b>DNS 上游已更新</b>\n"
+                "私网 DoT：<code>%s</code>\n"
+                "公网 DoT：<code>%s</code>\n"
+                "sniproxy：<code>%s</code>" %
+                (html.escape(private_dns), html.escape(public_dns), html.escape(sniproxy_dns)))
+    return "❌ <b>DNS 上游更新失败</b>\n%s" % html.escape(_reason(out))
+
+
 def op_restart(svc):
     if svc not in SERVICES:
         return "未知服务。"
@@ -690,7 +747,7 @@ def main_menu():
          {"text": "🌐 出口", "callback_data": "menu:exits"}],
         [{"text": "🧭 智能分流", "callback_data": "menu:rules"},
          {"text": "🔄 更新规则", "callback_data": "act:update_rules"}],
-        [{"text": "🔐 续期证书", "callback_data": "act:renew"},
+        [{"text": "🔐 DoT 管理", "callback_data": "menu:dot"},
          {"text": "♻️ 重启服务", "callback_data": "menu:restart"}],
         [{"text": "📜 日志", "callback_data": "menu:logs"},
          {"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
@@ -755,6 +812,15 @@ def exits_del_menu():
         rows.append([{"text": "(没有可删除的出口)", "callback_data": "menu:exits"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:exits"}])
     return rows
+
+
+def dot_menu():
+    return [
+        [{"text": "🌐 自定义域名", "callback_data": "dot:domain"}],
+        [{"text": "🧭 自定义 DNS", "callback_data": "dot:dns"}],
+        [{"text": "🔄 续期证书", "callback_data": "act:renew"}],
+        [{"text": "« 返回", "callback_data": "menu:main"}],
+    ]
 
 
 def services_menu(prefix):
@@ -864,6 +930,16 @@ def handle_message(msg):
         PENDING.pop(chat_id, None)
         send(chat_id, op_del_rule(text), rules_menu())
         return
+    if state and state.get("action") == "dot_domain":
+        PENDING.pop(chat_id, None)
+        send(chat_id, "⏳ 正在校验域名 A 记录并签发证书，可能需要 1-2 分钟…")
+        send(chat_id, op_set_dot_domain(text), dot_menu())
+        return
+    if state and state.get("action") == "dot_dns":
+        PENDING.pop(chat_id, None)
+        send(chat_id, "⏳ 正在更新 DNS 上游并重载 dnsdist/sniproxy…")
+        send(chat_id, op_set_dns(text), dot_menu())
+        return
 
     send(chat_id, "未知命令。发送 /menu 打开操作面板。")
 
@@ -893,6 +969,8 @@ def handle_callback(cb):
         edit(cb, "选择要切换到的出口，或添加/删除：", exits_menu())
     elif data == "menu:exits_del":
         edit(cb, "选择要删除的出口：", exits_del_menu())
+    elif data == "menu:dot":
+        edit(cb, op_dot_status(), dot_menu())
     elif data == "menu:restart":
         edit(cb, "选择要重启的服务：", services_menu("restart"))
     elif data == "menu:logs":
@@ -915,6 +993,21 @@ def handle_callback(cb):
     elif data == "exit_add":
         PENDING[chat_id] = {"action": "add_exit_name"}
         edit(cb, "添加出口：先发一个名字（1-11 位小写字母/数字，如 us / jp / hk）。\n发送 /cancel 取消。")
+    elif data == "dot:domain":
+        PENDING[chat_id] = {"action": "dot_domain"}
+        edit(cb,
+             "发送新的 DoT 域名，例如：\n"
+             "<code>dns.example.com</code>\n\n"
+             "要求：该域名 A 记录必须已经指向本机公网 IP，否则不会修改当前配置。\n"
+             "发送 /cancel 取消。")
+    elif data == "dot:dns":
+        PENDING[chat_id] = {"action": "dot_dns"}
+        edit(cb,
+             "发送自定义 DNS 上游。\n\n"
+             "一行：同时用于私网 DoT、公网 DoT、sniproxy\n"
+             "三行：依次为 private / public / sniproxy\n\n"
+             "示例：\n<pre>1.1.1.1 8.8.8.8\n9.9.9.9 1.0.0.1\n1.1.1.1</pre>\n"
+             "发送 /cancel 取消。")
 
     # ---- views ----
     elif data == "rules:show":
