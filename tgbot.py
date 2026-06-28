@@ -150,7 +150,9 @@ def edit(cb, text, keyboard=None, mono=False):
         if "not modified" in desc:
             return  # nothing to do
         # original may be a photo / too old / gone -> post a fresh message
-        send(chat_id, text if not mono else text, keyboard if keyboard else None)
+        # text is already HTML-formatted when mono=True; pass mono=False so send()
+        # does not double-escape it.
+        send(chat_id, text, keyboard if keyboard else None, mono=False)
 
 
 def back_kb(target="menu:main", label="« 返回"):

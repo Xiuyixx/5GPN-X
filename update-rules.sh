@@ -236,12 +236,12 @@ if ! wget -qO "${GFWLIST_FILE}" "${GFWLIST_URL}" 2>/dev/null; then
 else
     echo "[*] Parsing GFWList..."
     decoded="${BASE_DIR}/gfwlist.decoded"
-    >"${decoded}"
+    true >"${decoded}"
     base64 -d "${GFWLIST_FILE}" > "${decoded}" 2>/dev/null || \
         base64 -d -i "${GFWLIST_FILE}" > "${decoded}" 2>/dev/null || \
         openssl enc -base64 -d -in "${GFWLIST_FILE}" > "${decoded}" 2>/dev/null || true
 
-    > "${GFWLIST_LUA}"
+    true >"${GFWLIST_LUA}"
     count=0
     max=20000
     while IFS= read -r line || [[ -n "${line}" ]]; do
