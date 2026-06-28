@@ -2477,11 +2477,18 @@ force_renew_cert() {
         exit 1
     fi
 
-    local certbot_cmd
-    certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
-        --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
-        --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
-        --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
+    local certbot_cmd=()
+    if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
+        certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
+            --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
+            --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
+            --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
+    else
+        certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" \
+            --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
+            --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
+            --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
+    fi
 
     open_cert_http_port
     trap restore_reverse_proxy_firewall RETURN
@@ -2489,7 +2496,7 @@ force_renew_cert() {
     # Run once and capture output; only retry on the known Python error so we
     # don't burn Let's Encrypt rate-limit attempts probing for it. The `if`
     # prevents the failing run from tripping `set -e`.
-    local out rc
+    local out retry_out rc
     if out="$("${certbot_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
     printf '%s\n' "$out"
     if [[ $rc -ne 0 ]]; then
@@ -2498,9 +2505,16 @@ force_renew_cert() {
             pip3 install --upgrade --break-system-packages certbot josepy cryptography 2>/dev/null || \
                 pip3 install --upgrade certbot josepy cryptography 2>/dev/null || true
             info "Retrying certificate renewal..."
-            "${certbot_cmd[@]}" || { err "Certificate renewal failed"; exit 1; }
+            if retry_out="$("${certbot_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
+            printf '%s\n' "$retry_out"
+            if [[ $rc -ne 0 ]]; then
+                err "证书续期/签发失败。certbot 最后输出:"
+                printf '%s\n' "$retry_out" | tail -n 30 >&2
+                exit 1
+            fi
         else
-            err "Certificate renewal failed"
+            err "证书续期/签发失败。certbot 最后输出:"
+            printf '%s\n' "$out" | tail -n 30 >&2
             exit 1
         fi
     fi
