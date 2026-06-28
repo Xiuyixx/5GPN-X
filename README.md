@@ -125,20 +125,18 @@ export EMAIL="admin@example.com"   # 用于 Let's Encrypt
 
 ### 自定义海外上游 DNS 与反代 resolver
 
-海外上游按来源网络分为两组，均支持逗号或空格分隔：
+默认只需要设置一组海外 DNS，上游会同时用于私网 DoT、公网 DoT 和 TCP 反代 resolver，支持逗号或空格分隔：
 
 ```bash
-export PRIVATE_OVERSEAS_DNS="22.22.22.22"
-export PUBLIC_OVERSEAS_DNS="1.1.1.1,8.8.8.8"
-export SNIPROXY_DNS="22.22.22.22"
+export DNS_UPSTREAMS="1.1.1.1,8.8.8.8,9.9.9.9"
 ./install.sh
 ```
 
-`PRIVATE_OVERSEAS_DNS` 用于 `172.22.0.0/16` 专网客户端的 DoT 海外解析；`PUBLIC_OVERSEAS_DNS` 用于非专网客户端的 DoT 海外解析，默认是 `1.1.1.1`、`8.8.8.8`；`SNIPROXY_DNS` 用于 TCP 反代解析后端，默认跟随 `PRIVATE_OVERSEAS_DNS`。旧参数 `OVERSEAS_DNS` 仍可使用，等同于 `PRIVATE_OVERSEAS_DNS`。
+高级场景仍可分别设置 `PRIVATE_OVERSEAS_DNS`、`PUBLIC_OVERSEAS_DNS`、`SNIPROXY_DNS` 覆盖三处上游。旧参数 `OVERSEAS_DNS` 仍可使用，等同于 `PRIVATE_OVERSEAS_DNS`。
 
 安装脚本会保存配置到 `/etc/dnsdist/.overseas_private_dns`、`/etc/dnsdist/.overseas_public_dns`、`/etc/dnsdist/.sniproxy_dns`，后续执行 `./install.sh --update-rules` 或定时更新规则时会继续使用这些上游配置。
 
-TCP 反代会使用单独的 `SNIPROXY_DNS`：安装脚本会把它写入 `/etc/sniproxy.conf` 的 `resolver`，并强制 `mode ipv4_only`，避免 sniproxy 绕过自定义解析或优先连接 AAAA 地址。
+安装脚本会把 sniproxy resolver 写入 `/etc/sniproxy.conf`，并强制 `mode ipv4_only`，避免 sniproxy 绕过自定义解析或优先连接 AAAA 地址。
 
 ### 本地补充 GFWList
 

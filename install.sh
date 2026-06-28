@@ -181,16 +181,17 @@ configure_overseas_dns() {
     local private_selected="${PRIVATE_OVERSEAS_DNS:-$legacy}"
     local public_selected="${PUBLIC_OVERSEAS_DNS:-}"
     local sniproxy_selected="${SNIPROXY_DNS:-}"
+    local unified_selected="${DNS_UPSTREAMS:-}"
+
+    if [[ -n "$unified_selected" ]]; then
+        private_selected="$unified_selected"
+        [[ -n "$public_selected" ]] || public_selected="$unified_selected"
+        [[ -n "$sniproxy_selected" ]] || sniproxy_selected="$unified_selected"
+    fi
 
     if [[ -z "$private_selected" && -t 0 ]]; then
         echo ""
-        read -r -p "Private overseas DNS upstreams [1.1.1.1,8.8.8.8,9.9.9.9]: " private_selected
-    fi
-    if [[ -z "$public_selected" && -t 0 ]]; then
-        read -r -p "Public overseas DNS upstreams [1.1.1.1,8.8.8.8]: " public_selected
-    fi
-    if [[ -z "$sniproxy_selected" && -t 0 ]]; then
-        read -r -p "sniproxy resolver upstreams [same as private overseas DNS]: " sniproxy_selected
+        read -r -p "海外 DNS 上游（用于 DoT 和 sniproxy）[1.1.1.1,8.8.8.8,9.9.9.9]: " private_selected
     fi
 
     if [[ -z "$private_selected" ]]; then
@@ -213,9 +214,11 @@ configure_overseas_dns() {
     echo "$PRIVATE_OVERSEAS_DNS" > "${CONF_DIR}/.overseas_private_dns"
     echo "$PUBLIC_OVERSEAS_DNS" > "${CONF_DIR}/.overseas_public_dns"
     echo "$SNIPROXY_DNS" > "${CONF_DIR}/.sniproxy_dns"
-    info "Private overseas DNS upstreams: $PRIVATE_OVERSEAS_DNS"
-    info "Public overseas DNS upstreams: $PUBLIC_OVERSEAS_DNS"
-    info "sniproxy resolver upstreams: $SNIPROXY_DNS"
+    if [[ "$PRIVATE_OVERSEAS_DNS" == "$PUBLIC_OVERSEAS_DNS" && "$PRIVATE_OVERSEAS_DNS" == "$SNIPROXY_DNS" ]]; then
+        info "DNS upstreams: $PRIVATE_OVERSEAS_DNS"
+    else
+        info "DNS upstreams: private=$PRIVATE_OVERSEAS_DNS public=$PUBLIC_OVERSEAS_DNS sniproxy=$SNIPROXY_DNS"
+    fi
 }
 
 # =============================================================================
@@ -232,8 +235,10 @@ Options:
   --renew-cert   Force renew certificates and reload services
   --set-dot-domain <domain>
                  Change DoT domain, issue certificate, reload dnsdist
-  --set-dns <private-dns> [public-dns] [sniproxy-dns]
-                 Set overseas DNS upstreams and reload dnsdist/sniproxy
+  --set-dns <dns-list> [public-dns] [sniproxy-dns]
+                 Set DNS upstreams and reload dnsdist/sniproxy. By default one
+                 DNS list is applied to private DoT, public DoT, and sniproxy;
+                 optional extra lists keep advanced split-DNS use cases.
   --list-exits   List configured egress exits and which one is active
   --check-exits  Test reachability of each exit's upstream node (UP/DOWN)
   --add-exit <name> [wg.conf | socks5://... | ss://...]
@@ -271,9 +276,9 @@ Environment variables (for non-interactive use):
                  When set, the interactive domain prompt is skipped.
                  You must point its A record at this host's public IP.
   OVERSEAS_DNS   Backward-compatible alias for PRIVATE_OVERSEAS_DNS
-  PRIVATE_OVERSEAS_DNS  Overseas upstream DNS for 172.22.0.0/16 DoT clients
-  PUBLIC_OVERSEAS_DNS   Overseas upstream DNS for non-private DoT clients
-  SNIPROXY_DNS   Resolver upstream DNS for TCP sniproxy backends
+  DNS_UPSTREAMS  Unified DNS upstream list for private/public DoT and sniproxy
+  PRIVATE_OVERSEAS_DNS / PUBLIC_OVERSEAS_DNS / SNIPROXY_DNS
+                 Advanced split-DNS overrides; omitted values follow DNS_UPSTREAMS
   EMAIL          Email for Let's Encrypt
   TG_BOT_TOKEN   Telegram bot token; enables the control bot when set
   TG_ADMIN_IDS   Comma-separated Telegram numeric IDs allowed to operate the bot
@@ -2621,8 +2626,8 @@ set_custom_dns() {
     systemctl restart sniproxy 2>/dev/null || true
     rm -rf "$backup_dir"
     ok "DNS upstreams updated"
-    echo "Private overseas DNS: $private_dns"
-    echo "Public overseas DNS: $public_dns"
+    echo "Private DoT DNS: $private_dns"
+    echo "Public DoT DNS: $public_dns"
     echo "sniproxy DNS: $sniproxy_dns"
 }
 

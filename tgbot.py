@@ -568,20 +568,16 @@ def op_set_dns(text):
     lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not lines:
         return "DNS 不能为空。"
-    if len(lines) > 3:
-        return "最多发送三行：private、public、sniproxy。"
+    if len(lines) > 1:
+        return "只需要发送一行 DNS，上游会同步用于私网 DoT、公网 DoT 和 sniproxy。"
     private_dns = _dns_arg(lines[0])
-    public_dns = _dns_arg(lines[1]) if len(lines) >= 2 else private_dns
-    sniproxy_dns = _dns_arg(lines[2]) if len(lines) >= 3 else private_dns
-    if not private_dns or not public_dns or not sniproxy_dns:
+    if not private_dns:
         return "DNS 格式无效。只支持 IPv4/IPv6 地址，多个地址用空格或逗号分隔。"
-    ok, out = run2(["bash", MGMT, "--set-dns", private_dns, public_dns, sniproxy_dns], timeout=600)
+    ok, out = run2(["bash", MGMT, "--set-dns", private_dns], timeout=600)
     if ok:
         return ("✅ <b>DNS 上游已更新</b>\n"
-                "私网 DoT：<code>%s</code>\n"
-                "公网 DoT：<code>%s</code>\n"
-                "sniproxy：<code>%s</code>" %
-                (html.escape(private_dns), html.escape(public_dns), html.escape(sniproxy_dns)))
+                "已同步用于私网 DoT、公网 DoT 和 sniproxy：\n"
+                "<code>%s</code>" % html.escape(private_dns))
     return "❌ <b>DNS 上游更新失败</b>\n%s" % html.escape(_reason(out))
 
 
@@ -1004,9 +1000,9 @@ def handle_callback(cb):
         PENDING[chat_id] = {"action": "dot_dns"}
         edit(cb,
              "发送自定义 DNS 上游。\n\n"
-             "一行：同时用于私网 DoT、公网 DoT、sniproxy\n"
-             "三行：依次为 private / public / sniproxy\n\n"
-             "示例：\n<pre>1.1.1.1 8.8.8.8\n9.9.9.9 1.0.0.1\n1.1.1.1</pre>\n"
+             "只需要发送一行，多个 DNS 用空格或逗号分隔。\n"
+             "这组 DNS 会同时用于私网 DoT、公网 DoT 和 sniproxy。\n\n"
+             "示例：\n<pre>1.1.1.1 8.8.8.8 9.9.9.9</pre>\n"
              "发送 /cancel 取消。")
 
     # ---- views ----
