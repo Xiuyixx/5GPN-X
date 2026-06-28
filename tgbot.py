@@ -20,13 +20,14 @@ Environment:
 """
 
 import html
+import http.client
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
-import urllib.error
 import urllib.request
 
 TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
@@ -56,21 +57,47 @@ PENDING = {}
 # --------------------------------------------------------------------------- #
 # Telegram API
 # --------------------------------------------------------------------------- #
+_TG_CONN = None
+
+
 def tg(method, **params):
+    global _TG_CONN
     data = json.dumps(params).encode("utf-8")
-    req = urllib.request.Request(
-        API + method, data=data, headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=70) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
+    path = "/bot%s/%s" % (TOKEN, method)
+    headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
+    for attempt in (0, 1):
         try:
-            return json.loads(e.read().decode("utf-8"))
+            if _TG_CONN is None:
+                _TG_CONN = http.client.HTTPSConnection("api.telegram.org", timeout=70)
+            _TG_CONN.request("POST", path, data, headers)
+            raw = _TG_CONN.getresponse().read()
+            return json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception as e:
+            try:
+                if _TG_CONN:
+                    _TG_CONN.close()
+            except Exception:
+                pass
+            _TG_CONN = None
+            if attempt:
+                return {"ok": False, "error": str(e)}
+
+
+def answer_callback_async(cb_id):
+    def go():
+        data = json.dumps({"callback_query_id": cb_id}).encode("utf-8")
+        req = urllib.request.Request(
+            API + "answerCallbackQuery",
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20):
+                pass
         except Exception:
-            return {"ok": False, "error": str(e)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+            pass
+
+    threading.Thread(target=go, daemon=True).start()
 
 
 def send(chat_id, text, keyboard=None, mono=False):
@@ -851,8 +878,8 @@ def handle_callback(cb):
         tg("answerCallbackQuery", callback_query_id=cb_id, text="⛔ 未授权", show_alert=True)
         return
 
-    # Stop the button spinner immediately; long ops still run synchronously.
-    tg("answerCallbackQuery", callback_query_id=cb_id)
+    # Stop the button spinner without adding another Telegram round-trip before the edit.
+    answer_callback_async(cb_id)
 
     # ---- navigation (edit the same bubble) ----
     if data == "menu:main":
