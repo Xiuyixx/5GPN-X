@@ -209,6 +209,18 @@ domain_resolves_to_public_ip() {
     return 1
 }
 
+certbot_diagnostics() {
+    local domain="${1:-}" resolved=""
+    resolved=$(resolve_domain_a_records "$domain" | paste -sd',' - || true)
+    echo "诊断: domain=${domain:-未知}"
+    echo "诊断: public_ip=${PUBLIC_IP:-未知}"
+    echo "诊断: resolved=${resolved:-无}"
+    echo "诊断: certbot=$(command -v certbot 2>/dev/null || echo missing)"
+    if command -v ss >/dev/null 2>&1; then
+        echo "诊断: tcp80_listen=$(ss -H -ltnp 'sport = :80' 2>/dev/null | head -n 3 | sed 's/[[:space:]]\+/ /g' | paste -sd ';' - || true)"
+    fi
+}
+
 configure_overseas_dns() {
     local legacy="${OVERSEAS_DNS:-}"
     local private_selected="${PRIVATE_OVERSEAS_DNS:-$legacy}"
@@ -2477,6 +2489,13 @@ force_renew_cert() {
         exit 1
     fi
 
+    get_public_ip
+    certbot_diagnostics "$DOMAIN"
+    if ! command -v certbot >/dev/null 2>&1; then
+        err "certbot 不存在，无法签发/续期证书。请重新运行安装脚本安装依赖。"
+        exit 1
+    fi
+
     local certbot_cmd=()
     if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
         certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
@@ -2509,12 +2528,20 @@ force_renew_cert() {
             printf '%s\n' "$retry_out"
             if [[ $rc -ne 0 ]]; then
                 err "证书续期/签发失败。certbot 最后输出:"
-                printf '%s\n' "$retry_out" | tail -n 30 >&2
+                if [[ -n "$retry_out" ]]; then
+                    printf '%s\n' "$retry_out" | tail -n 30 >&2
+                else
+                    err "certbot 没有输出；请检查端口 80 是否被其他服务占用，以及防火墙是否允许外部访问 80。"
+                fi
                 exit 1
             fi
         else
             err "证书续期/签发失败。certbot 最后输出:"
-            printf '%s\n' "$out" | tail -n 30 >&2
+            if [[ -n "$out" ]]; then
+                printf '%s\n' "$out" | tail -n 30 >&2
+            else
+                err "certbot 没有输出；请检查端口 80 是否被其他服务占用，以及防火墙是否允许外部访问 80。"
+            fi
             exit 1
         fi
     fi

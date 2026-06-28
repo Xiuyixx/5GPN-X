@@ -308,6 +308,12 @@ def _reason(out, n=4):
     return (text[:600] + "…") if len(text) > 600 else text
 
 
+def _tail_output(out, n=20, limit=1800):
+    lines = [l.rstrip() for l in _strip_ansi(out).splitlines() if l.strip()]
+    text = "\n".join(lines[-n:]) or "(no output)"
+    return (text[-limit:] + "…") if len(text) > limit else text
+
+
 def _exit_ip():
     """Best-effort: the public egress IP as seen through the active exit."""
     for url in ("https://api.ipify.org", "https://ifconfig.me/ip", "https://ipinfo.io/ip"):
@@ -582,7 +588,7 @@ def op_renew_cert():
     ok, out = run2(["bash", MGMT, "--renew-cert"], timeout=600)
     if ok:
         return "✅ <b>证书已续期</b>并重载 dnsdist"
-    return "❌ <b>证书续期失败</b>\n%s" % html.escape(_reason(out))
+    return "❌ <b>证书续期失败</b>\n<pre>%s</pre>" % html.escape(_tail_output(out))
 
 
 def op_dot_status():
