@@ -1005,10 +1005,37 @@ BOT_COMMANDS = [
 
 def set_commands():
     """Register the Chinese quick-command menu and enable the Menu button."""
-    r = tg("setMyCommands",
-           commands=[{"command": c, "description": d} for c, d in BOT_COMMANDS])
-    if not r.get("ok"):
-        print("[warn] setMyCommands failed: %s" % r, file=sys.stderr)
+    commands = [{"command": c, "description": d} for c, d in BOT_COMMANDS]
+
+    # Old projects may have left narrower scopes (especially all_private_chats)
+    # with only /start and /cancel, which Telegram prefers over the default
+    # scope in the command menu. Clear common stale scopes, then register the
+    # current command set for both default and private chats so fresh installs
+    # reliably show the full menu.
+    for scope in (
+        None,
+        {"type": "all_private_chats"},
+        {"type": "all_group_chats"},
+        {"type": "all_chat_administrators"},
+    ):
+        params = {}
+        if scope is not None:
+            params["scope"] = scope
+        r = tg("deleteMyCommands", **params)
+        if not r.get("ok"):
+            print("[warn] deleteMyCommands failed for %s: %s" % (scope or "default", r), file=sys.stderr)
+
+    for scope in (
+        None,
+        {"type": "all_private_chats"},
+    ):
+        params = {"commands": commands}
+        if scope is not None:
+            params["scope"] = scope
+        r = tg("setMyCommands", **params)
+        if not r.get("ok"):
+            print("[warn] setMyCommands failed for %s: %s" % (scope or "default", r), file=sys.stderr)
+
     # Make the input-box button show the command menu.
     tg("setChatMenuButton", menu_button={"type": "commands"})
 
