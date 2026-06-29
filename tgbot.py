@@ -39,7 +39,7 @@ ADMIN_IDS = {
 MGMT = os.environ.get("MGMT", "/opt/proxy-gateway/bin/proxy-gateway-ctl")
 API = "https://api.telegram.org/bot%s/" % TOKEN
 
-# Services the bot may restart / tail. Order matters for display only.
+# Services the bot may tail. Order matters for display only.
 SERVICES = [
     "dnsdist",
     "sniproxy",
@@ -47,6 +47,13 @@ SERVICES = [
     "china-dns-race-proxy",
     "proxy-gateway-ios-profile",
     "proxy-gateway-tgbot",
+]
+RESTART_SERVICES = [
+    "dnsdist",
+    "sniproxy",
+    "quic-proxy",
+    "china-dns-race-proxy",
+    "proxy-gateway-ios-profile.socket",
 ]
 EXIT_NAME_RE = re.compile(r"^(local|[\w\-\u4e00-\u9fff]{1,16})$", re.UNICODE)
 EXIT_ADD_NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff]{1,16}$", re.UNICODE)  # 'local' is reserved
@@ -762,14 +769,18 @@ def op_set_dns(text):
     return "❌ <b>DNS 上游更新失败</b>\n%s" % html.escape(_reason(out))
 
 
-def op_restart(svc):
-    if svc not in SERVICES:
-        return "未知服务。"
-    target = svc + ".socket" if svc == "proxy-gateway-ios-profile" else svc
-    run2(["systemctl", "restart", target], timeout=60)
-    state = _is_active(target)
-    icon = "✅" if state in ("active", "listening") else "❌"
-    return "%s <b>%s</b> 已重启（%s）" % (icon, html.escape(svc), state)
+def op_restart_services():
+    results = []
+    failed = False
+    for svc in RESTART_SERVICES:
+        run2(["systemctl", "restart", svc], timeout=60)
+        state = _is_active(svc)
+        ok = state in ("active", "listening")
+        failed = failed or not ok
+        label = svc[:-len(".socket")] if svc.endswith(".socket") else svc
+        results.append(("✅" if ok else "❌") + " " + html.escape(label) + "（%s）" % html.escape(state))
+    head = "❌ <b>部分服务重启异常</b>" if failed else "✅ <b>服务已重启</b>"
+    return head + "\n" + "\n".join(results)
 
 
 def op_logs(svc):
@@ -925,7 +936,7 @@ def main_menu():
         [{"text": "🧭 智能分流", "callback_data": "menu:rules"},
          {"text": "🔄 更新规则", "callback_data": "act:update_rules"}],
         [{"text": "🔐 DoT 管理", "callback_data": "menu:dot"},
-         {"text": "♻️ 重启服务", "callback_data": "menu:restart"}],
+         {"text": "♻️ 重启服务", "callback_data": "act:restart"}],
         [{"text": "📜 日志", "callback_data": "menu:logs"},
          {"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
     ]
@@ -1131,8 +1142,6 @@ def handle_callback(cb):
         edit(cb, "选择要删除的出口：", exits_del_menu())
     elif data == "menu:dot":
         edit(cb, op_dot_status(), dot_menu())
-    elif data == "menu:restart":
-        edit(cb, "选择要重启的服务：", services_menu("restart"))
     elif data == "menu:logs":
         edit(cb, "选择要查看日志的服务：", services_menu("logs"))
 
@@ -1202,6 +1211,9 @@ def handle_callback(cb):
     elif data == "act:renew":
         edit(cb, "⏳ 正在续期证书，请稍候…")
         edit_async(cb, op_renew_cert, back_kb("menu:main"))
+    elif data == "act:restart":
+        edit(cb, "⏳ 正在重启服务…")
+        edit_async(cb, op_restart_services, back_kb("menu:main"))
     elif data == "rules:enable":
         edit(cb, "⏳ 正在启用智能分流…")
         edit_async(cb, lambda: op_set_exit("smart"), back_kb("menu:rules"))
@@ -1213,10 +1225,6 @@ def handle_callback(cb):
         name = data[len("exitdel:"):]
         edit(cb, "⏳ 正在删除出口 <b>%s</b>…" % html.escape(name))
         edit_async(cb, lambda: op_del_exit(name), back_kb("menu:exits"))
-    elif data.startswith("restart:"):
-        svc = data[len("restart:"):]
-        edit(cb, "⏳ 正在重启 <b>%s</b>…" % html.escape(svc))
-        edit_async(cb, lambda: op_restart(svc), back_kb("menu:restart"))
     elif data == "act:ios":
         edit(cb, "⏳ 正在生成 iOS 二维码…")
         edit_ios_async(cb, chat_id)
