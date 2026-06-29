@@ -20,6 +20,7 @@ Environment:
 """
 
 import html
+import base64
 import http.client
 import json
 import os
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import unquote, urlparse
 import urllib.request
 
 TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
@@ -563,6 +565,53 @@ def op_add_exit(name, payload):
     return "❌ <b>添加失败</b>\n%s" % html.escape(_reason(out))
 
 
+def b64decode_text(s):
+    pad = "=" * (-len(s) % 4)
+    for dec in (base64.urlsafe_b64decode, base64.b64decode):
+        try:
+            return dec(s + pad).decode("utf-8")
+        except Exception:
+            continue
+    return ""
+
+
+def clean_exit_name(name):
+    name = unquote(name or "").strip()
+    name = re.sub(r"[^\w\-\u4e00-\u9fff]+", "-", name, flags=re.UNICODE).strip("-_")
+    name = name[:16]
+    if not name or name == "local" or not EXIT_ADD_NAME_RE.match(name):
+        return ""
+    return name
+
+
+def unique_exit_name(name):
+    base = clean_exit_name(name)
+    if not base:
+        return ""
+    existing = set(parse_exit_names())
+    if base not in existing:
+        return base
+    for i in range(2, 100):
+        suffix = "-%d" % i
+        cand = (base[:16 - len(suffix)] + suffix).strip("-_")
+        if cand and cand not in existing and EXIT_ADD_NAME_RE.match(cand):
+            return cand
+    return ""
+
+
+def exit_name_from_uri(uri):
+    if uri.lower().startswith("vmess://"):
+        try:
+            data = json.loads(b64decode_text(uri[len("vmess://"):].strip()))
+        except Exception:
+            data = {}
+        return unique_exit_name(data.get("ps") or "")
+    try:
+        return unique_exit_name(urlparse(uri).fragment)
+    except Exception:
+        return ""
+
+
 def parse_add_exit_input(payload):
     config = (payload or "").strip()
     if not config:
@@ -572,15 +621,12 @@ def parse_add_exit_input(payload):
     if len(parts) == 2 and EXIT_ADD_NAME_RE.match(parts[0]) and parts[0] != "local" and PROXY_URI_RE.match(parts[1].strip()):
         return parts[0], config.replace(first, parts[1].strip(), 1), ""
     if "[Interface]" in config and "[Peer]" in config:
-        name = next_auto_exit_name()
-        if not name:
-            return "", "", "无法自动分配出口名。请改用命令行指定出口名。"
-        return name, config, ""
+        return "", "", "WireGuard 配置本身没有节点名称。请改用命令行指定出口名添加。"
     if not PROXY_URI_RE.match(first):
         return "", "", "无法识别。请直接粘贴支持的节点链接：<code>%s</code>，或整段 WireGuard 配置。" % SUPPORTED_EXIT_LINKS
-    name = next_auto_exit_name()
+    name = exit_name_from_uri(first)
     if not name:
-        return "", "", "无法自动分配出口名。请改用：<code>出口名 链接</code>。"
+        return "", "", "这条节点链接没有可用名称。请改用：<code>出口名 链接</code>。"
     return name, config, ""
 
 
@@ -828,15 +874,6 @@ def parse_exit_names():
         pass
     names.extend(sorted(seen))
     return names
-
-
-def next_auto_exit_name():
-    existing = set(parse_exit_names())
-    for i in range(1, 100):
-        cand = "ex%d" % i
-        if cand not in existing:
-            return cand
-    return ""
 
 
 def op_ios_send(chat_id):
@@ -1093,7 +1130,7 @@ def handle_callback(cb):
         edit(cb, op_show_rules() + "\n\n发送要删除的<b>序号</b>，或 /cancel 取消。")
     elif data == "exit_add":
         PENDING[chat_id] = {"action": "add_exit_link"}
-        edit(cb, "添加出口：直接粘贴一条节点链接即可。\n支持 <code>%s</code>。\n\n也可以发 <code>出口名 链接</code> 指定名称；不指定时会自动用 ex1/ex2 这类名字。\n发送 /cancel 取消。" % SUPPORTED_EXIT_LINKS)
+        edit(cb, "添加出口：直接粘贴一条节点链接即可，我会使用链接里的节点名称作为出口名。\n支持 <code>%s</code>。\n\n如果链接没有名称，也可以发 <code>出口名 链接</code> 指定名称。\n发送 /cancel 取消。" % SUPPORTED_EXIT_LINKS)
     elif data == "dot:domain":
         PENDING[chat_id] = {"action": "dot_domain"}
         edit(cb,
