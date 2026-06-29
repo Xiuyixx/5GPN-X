@@ -337,7 +337,7 @@ def main():
         "inbounds": [{
             "type": "tun", "tag": "pgw-in",
             "interface_name": "pgw-smart",
-            "inet4_address": "172.19.0.1/30",
+            "address": ["172.19.0.1/30"],
             "mtu": MTU, "auto_route": False, "strict_route": False,
             "stack": STACK,
             "sniff": True, "sniff_override_destination": True,

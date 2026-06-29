@@ -382,7 +382,7 @@ def main():
         "type": "tun",
         "tag": "pgw-in",
         "interface_name": "pgw-" + name,
-        "inet4_address": "172.19.0.1/30",
+        "address": ["172.19.0.1/30"],
         "mtu": mtu,
         "auto_route": False,
         "strict_route": False,
