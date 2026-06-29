@@ -1708,7 +1708,7 @@ exit_up() {
         shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router)
             ensure_singbox || return 1
             install_singbox_unit
-            systemctl restart "proxy-gateway-singbox@${name}.service" ;;
+            systemctl start "proxy-gateway-singbox@${name}.service" ;;
         *) err "Unknown type for exit '$name'"; return 1 ;;
     esac
 }
@@ -1782,11 +1782,11 @@ check_exits() {
     done < <(list_exit_names)
 }
 
-# Wait (≤5s) for the pgw-<name> device to appear (sing-box TUN creation is async).
+# Wait (≤5s) for the pgw-<name> device to appear and become UP (sing-box TUN creation is async).
 exit_wait_device() {
     local iface="pgw-${1}" i
     for i in $(seq 1 50); do
-        ip link show "$iface" >/dev/null 2>&1 && return 0
+        ip link show up "$iface" >/dev/null 2>&1 && return 0
         sleep 0.1
     done
     return 1
@@ -1829,7 +1829,8 @@ if ! ip link show "${iface}" >/dev/null 2>&1; then
     esac
 fi
 
-for _ in $(seq 1 50); do ip link show "${iface}" >/dev/null 2>&1 && break; sleep 0.1; done
+for _ in $(seq 1 50); do ip link show up "${iface}" >/dev/null 2>&1 && break; sleep 0.1; done
+ip link show up "${iface}" >/dev/null 2>&1 || { echo "[!] exit '${current}' (${etype}) device is not up"; exit 1; }
 ip route replace default dev "${iface}" table "${TABLE}"
 echo "[OK] egress exit active: ${current} (${etype}, dev ${iface})"
 EOF

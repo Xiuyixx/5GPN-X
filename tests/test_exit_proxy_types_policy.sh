@@ -23,6 +23,10 @@ grep -q '"stack": "gvisor"' <<<"$(python3 "${gen}" us 'socks5://1.2.3.4:1080')" 
 
 [[ "${install_body}" == *'SINGBOX_VERSION_DEFAULT="1.12.25"'* ]] || fail "sing-box default version must be locked to 1.12.25"
 [[ "${install_body}" == *'ver="${SINGBOX_VERSION:-${SINGBOX_VERSION_DEFAULT}}"'* ]] || fail "ensure_singbox must use the locked default unless explicitly overridden"
+[[ "${install_body}" == *'systemctl start "proxy-gateway-singbox@${name}.service"'* ]] || fail "set-exit must start an existing sing-box exit without restarting its new TUN"
+[[ "${install_body}" == *'ip link show up "$iface"'* ]] || fail "set-exit must wait for the exit device to be UP before routing"
+[[ "${install_body}" == *'ip link show up "${iface}"'* ]] || fail "apply-exit helper must wait for the exit device to be UP before routing"
+[[ "${install_body}" == *"device is not up"* ]] || fail "apply-exit helper must fail clearly if the exit device is still down"
 
 # socks5 with auth
 out="$(python3 "${gen}" us 'socks5://u:p@1.2.3.4:1080')"
