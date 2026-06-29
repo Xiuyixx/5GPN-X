@@ -598,12 +598,19 @@ def op_dot_status():
     public_dns = _read_file("/etc/dnsdist/.overseas_public_dns") or "?"
     sniproxy_dns = (_read_file("/opt/proxy-gateway/etc/.sniproxy_dns") or
                     _read_file("/etc/dnsdist/.sniproxy_dns") or "?")
-    return ("🔐 <b>DoT 管理</b>\n"
-            "域名：<code>%s</code>\n"
-            "私网 DoT 海外 DNS：<code>%s</code>\n"
-            "公网 DoT 海外 DNS：<code>%s</code>\n"
-            "sniproxy DNS：<code>%s</code>"
-            % (html.escape(domain), html.escape(private_dns), html.escape(public_dns), html.escape(sniproxy_dns)))
+    lines = [
+        "🔐 <b>DoT 管理</b>",
+        "域名：<code>%s</code>" % html.escape(domain),
+    ]
+    if private_dns == public_dns == sniproxy_dns:
+        lines.append("DNS 设置：<code>%s</code>" % html.escape(private_dns))
+    else:
+        lines.extend([
+            "私网 DoT 海外 DNS：<code>%s</code>" % html.escape(private_dns),
+            "公网 DoT 海外 DNS：<code>%s</code>" % html.escape(public_dns),
+            "sniproxy DNS：<code>%s</code>" % html.escape(sniproxy_dns),
+        ])
+    return "\n".join(lines)
 
 
 def op_set_dot_domain(domain):

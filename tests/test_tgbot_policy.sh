@@ -48,6 +48,8 @@ bot_body="$(cat "${bot}")"
 [[ "${bot_body}" == *'强制更换会跳过本次证书签发'* ]] || fail "tgbot.py must warn about force domain certificate risk"
 [[ "${bot_body}" == *'--set-dns'* ]] || fail "tgbot.py must call the fixed DNS management command"
 [[ "${bot_body}" != *'最多发送三行：private、public、sniproxy'* ]] || fail "tgbot.py DNS flow should use one unified DNS input"
+[[ "${bot_body}" == *'DNS 设置：<code>%s</code>'* ]] || fail "tgbot.py DoT status must show one DNS setting when values match"
+[[ "${bot_body}" == *'if private_dns == public_dns == sniproxy_dns:'* ]] || fail "tgbot.py DoT status must only expand DNS groups when values differ"
 [[ "${bot_body}" == *'url = "http://%s:8111/ios-dot.mobileconfig" % domain'* ]] || fail "tgbot.py iOS QR must prefer the current DoT domain over cached URL files"
 
 # --- install wiring ---------------------------------------------------------
