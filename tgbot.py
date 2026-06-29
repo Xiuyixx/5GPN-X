@@ -553,6 +553,22 @@ def op_set_exit(name):
     return "✅ 已切换到 <b>%s</b>（%s）%s" % (html.escape(name), html.escape(t), tail)
 
 
+def exits_overview_text():
+    cur = _read_file("/opt/proxy-gateway/etc/current-exit") or "local"
+    if cur == "local":
+        desc = "本机直出"
+    else:
+        desc = _read_file("/etc/proxy-gateway/exits/%s.type" % cur) or "?"
+    ip = _exit_ip()
+    if ip:
+        ip_line = "🌍 出口 IP：<code>%s</code>" % html.escape(ip)
+    else:
+        ip_line = "🌍 出口 IP：<i>探测失败</i>"
+    return ("🌐 当前出口：<b>%s</b>（%s）\n%s\n\n"
+            "选择要切换到的出口，或添加/删除："
+            % (html.escape(cur), html.escape(desc), ip_line))
+
+
 def op_add_exit(name, payload):
     if not EXIT_ADD_NAME_RE.match(name) or name == "local":
         return "出口名无效（需 1-11 位小写字母/数字，且不能为 local）。"
@@ -1025,7 +1041,7 @@ def handle_message(msg):
         elif text.startswith("/status"):
             send(chat_id, op_status())
         elif text.startswith("/exits"):
-            send(chat_id, "选择要切换到的出口：", exits_menu())
+            send_async(chat_id, exits_overview_text, keyboard_fn=exits_menu)
         elif text.startswith("/rules"):
             send(chat_id, "🧭 <b>智能分流</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
         else:
@@ -1109,7 +1125,8 @@ def handle_callback(cb):
     elif data == "menu:policy":
         edit(cb, "🎯 <b>分类 → 出口</b> 映射（点一个分类来修改目标）：", policy_menu())
     elif data == "menu:exits":
-        edit(cb, "选择要切换到的出口，或添加/删除：", exits_menu())
+        edit(cb, "⏳ 正在获取当前出口信息…")
+        edit_async(cb, exits_overview_text, keyboard=exits_menu())
     elif data == "menu:exits_del":
         edit(cb, "选择要删除的出口：", exits_del_menu())
     elif data == "menu:dot":
