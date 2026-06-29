@@ -212,8 +212,13 @@ def edit_ios_async(cb, chat_id):
     background(go)
 
 
-def send_async(chat_id, text_fn, keyboard=None, mono=False):
-    background(lambda: send(chat_id, text_fn(), keyboard, mono))
+def send_async(chat_id, text_fn, keyboard=None, mono=False, keyboard_fn=None):
+    def go():
+        text = text_fn()
+        kb = keyboard_fn() if keyboard_fn else keyboard
+        send(chat_id, text, kb, mono)
+
+    background(go)
 
 
 def back_kb(target="menu:main", label="« 返回"):
@@ -1036,7 +1041,7 @@ def handle_message(msg):
             return
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在添加出口 <b>%s</b>…" % html.escape(name))
-        send_async(chat_id, lambda: op_add_exit(name, config), exits_menu())
+        send_async(chat_id, lambda: op_add_exit(name, config), keyboard_fn=exits_menu)
         return
     if state and state.get("action") == "rules_set":
         PENDING.pop(chat_id, None)
