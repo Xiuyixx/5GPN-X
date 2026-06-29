@@ -54,12 +54,12 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Xiuyixx/5GPN-X/main/inst
 
 | 来源 IP | 被墙域名（GFWList） | 国内域名（ChinaList） | 其他海外域名 |
 |---------|----------------------|------------------------|--------------|
-| `172.22.0.0/16` | 返回服务器本机 IP，进入 TCP/QUIC 代理 | 转发至本机 China DNS 竞速代理 | 转发至海外 DNS 池 |
+| `172.22.0.0/16` | 返回服务器本机 IP，进入 TCP/QUIC 代理 | 转发至本机 China DNS 竞速代理 | 返回服务器本机 IP，进入 TCP/QUIC 代理 |
 | 其他来源 | 不做代理劫持，正常海外解析 | 转发至本机 China DNS 竞速代理 | 转发至海外 DNS 池 |
 
 国内 DNS：dnsdist 将 ChinaList 查询转发到本机 `china-dns-race-proxy` (`127.0.0.1:5301`)；该代理同时接受 UDP 和 TCP DNS 请求，兼容 dnsdist 的普通 DNS、TCP DNS 和 DoT 转发。代理会先并发查询 `101.226.4.6`、`218.30.118.6`、`180.76.76.76`、`119.29.29.29` 的 UDP 53。如果国内 UDP 无响应，会在 `150ms` 后改用国内 TCP 53；国内 TCP 也无响应时，才启用海外 fallback（默认 `1.1.1.1`、`8.8.8.8`、`22.22.22.22`），避免单个国内 DNS 不通导致页面长时间卡住。
 
-海外 DNS 池：`1.1.1.1`、`8.8.8.8`、`9.9.9.9`。
+海外 DNS 池：`1.1.1.1`、`8.8.8.8`、`9.9.9.9`。对 `172.22.0.0/16` 私网客户端，非 ChinaList 的 IPv4 查询默认劫持到网关本机 IP，让所有国际 HTTP/HTTPS/QUIC 流量先进入服务器，再由当前出口出站；公网 DoT 客户端仍保持正常海外解析。
 
 ChinaList 查询会强制携带 EDNS Client Subnet：`139.226.48.0/24`，用于让上游按中国大陆客户端位置返回更合适的 IPv4 解析结果。DNS 服务不返回 AAAA 记录，客户端只使用 IPv4。
 
@@ -140,7 +140,7 @@ export DNS_UPSTREAMS="1.1.1.1,8.8.8.8,9.9.9.9"
 
 ### 本地补充 GFWList
 
-如果官方 GFWList 缺少需要 DoT 劫持的域名，可以把域名写入 `/etc/dnsdist/gfwlist-extra-local.txt`，每行一个域名，支持 `#` 注释。执行 `./install.sh --update-rules` 或等待定时任务更新后，这些域名会去重追加到 dnsdist 的 GFWList 规则中。
+`172.22.0.0/16` 私网客户端现在默认把非 ChinaList 的 IPv4 查询劫持到网关，因此普通国际站不再依赖 GFWList 覆盖率。`/etc/dnsdist/gfwlist-extra-local.txt` 仍保留用于兼容旧规则和显式标记；每行一个域名，支持 `#` 注释。执行 `./install.sh --update-rules` 或等待定时任务更新后，这些域名会去重追加到 dnsdist 的 GFWList 规则中。
 
 ## 客户端配置
 
@@ -323,9 +323,9 @@ EOF
 - 外部 `RULE-SET` 列表会被拉取并**编译成 sing-box 二进制 `.srs`**（40 个列表实测仅占 ~232KB、运行内存约 30MB，512MB 也轻松）。已编译的会缓存复用，改映射不必重新拉取。
 - **Telegram Bot**：🧭 智能分流 → 🎯 分类→出口映射，逐个分类点选目标出口 / 直连 / 拒绝，改完自动重建。
 - 域名靠嗅探 TLS SNI 识别，因此天然是"远程 DNS"。
-- 前提：要被分流的域名得先**进入代理**（即被 GFWList/本地补充命中、解析到网关）；非代理域名客户端直连，规则管不到。
+- `172.22.0.0/16` 私网客户端的非 ChinaList IPv4 查询默认进入代理；ChinaList 域名仍按国内解析直连，其他来源的公网 DoT 查询不做代理劫持。
 
-> 两层分流：**①哪些走代理**仍由 DNS 层的 GFWList/ChinaList + `gfwlist-extra-local.txt` 决定；**②代理流量走哪个出口**由 `smart` 规则决定。
+> 两层分流：**①哪些走代理**由 DNS 层的 ChinaList 决定（私网客户端非 ChinaList 默认进代理）；**②代理流量走哪个出口**由 `smart` 规则决定。
 
 ## 文件说明
 
@@ -388,7 +388,7 @@ http://<安装生成的域名>:8111/ios-dot.mobileconfig
 dnsdist 会先检查来源 IP 和查询端口：
 
 - 非 `172.22.0.0/16` 来源访问普通 DNS 53 端口会被丢弃。
-- `172.22.0.0/16` 来源访问 DNS/DoT 时，GFWList 域名返回服务器本机 IP，使后续流量进入 sniproxy / quic-proxy。
+- `172.22.0.0/16` 来源访问 DNS/DoT 时，非 ChinaList 的 IPv4 查询返回服务器本机 IP，使国际流量进入 sniproxy / quic-proxy。
 - 其他来源访问 DoT 时，不做 GFWList 代理劫持，只按 ChinaList / 默认海外 DNS 池正常解析。
 - ChinaList 查询会覆盖 ECS 为 `139.226.48.0/24`，再转发到本机 `china-dns-race-proxy`。
 - `china-dns-race-proxy` 对国内上游做并发查询，默认 `150ms` 后启动国内 TCP 53 重试，默认 `750ms` 后才启动海外 fallback；如果所有上游都失败，会返回 SERVFAIL，避免客户端一直等待无响应 UDP 包。

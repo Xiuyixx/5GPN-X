@@ -69,8 +69,8 @@ local chinaECS = "139.226.48.0/24"
 local neutralECSv4 = "0.0.0.0/0"
 local neutralECSv6 = "::/0"
 
--- 1. NPN GFWList: spoof A to server IP so traffic hits SNIProxy / QUIC proxy
--- Using LuaRule + SuffixMatchNode:check() for compatibility with dnsdist 1.5+
+-- 1. NPN GFWList: spoof A to server IP so traffic hits SNIProxy / QUIC proxy.
+-- Using LuaRule + SuffixMatchNode:check() for compatibility with dnsdist 1.5+.
 addAction(AndRule({privateClientRule, LuaRule(function(dq) return gfwList:check(dq.qname) end), QTypeRule(DNSQType.A)}),   SpoofAction(serverIP))
 
 -- 2. ChinaList: route to domestic DNS pool for all allowed clients
@@ -78,7 +78,13 @@ addAction(LuaRule(function(dq) return chinaList:check(dq.qname) end), SetECSOver
 addAction(LuaRule(function(dq) return chinaList:check(dq.qname) end), SetECSAction(chinaECS))
 addAction(LuaRule(function(dq) return chinaList:check(dq.qname) end), PoolAction("china"))
 
--- 3. Default: route overseas lookups by source network
+-- 3. NPN default overseas: spoof remaining A records to server IP. This mirrors
+-- privdns-gateway's internal-client model: ChinaList stays direct; everything
+-- else enters the gateway and is sent through the selected exit instead of
+-- leaking through the client's domestic network when a domain is not in GFWList.
+addAction(AndRule({privateClientRule, QTypeRule(DNSQType.A)}), SpoofAction(serverIP))
+
+-- 4. Default public DoT: non-NPN clients keep normal overseas DNS answers.
 addAction(AndRule({privateClientRule, AllRule()}), SetECSOverrideAction(true))
 addAction(AndRule({privateClientRule, AllRule()}), SetECSAction(neutralECSv4, neutralECSv6))
 addAction(AndRule({privateClientRule, AllRule()}), PoolAction("overseas_private"))
