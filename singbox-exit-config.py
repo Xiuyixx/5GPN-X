@@ -21,7 +21,12 @@ import json
 import os
 import re
 import sys
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+PROXY_TYPES = {
+    "shadowsocks", "vmess", "trojan", "vless", "hysteria", "hysteria2",
+    "tuic", "anytls", "shadowtls", "socks", "http",
+}
 
 SS_METHODS = {
     "2022-blake3-aes-128-gcm",
@@ -139,6 +144,205 @@ def parse_socks(uri):
     return host, port, (user or None), (password or None)
 
 
+def query_map(u):
+    return {k: v[0] for k, v in parse_qs(u.query).items()}
+
+
+def tls_block(server_name, insecure=False):
+    block = {"enabled": True}
+    if server_name:
+        block["server_name"] = server_name
+    if insecure:
+        block["insecure"] = True
+    return block
+
+
+def transport_block(net, host=None, path=None, service=None):
+    net = (net or "tcp").lower()
+    if net in ("ws", "websocket"):
+        block = {"type": "ws", "path": path or "/"}
+        if host:
+            block["headers"] = {"Host": host}
+        return block
+    if net == "grpc":
+        return {"type": "grpc", "service_name": service or (path or "").lstrip("/")}
+    return None
+
+
+def tag_from_uri(u, fallback):
+    return unquote(u.fragment).strip() or fallback
+
+
+def parse_vmess(uri):
+    try:
+        data = json.loads(b64decode_any(uri[len("vmess://"):]))
+    except Exception as e:
+        die("invalid vmess:// payload: %s" % e)
+    host = data.get("add")
+    port = int(data.get("port") or 443)
+    outbound = {
+        "type": "vmess",
+        "tag": "out",
+        "server": host,
+        "server_port": port,
+        "uuid": data.get("id", ""),
+        "alter_id": int(data.get("aid", 0) or 0),
+        "security": data.get("scy") or "auto",
+    }
+    if str(data.get("tls", "")).lower() in ("tls", "true", "1"):
+        outbound["tls"] = tls_block(data.get("sni") or data.get("host") or host)
+    tr = transport_block(data.get("net"), data.get("host"), data.get("path"))
+    if tr:
+        outbound["transport"] = tr
+    return outbound, host, port
+
+
+def parse_trojan(uri):
+    u = urlparse(uri)
+    q = query_map(u)
+    host = u.hostname
+    port = u.port or 443
+    outbound = {
+        "type": "trojan",
+        "tag": "out",
+        "server": host,
+        "server_port": port,
+        "password": unquote(u.username or ""),
+        "tls": tls_block(q.get("sni") or q.get("peer") or host, q.get("allowInsecure") in ("1", "true")),
+    }
+    tr = transport_block(q.get("type"), q.get("host"), q.get("path"), q.get("serviceName") or q.get("service_name"))
+    if tr:
+        outbound["transport"] = tr
+    return outbound, host, port
+
+
+def parse_vless(uri):
+    u = urlparse(uri)
+    q = query_map(u)
+    host = u.hostname
+    port = u.port or 443
+    outbound = {
+        "type": "vless",
+        "tag": "out",
+        "server": host,
+        "server_port": port,
+        "uuid": unquote(u.username or ""),
+    }
+    if q.get("flow"):
+        outbound["flow"] = q["flow"]
+    security = (q.get("security") or "tls").lower()
+    if security in ("tls", "reality"):
+        tls = tls_block(q.get("sni") or host, q.get("allowInsecure") in ("1", "true"))
+        if security == "reality":
+            tls["reality"] = {"enabled": True, "public_key": q.get("pbk") or q.get("public_key", "")}
+            if q.get("sid") or q.get("short_id"):
+                tls["reality"]["short_id"] = q.get("sid") or q.get("short_id")
+        outbound["tls"] = tls
+    tr = transport_block(q.get("type") or q.get("transport"), q.get("host"), q.get("path"), q.get("serviceName") or q.get("service_name"))
+    if tr:
+        outbound["transport"] = tr
+    return outbound, host, port
+
+
+def parse_hysteria2(uri):
+    u = urlparse(uri)
+    q = query_map(u)
+    host = u.hostname
+    port = u.port or 443
+    outbound = {
+        "type": "hysteria2",
+        "tag": "out",
+        "server": host,
+        "server_port": port,
+        "password": unquote(u.username or ""),
+        "tls": tls_block(q.get("sni") or host, q.get("insecure") in ("1", "true")),
+    }
+    if q.get("obfs"):
+        outbound["obfs"] = {"type": q.get("obfs"), "password": q.get("obfs-password") or q.get("obfs_password", "")}
+    return outbound, host, port
+
+
+def parse_tuic(uri):
+    u = urlparse(uri)
+    q = query_map(u)
+    host = u.hostname
+    port = u.port or 443
+    if ":" in (u.username or ""):
+        uuid, password = unquote(u.username).split(":", 1)
+    else:
+        uuid, password = unquote(u.username or ""), unquote(u.password or "")
+    outbound = {
+        "type": "tuic",
+        "tag": "out",
+        "server": host,
+        "server_port": port,
+        "uuid": uuid,
+        "password": password,
+        "tls": tls_block(q.get("sni") or host, q.get("allow_insecure") in ("1", "true")),
+    }
+    return outbound, host, port
+
+
+def parse_anytls(uri):
+    u = urlparse(uri)
+    q = query_map(u)
+    host = u.hostname
+    port = u.port or 443
+    outbound = {
+        "type": "anytls",
+        "tag": "out",
+        "server": host,
+        "server_port": port,
+        "password": unquote(u.username or ""),
+        "tls": tls_block(q.get("sni") or host, q.get("insecure") in ("1", "true")),
+    }
+    return outbound, host, port
+
+
+def parse_http(uri):
+    u = urlparse(uri)
+    host = u.hostname
+    port = u.port or (443 if u.scheme.lower() == "https" else 80)
+    outbound = {"type": "http", "tag": "out", "server": host, "server_port": port}
+    if u.username:
+        outbound["username"] = unquote(u.username)
+    if u.password:
+        outbound["password"] = unquote(u.password)
+    if u.scheme.lower() == "https":
+        outbound["tls"] = tls_block(host)
+    return outbound, host, port
+
+
+def parse_proxy_uri(uri):
+    low = uri.lower()
+    if low.startswith("ss://"):
+        host, port, method, password = parse_ss(uri)
+        return {"type": "shadowsocks", "tag": "out", "server": host, "server_port": port, "method": method, "password": password}, host, port
+    if low.startswith(("socks5h://", "socks5://", "socks://")):
+        host, port, user, password = parse_socks(uri)
+        outbound = {"type": "socks", "tag": "out", "server": host, "server_port": port, "version": "5"}
+        if user:
+            outbound["username"] = user
+        if password:
+            outbound["password"] = password
+        return outbound, host, port
+    if low.startswith("vmess://"):
+        return parse_vmess(uri)
+    if low.startswith("trojan://"):
+        return parse_trojan(uri)
+    if low.startswith("vless://"):
+        return parse_vless(uri)
+    if low.startswith(("hysteria2://", "hy2://")):
+        return parse_hysteria2(uri)
+    if low.startswith("tuic://"):
+        return parse_tuic(uri)
+    if low.startswith("anytls://"):
+        return parse_anytls(uri)
+    if low.startswith(("http://", "https://")):
+        return parse_http(uri)
+    die("unsupported URI scheme (expected ss://, vmess://, trojan://, vless://, hysteria2://, tuic://, anytls://, socks5:// or http://)")
+
+
 def main():
     if len(sys.argv) != 3:
         die("usage: singbox-exit-config.py <name> <uri>")
@@ -160,41 +364,19 @@ def main():
     remote_dns = os.environ.get("PGW_REMOTE_DNS", "").lower() in ("1", "true", "yes", "on")
 
     low = uri.lower()
-    if low.startswith("ss://"):
-        host, port, method, password = parse_ss(uri)
-        outbound = {
-            "type": "shadowsocks",
-            "tag": "out",
-            "server": host,
-            "server_port": port,
-            "method": method,
-            "password": password,
-        }
-    elif low.startswith(("socks5h://", "socks5://", "socks://")):
-        if low.startswith("socks5h://"):
-            remote_dns = True
-        host, port, user, password = parse_socks(uri)
-        # Credentials supplied out-of-band (PGW_USER/PGW_PASS) win over anything
-        # embedded in the URI, so passwords with @ : / # ? need no URL-encoding.
+    if low.startswith("socks5h://"):
+        remote_dns = True
+    outbound, host, port = parse_proxy_uri(uri)
+
+    # Credentials supplied out-of-band (PGW_USER/PGW_PASS) win for SOCKS5/HTTP,
+    # so passwords with @ : / # ? need no URL-encoding.
+    if outbound.get("type") in ("socks", "http"):
         env_user = os.environ.get("PGW_USER", "")
         env_pass = os.environ.get("PGW_PASS", "")
         if env_user:
-            user = env_user
+            outbound["username"] = env_user
         if env_pass:
-            password = env_pass
-        outbound = {
-            "type": "socks",
-            "tag": "out",
-            "server": host,
-            "server_port": port,
-            "version": "5",
-        }
-        if user:
-            outbound["username"] = user
-        if password:
-            outbound["password"] = password
-    else:
-        die("unsupported URI scheme (expected ss://, socks5:// or socks5h://)")
+            outbound["password"] = env_pass
 
     inbound = {
         "type": "tun",

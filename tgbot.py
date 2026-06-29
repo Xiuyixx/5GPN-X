@@ -56,6 +56,7 @@ WWW_DIR = "/opt/proxy-gateway/www"
 PENDING = {}
 BUSY = set()
 LAST_FAILED_DOT_DOMAIN = {}
+PROXY_URI_RE = re.compile(r"^(ss|vmess|trojan|vless|hysteria2|hy2|tuic|anytls|socks5h|socks5|socks|http|https)://", re.I)
 
 
 # --------------------------------------------------------------------------- #
@@ -548,11 +549,11 @@ def op_add_exit(name, payload):
     if not EXIT_ADD_NAME_RE.match(name) or name == "local":
         return "出口名无效（需 1-11 位小写字母/数字，且不能为 local）。"
     text = (payload or "").strip()
-    is_uri = bool(re.match(r"^(ss|socks5h|socks5|socks)://", text, re.I))
+    is_uri = bool(PROXY_URI_RE.match(text))
     is_wg = "[Interface]" in payload and "[Peer]" in payload
     if not is_uri and not is_wg:
         return ("无法识别。请发送一段 WireGuard 配置（含 [Interface]/[Peer]），"
-                "或一个 socks5://... / ss://... 的 URI。")
+                "或一个 ss:// / vmess:// / trojan:// / vless:// / hysteria2:// / tuic:// / anytls:// / socks5:// / http:// URI。")
     ok, out = run2(["bash", MGMT, "--add-exit", name], inp=payload, timeout=180)
     if ok:
         m = re.search(r"type:\s*(\w+)", out)
@@ -960,40 +961,44 @@ def handle_message(msg):
 
     # Conversational flows (e.g. adding an exit).
     state = PENDING.get(chat_id)
+    if state and state.get("action") == "add_exit_link":
+        payload = msg.get("text") or ""
+        first = payload.strip().splitlines()[0].strip() if payload.strip() else ""
+        name = ""
+        config = payload
+        parts = first.split(None, 1)
+        if len(parts) == 2 and EXIT_ADD_NAME_RE.match(parts[0]) and PROXY_URI_RE.match(parts[1].strip()):
+            name = parts[0]
+            config = payload.replace(first, parts[1].strip(), 1)
+        else:
+            for i in range(1, 100):
+                cand = "ex%d" % i
+                if cand not in parse_exit_names():
+                    name = cand
+                    break
+        if not name:
+            send(chat_id, "无法分配出口名。请改用：<code>出口名 链接</code>。")
+            return
+        PENDING.pop(chat_id, None)
+        send(chat_id, "⏳ 正在添加出口 <b>%s</b>…" % html.escape(name))
+        send_async(chat_id, lambda: op_add_exit(name, config), exits_menu())
+        return
     if state and state.get("action") == "add_exit_name":
         name = text.strip()
         if not EXIT_ADD_NAME_RE.match(name) or name == "local":
             send(chat_id, "名字无效。请用 1-11 位小写字母/数字（不能是 local）。再发一次，或 /cancel：")
             return
         PENDING[chat_id] = {"action": "add_exit_config", "name": name}
-        # NOTE: this message contains literal '%' — inject the name by
-        # concatenation, NOT %-formatting, or Python treats '%' as a conversion.
         send(chat_id,
              "✅ 出口名：<b>" + html.escape(name) + "</b>\n\n"
              "🔗 <b>导入链接</b>\n"
-             "请把出口配置粘贴到聊天框，我会自动识别类型。\n"
+             "直接粘贴一条节点链接，或整段 WireGuard 配置，我会自动识别并添加。\n"
              "⚠️ 配置里可能包含密钥/密码，会经 Telegram 传输。\n\n"
-
-             "<b>支持格式</b>\n\n"
-             "1️⃣ <b>SOCKS5</b>\n"
-             "• 无鉴权：<code>socks5://host:端口</code>\n"
-             "• 账号密码：<code>socks5://用户:密码@host:端口</code>\n"
-             "• 远程 DNS：把 <code>socks5://</code> 换成 <code>socks5h://</code>\n\n"
-
-             "2️⃣ <b>Shadowsocks / SS2022</b>\n"
-             "• 标准格式：<code>ss://加密方式:密码@host:端口</code>\n"
-             "• SS2022：<code>ss://2022-blake3-aes-128-gcm:密码@host:端口</code>\n"
-             "• 机场/客户端分享的 <code>ss://</code> 链接可直接整条粘贴\n\n"
-
-             "3️⃣ <b>WireGuard</b>\n"
-             "• 粘贴整段配置，需包含 <code>[Interface]</code> 和 <code>[Peer]</code>\n"
-             "• 可用 <code>exit-server-setup.sh</code> 生成\n\n"
-
-             "<b>密码含特殊字符怎么办？</b>\n"
-             "如果密码里有 <code>@ : / # ? % 空格</code>，通常直接原样粘贴即可。\n"
-             "只有账号本身也包含冒号时，才建议改用多行写法：\n"
-             "<code>socks5://host:端口\nuser: 账号\npass: 密码\nremote-dns: on</code>\n\n"
-
+             "支持：<code>ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://</code>\n"
+             "WireGuard 也可以直接粘贴含 <code>[Interface]</code> / <code>[Peer]</code> 的整段配置。\n\n"
+             "SOCKS5 远程 DNS：把 <code>socks5://</code> 换成 <code>socks5h://</code>，或另起一行写 <code>remote-dns: on</code>。\n"
+             "密码含特殊字符时，可用多行：\n"
+             "<code>socks5://host:端口\nuser: 账号\npass: 密码</code>\n\n"
              "发送 /cancel 取消。")
         return
     if state and state.get("action") == "add_exit_config":
@@ -1094,8 +1099,8 @@ def handle_callback(cb):
         PENDING[chat_id] = {"action": "rules_del"}
         edit(cb, op_show_rules() + "\n\n发送要删除的<b>序号</b>，或 /cancel 取消。")
     elif data == "exit_add":
-        PENDING[chat_id] = {"action": "add_exit_name"}
-        edit(cb, "添加出口：先发一个名字（1-11 位小写字母/数字，如 us / jp / hk）。\n发送 /cancel 取消。")
+        PENDING[chat_id] = {"action": "add_exit_link"}
+        edit(cb, "添加出口：直接粘贴一条节点链接即可。\n支持 <code>ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://</code>。\n\n也可以发 <code>出口名 链接</code> 指定名称；不指定时会自动用 ex1/ex2 这类名字。\n发送 /cancel 取消。")
     elif data == "dot:domain":
         PENDING[chat_id] = {"action": "dot_domain"}
         edit(cb,

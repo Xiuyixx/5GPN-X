@@ -24,7 +24,7 @@ EXIT_USER="pxout"
 EXIT_MARK="0x1"
 EXIT_TABLE="100"
 WG_DIR="/etc/wireguard"
-# Exit types: wireguard (wg-quick) | socks | shadowsocks (sing-box tun2socks).
+# Exit types: wireguard (wg-quick) | sing-box proxy types (tun2socks).
 EXITS_DIR="/etc/proxy-gateway/exits"
 RULES_FILE="/etc/proxy-gateway/rules.conf"
 POLICY_MAP="/etc/proxy-gateway/policy-map.conf"
@@ -36,7 +36,7 @@ SINGBOX_BIN="/opt/proxy-gateway/bin/sing-box"
 SINGBOX_CFG_GEN="/opt/proxy-gateway/bin/singbox-exit-config.py"
 SINGBOX_ROUTER_GEN="/opt/proxy-gateway/bin/singbox-router-config.py"
 RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
-SINGBOX_VERSION_DEFAULT="1.10.7"
+SINGBOX_VERSION_DEFAULT="1.12.25"
 DEFAULT_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
 DEFAULT_PUBLIC_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8")
 
@@ -1648,17 +1648,13 @@ list_exit_names() {
     return 0
 }
 
-# Download sing-box on first need (only for socks/shadowsocks exits).
+# Download the locked sing-box 1.12.x build on first need for URI exits.
 ensure_singbox() {
     [[ -x "${SINGBOX_BIN}" ]] && return 0
-    info "Installing sing-box (tun2socks engine for socks/shadowsocks exits)..."
+    info "Installing locked sing-box ${SINGBOX_VERSION_DEFAULT} (tun2socks engine for URI exits)..."
     local ver arch tmp url
-    ver="${SINGBOX_VERSION:-}"
-    if [[ -z "$ver" ]]; then
-        ver="$(curl -fsSL --max-time 20 https://api.github.com/repos/SagerNet/sing-box/releases 2>/dev/null \
-               | grep -oE '"tag_name": *"v1\.10\.[0-9]+"' | head -n1 | grep -oE '1\.10\.[0-9]+' || true)"
-    fi
-    [[ -z "$ver" ]] && ver="${SINGBOX_VERSION_DEFAULT}"
+    # Locked by default. Override with SINGBOX_VERSION only when explicitly needed.
+    ver="${SINGBOX_VERSION:-${SINGBOX_VERSION_DEFAULT}}"
     case "$(uname -m)" in
         x86_64) arch=amd64 ;;
         aarch64|arm64) arch=arm64 ;;
@@ -1709,7 +1705,7 @@ exit_up() {
         wireguard)
             command -v wg-quick >/dev/null 2>&1 || { err "wg-quick not installed"; return 1; }
             wg-quick up "pgw-${name}" ;;
-        socks|shadowsocks|router)
+        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router)
             ensure_singbox || return 1
             install_singbox_unit
             systemctl restart "proxy-gateway-singbox@${name}.service" ;;
@@ -1721,11 +1717,11 @@ exit_down() {
     local name="$1" t; t="$(exit_type "$name")"
     case "$t" in
         wireguard)        wg-quick down "pgw-${name}" 2>/dev/null || true ;;
-        socks|shadowsocks|router) systemctl stop "proxy-gateway-singbox@${name}.service" 2>/dev/null || true ;;
+        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl stop "proxy-gateway-singbox@${name}.service" 2>/dev/null || true ;;
     esac
 }
 
-# "host port" of a socks/ss exit's upstream server (empty for wireguard/router).
+# "host port" of a URI exit's upstream server (empty for wireguard/router).
 exit_server() {
     local jf; jf="$(exit_singbox_conf "$1")"
     [[ -f "$jf" ]] || return 0
@@ -1752,7 +1748,7 @@ exit_reachable() {
 preflight_exit() {
     local name="$1" t hp host port tgt
     t="$(exit_type "$name")"
-    if [[ "$t" == "socks" || "$t" == "shadowsocks" ]]; then
+    if [[ "$t" =~ ^(shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http)$ ]]; then
         hp="$(exit_server "$name")"; host="${hp%% *}"; port="${hp##* }"
         if ! exit_reachable "$host" "$port"; then
             warn "Exit '$name' upstream ${host}:${port} is UNREACHABLE — traffic via it will fail."
@@ -1829,7 +1825,7 @@ etype="wireguard"
 if ! ip link show "${iface}" >/dev/null 2>&1; then
     case "${etype}" in
         wireguard)        wg-quick up "${iface}" 2>/dev/null || { echo "[!] exit '${current}' (wireguard) failed to start"; exit 1; } ;;
-        socks|shadowsocks|router) systemctl start "proxy-gateway-singbox@${current}.service" 2>/dev/null || { echo "[!] exit '${current}' (${etype}) failed to start"; exit 1; } ;;
+        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl start "proxy-gateway-singbox@${current}.service" 2>/dev/null || { echo "[!] exit '${current}' (${etype}) failed to start"; exit 1; } ;;
     esac
 fi
 
@@ -1899,7 +1895,7 @@ list_exits() {
         case "$t" in
             wireguard)
                 detail="$(grep -i '^[[:space:]]*Endpoint' "$(exit_conf_path "$n")" 2>/dev/null | head -n1 | sed 's/.*=[[:space:]]*//')" ;;
-            socks|shadowsocks)
+            shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http)
                 detail="$(grep -oE '"server": *"[^"]+"|"server_port": *[0-9]+' "$(exit_singbox_conf "$n")" 2>/dev/null | head -n2 | sed 's/.*: *//; s/"//g' | paste -sd: -)" ;;
             router)
                 detail="rules:$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)" ;;
@@ -1914,7 +1910,7 @@ list_exits() {
 
 add_exit() {
     local name="${1:-}" src="${2:-}"
-    [[ -z "$name" ]] && { err "Usage: $0 --add-exit <name> [wg.conf | socks5://... | ss://...]"; exit 1; }
+    [[ -z "$name" ]] && { err "Usage: $0 --add-exit <name> [wg.conf | proxy URI]"; exit 1; }
     python3 - "$name" <<'PYNAME' || { err "Exit name must be 1-16 letters/digits/Chinese characters/_/-"; exit 1; }
 import re, sys
 name = sys.argv[1]
@@ -1939,18 +1935,25 @@ PYNAME
         cat > "$tmp"
     fi
 
-    # A proxy URI -> socks/shadowsocks exit via sing-box. Grab the WHOLE first
+    # A proxy URI -> multi-protocol URI exit via sing-box. Grab the WHOLE first
     # scheme line (not just a non-space token) so a single-line password can
     # contain spaces and other special chars; only CR / surrounding space trimmed.
     local uri type px_user px_pass px_rdns
-    uri="$(grep -iE '^[[:space:]]*(ss|socks5h|socks5|socks)://' "$tmp" | head -n1 | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    uri="$(grep -iE '^[[:space:]]*(ss|vmess|trojan|vless|hysteria2|hy2|tuic|anytls|socks5h|socks5|socks|http|https)://' "$tmp" | head -n1 | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     if [[ -n "$uri" ]]; then
         # Classify by a lowercased copy (scheme may be upper/mixed case); the
         # original "$uri" is passed through unchanged so the password keeps its case.
         local uri_lc; uri_lc="$(printf '%s' "$uri" | tr '[:upper:]' '[:lower:]')"
         case "$uri_lc" in
-            ss://*)                            type=shadowsocks ;;
-            socks5h://*|socks5://*|socks://*)  type=socks ;;
+            ss://*)                 type=shadowsocks ;;
+            vmess://*)              type=vmess ;;
+            trojan://*)             type=trojan ;;
+            vless://*)              type=vless ;;
+            hysteria2://*|hy2://*)  type=hysteria2 ;;
+            tuic://*)               type=tuic ;;
+            anytls://*)             type=anytls ;;
+            socks5h://*|socks5://*|socks://*) type=socks ;;
+            http://*|https://*)     type=http ;;
         esac
         # Optional out-of-band SOCKS5 credentials on their own lines, so passwords
         # with special characters need no URL-encoding:  user: X  /  pass: Y
@@ -1979,7 +1982,7 @@ PYNAME
     fi
 
     # Otherwise: a WireGuard config.
-    grep -qi '^\[Interface\]' "$tmp" || { err "Not a URI and not a WireGuard config (no socks5://, ss://, or [Interface])"; rm -f "$tmp"; exit 1; }
+    grep -qi '^\[Interface\]' "$tmp" || { err "Not a URI and not a WireGuard config (no proxy URI or [Interface])"; rm -f "$tmp"; exit 1; }
     grep -qi '^\[Peer\]'      "$tmp" || { err "Invalid WireGuard config (missing [Peer])"; rm -f "$tmp"; exit 1; }
     command -v wg-quick >/dev/null 2>&1 || { err "wireguard-tools (wg-quick) is not installed"; rm -f "$tmp"; exit 1; }
 

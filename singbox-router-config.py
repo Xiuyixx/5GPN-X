@@ -103,7 +103,15 @@ def build_exit_outbound(name):
     jp = os.path.join(EXITS_DIR, name + ".json")
     if os.path.exists(jp):
         try:
-            ob = dict(json.load(open(jp))["outbounds"][0])
+            cfg = json.load(open(jp))
+            ob = dict(cfg["outbounds"][0])
+            if ob.get("tag") == "out" and len(cfg.get("outbounds", [])) > 1:
+                by_tag = {o.get("tag"): o for o in cfg.get("outbounds", [])}
+                for rule in cfg.get("route", {}).get("rules", []):
+                    tag = rule.get("outbound")
+                    if tag and tag not in ("out", "direct", "block") and tag in by_tag:
+                        ob = dict(by_tag[tag])
+                        break
         except Exception as e:
             die("cannot read exit '%s' config: %s" % (name, e))
         ob["tag"] = name

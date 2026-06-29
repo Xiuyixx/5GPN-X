@@ -21,6 +21,9 @@ grep -q '"stack": "gvisor"' <<<"$(python3 "${gen}" us 'socks5://1.2.3.4:1080')" 
 [[ "${install_body}" == *'ExecStartPost=-/usr/local/bin/proxy-gateway-apply-exit.sh'* ]] \
     || fail "singbox unit must re-apply the exit route on (re)start"
 
+[[ "${install_body}" == *'SINGBOX_VERSION_DEFAULT="1.12.25"'* ]] || fail "sing-box default version must be locked to 1.12.25"
+[[ "${install_body}" == *'ver="${SINGBOX_VERSION:-${SINGBOX_VERSION_DEFAULT}}"'* ]] || fail "ensure_singbox must use the locked default unless explicitly overridden"
+
 # socks5 with auth
 out="$(python3 "${gen}" us 'socks5://u:p@1.2.3.4:1080')"
 grep -q '"type": "socks"' <<<"$out"        || fail "socks5 URI must yield a socks outbound"
@@ -64,8 +67,24 @@ grep -q '"sniff": true' <<<"$out"           || fail "PGW_REMOTE_DNS must enable 
 [[ "${install_body}" == *'socks5h://'* ]]   || fail "add_exit must recognise socks5h URIs"
 [[ "${install_body}" == *'PGW_REMOTE_DNS="$px_rdns"'* ]] || fail "add_exit must pass the remote-dns toggle to the generator"
 
+# additional proxy schemes
+for uri in \
+  "trojan://pw@example.com:443?sni=example.com" \
+  "vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls&sni=example.com" \
+  "hysteria2://pw@example.com:443?sni=example.com" \
+  "tuic://00000000-0000-0000-0000-000000000000:pw@example.com:443?sni=example.com" \
+  "anytls://pw@example.com:443?sni=example.com" \
+  "http://u:p@example.com:8080"; do
+  out="$(python3 "${gen}" us "$uri")"
+  grep -q '"server": "example.com"' <<<"$out" || fail "URI must parse server: $uri"
+done
+
+vmess_payload='eyJhZGQiOiJleGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMCIsImFpZCI6IjAiLCJuZXQiOiJ3cyIsInRscyI6InRscyIsInNuaSI6ImV4YW1wbGUuY29tIiwicGF0aCI6Ii9wIn0='
+out="$(python3 "${gen}" us "vmess://${vmess_payload}")"
+grep -q '"type": "vmess"' <<<"$out" || fail "vmess URI must yield a vmess outbound"
+
 # unsupported scheme must error
-if python3 "${gen}" us 'http://x' >/dev/null 2>&1; then fail "generator must reject non ss/socks URIs"; fi
+if python3 "${gen}" us 'ftp://x' >/dev/null 2>&1; then fail "generator must reject unsupported URIs"; fi
 
 # --- install.sh wiring -------------------------------------------------------
 for m in 'ensure_singbox()' 'exit_type()' 'exit_up()' 'exit_down()' 'install_singbox_unit()' 'exit_wait_device()'; do
@@ -75,7 +94,7 @@ done
 [[ "${install_body}" == *'singbox-exit-config.py'* ]] || fail "install.sh must install the URI config generator"
 # add_exit must branch on a proxy URI vs WireGuard (whole-line grab so passwords
 # may contain special chars / spaces).
-[[ "${install_body}" == *"grep -iE '^[[:space:]]*(ss|socks5h|socks5|socks)://"* ]] || fail "add_exit must detect socks/ss URIs"
+[[ "${install_body}" == *"grep -iE '^[[:space:]]*(ss|vmess|trojan|vless|hysteria2|hy2|tuic|anytls|socks5h|socks5|socks|http|https)://"* ]] || fail "add_exit must detect socks/ss URIs"
 # apply-exit helper must be type-aware (start sing-box for socks/ss exits).
 [[ "${install_body}" == *'proxy-gateway-singbox@${current}.service'* ]] || fail "apply-exit helper must start sing-box for socks/ss exits"
 # routing layer unchanged: still routes via the pgw-<name> device.

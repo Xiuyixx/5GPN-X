@@ -1,6 +1,6 @@
 # 高性能反代系统一键部署
 
-> **服务器端透明代理网关。** 由智能 DNS（dnsdist DoT）+ SNI/QUIC 透明代理组成，支持可切换的多协议出口（WireGuard / SOCKS5 / Shadowsocks / SS2022）、基于规则的智能分流，以及 Telegram 控制 Bot。客户端只要把 DNS 指向它就行，不需要安装客户端。适合 512 MB VPS。
+> **服务器端透明代理网关。** 由智能 DNS（dnsdist DoT）+ SNI/QUIC 透明代理组成，支持可切换的多协议出口（WireGuard / SS / VMess / Trojan / VLESS / Hysteria2 / TUIC / AnyTLS / SOCKS5 / HTTP）、基于规则的智能分流，以及 Telegram 控制 Bot。客户端只要把 DNS 指向它就行，不需要安装客户端。适合 512 MB VPS。
 
 本项目基于 5G NPN + N6 互通架构，在服务器端部署高性能透明反代基础设施，为终端提供智能 DNS 解析与 SNI 透明代理服务。
 
@@ -186,7 +186,7 @@ http://your-domain.com:8111/ios-dot.mobileconfig
 - Bot Token 存放在 root-only 的 `/opt/proxy-gateway/etc/tgbot.env`(`chmod 600`),由 systemd `EnvironmentFile` 注入。
 - **只有白名单数字 ID(`TG_ADMIN_IDS`)能操作**,其余消息一律忽略。
 - 所有操作映射到**固定命令白名单**,出口名/服务名经严格正则与允许列表校验,**绝不把用户输入拼进 shell**(无 `shell=True`、无 `os.system`)。
-- Bot 支持**切换 / 添加 / 删除出口**。添加出口时可以粘贴 WireGuard 客户端配置、SOCKS5 URI 或 Shadowsocks URI；敏感配置会经 Telegram 传输,Bot 会在引导时提示;仅白名单管理员可操作。
+- Bot 支持**切换 / 添加 / 删除出口**。添加出口时可以直接粘贴 WireGuard 客户端配置或多协议节点 URI；敏感配置会经 Telegram 传输,Bot 会在引导时提示;仅白名单管理员可操作。
 - Bot 的长任务（更新规则、续期证书、更改域名、更改 DNS、检查出口、查看日志、生成 iOS 二维码等）会在后台执行，点击后先立即停止按钮转圈并显示处理中，主轮询不会被长命令卡住。
 - 出于安全,Bot **不暴露** `--uninstall`,卸载仅限服务器本地执行。
 
@@ -227,7 +227,7 @@ Bot 面板里的 `🔐 DoT 管理` 包含：
 
 更改域名成功后，脚本会重新生成 iOS 描述文件；Bot 的 `📱 iOS 二维码` 会优先读取当前 DoT 域名即时生成二维码，避免旧 URL 文件残留导致输出旧二维码。
 
-添加出口流程:点 🌐 出口 → ➕ 添加出口 → 发一个名字(如 `us`)→ 把 `exit-server-setup.sh` 生成的 WireGuard 配置整段粘贴发给 Bot → 完成后在出口列表里点它即可切换。中途随时 `/cancel` 取消。
+添加出口流程:点 🌐 出口 → ➕ 添加出口 → 直接粘贴一条节点链接即可；也可发送 `出口名 链接` 指定名称。WireGuard 则粘贴整段客户端配置。完成后在出口列表里点它即可切换。中途随时 `/cancel` 取消。
 
 ## 切换出口（多出口中转）
 
@@ -240,11 +240,13 @@ Bot 面板里的 `🔐 DoT 管理` 包含：
 | 类型 | 引擎 | 远端要求 | 添加方式 |
 |------|------|----------|----------|
 | **WireGuard** | `wg-quick`（内核） | 普通 Linux VPS：开 IP 转发 + NAT（用 `exit-server-setup.sh` 生成） | 粘贴 WireGuard 客户端配置 |
-| **SOCKS5** | sing-box TUN（自动安装） | 一个 SOCKS5 服务 | `socks5://[用户:密码@]host:port` |
-| **SOCKS5（远程 DNS / socks5h）** | sing-box TUN（自动安装） | 一个 SOCKS5 服务 | `socks5h://[用户:密码@]host:port` |
+| **SOCKS5** | sing-box TUN（自动安装） | 一个 SOCKS5 服务 | `socks5://[用户:密码@]host:port` / `socks5h://...` |
 | **Shadowsocks / SS2022** | sing-box TUN（自动安装） | 一个 SS / SS2022 服务 | `ss://...`（SIP002，含 `2022-blake3-*`） |
+| **VMess / Trojan / VLESS** | sing-box TUN（自动安装） | 常见机场/节点分享链接 | `vmess://...` / `trojan://...` / `vless://...` |
+| **Hysteria2 / TUIC / AnyTLS** | sing-box TUN（自动安装） | UDP/QUIC/TLS 类节点 | `hysteria2://...` / `tuic://...` / `anytls://...` |
+| **HTTP/HTTPS 代理** | sing-box TUN（自动安装） | HTTP CONNECT 代理 | `http://...` / `https://...` |
 
-> SOCKS5/Shadowsocks 走 [sing-box](https://github.com/SagerNet/sing-box) 的 TUN（tun2socks）转发，TCP 和 UDP/QUIC 都支持。首次添加该类出口时会自动下载 sing-box（可用 `SINGBOX_VERSION` 指定版本）。
+> URI 出口走 [sing-box](https://github.com/SagerNet/sing-box) 的 TUN（tun2socks）转发，TCP 和 UDP/QUIC 都支持。首次添加该类出口时会自动下载锁定版 sing-box `1.12.25`（仍可用 `SINGBOX_VERSION` 显式覆盖）。
 >
 > **socks5h（远程 DNS）**：默认 `socks5://` 由网关本地解析目标域名再把 IP 交给代理；`socks5h://` 则让 sing-box 从 TLS ClientHello 嗅探出域名、转发**域名**给 SOCKS5 服务器去解析（DNS 在出口侧完成）。任意出口也可单独加一行 `remote-dns: on` 开启。
 
@@ -271,7 +273,7 @@ curl --interface pgw-us -4 -s https://api.ipify.org; echo    # 应为出口的 I
 ./install.sh --set-exit local
 ```
 
-可以混合预存多个不同类型的出口（如 WireGuard `us`、SOCKS5 `jp`、SS2022 `hk`），用 `--set-exit <名字>` 一键切换；切换时会自动停掉上一个出口以省资源。当前出口记录在 `/opt/proxy-gateway/etc/current-exit`，开机由 `proxy-gateway-exit.service` 自动恢复。这些操作在 Telegram Bot 上同样可做（🌐 出口 → ➕ 添加出口，粘贴配置或 URI）。
+可以混合预存多个不同类型的出口（如 WireGuard `us`、VLESS `jp`、Hysteria2 `hk`），用 `--set-exit <名字>` 一键切换；切换时会自动停掉上一个出口以省资源。当前出口记录在 `/opt/proxy-gateway/etc/current-exit`，开机由 `proxy-gateway-exit.service` 自动恢复。这些操作在 Telegram Bot 上同样可做（🌐 出口 → ➕ 添加出口，粘贴配置或 URI）。
 
 ### 智能分流（规则列表 / `smart` 出口）
 
@@ -331,7 +333,7 @@ EOF
 |------|------|
 | `install.sh` | 主安装脚本 |
 | `exit-server-setup.sh` | 远端出口 VPS 一键配置脚本（WireGuard + NAT） |
-| `singbox-exit-config.py` | 把 socks5://、ss:// URI 转成 sing-box 出口配置 |
+| `singbox-exit-config.py` | 把多协议节点 URI 转成 sing-box 出口配置 |
 | `singbox-router-config.py` | 把分流规则 + 分类映射转成 sing-box 智能分流（`smart`）配置 |
 | `rules-import.py` | 把规则列表转换为网关分流规则（按分类） |
 | `tgbot.py` | Telegram 控制 Bot（标准库实现；长任务后台执行） |

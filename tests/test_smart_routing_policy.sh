@@ -57,7 +57,7 @@ ls "${tmp}/rs"/*.json >/dev/null 2>&1 || fail "local list must become a source r
 [[ "${install_body}" == *'singbox-router-config.py'* ]] || fail "install.sh must install the router generator"
 # 'smart' must be a reserved name and a sing-box-managed (router) type.
 [[ "${install_body}" == *'reserved exit name'* ]] || fail "smart/local must be reserved"
-[[ "${install_body}" == *'socks|shadowsocks|router)'* ]] || fail "router type must be brought up via sing-box"
+[[ "${install_body}" == *'shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router)'* ]] || fail "router type must be brought up via sing-box"
 
 [[ "${install_body}" == *'exit_reachable()'* ]] || fail "must have exit reachability check"
 [[ "${install_body}" == *'preflight_exit()'* ]] || fail "must warn on unreachable exits when activating"
