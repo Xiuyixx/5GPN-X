@@ -600,15 +600,15 @@ def op_dot_status():
                     _read_file("/etc/dnsdist/.sniproxy_dns") or "?")
     lines = [
         "🔐 <b>DoT 管理</b>",
-        "域名：<code>%s</code>" % html.escape(domain),
+        "当前域名：<code>%s</code>" % html.escape(domain),
     ]
     if private_dns == public_dns == sniproxy_dns:
-        lines.append("DNS 设置：<code>%s</code>" % html.escape(private_dns))
+        lines.append("当前 DNS：<code>%s</code>" % html.escape(private_dns))
     else:
         lines.extend([
-            "私网 DoT 海外 DNS：<code>%s</code>" % html.escape(private_dns),
-            "公网 DoT 海外 DNS：<code>%s</code>" % html.escape(public_dns),
-            "sniproxy DNS：<code>%s</code>" % html.escape(sniproxy_dns),
+            "当前私网 DoT DNS：<code>%s</code>" % html.escape(private_dns),
+            "当前公网 DoT DNS：<code>%s</code>" % html.escape(public_dns),
+            "当前 sniproxy DNS：<code>%s</code>" % html.escape(sniproxy_dns),
         ])
     return "\n".join(lines)
 
