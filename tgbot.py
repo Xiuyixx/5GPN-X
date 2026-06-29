@@ -57,6 +57,7 @@ PENDING = {}
 BUSY = set()
 LAST_FAILED_DOT_DOMAIN = {}
 PROXY_URI_RE = re.compile(r"^(ss|vmess|trojan|vless|hysteria2|hy2|tuic|anytls|socks5h|socks5|socks|http|https)://", re.I)
+SUPPORTED_EXIT_LINKS = "ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://"
 
 
 # --------------------------------------------------------------------------- #
@@ -562,6 +563,27 @@ def op_add_exit(name, payload):
     return "❌ <b>添加失败</b>\n%s" % html.escape(_reason(out))
 
 
+def parse_add_exit_input(payload):
+    config = (payload or "").strip()
+    if not config:
+        return "", "", "请直接粘贴一条节点链接，或发送 <code>出口名 链接</code>。"
+    first = config.splitlines()[0].strip()
+    parts = first.split(None, 1)
+    if len(parts) == 2 and EXIT_ADD_NAME_RE.match(parts[0]) and parts[0] != "local" and PROXY_URI_RE.match(parts[1].strip()):
+        return parts[0], config.replace(first, parts[1].strip(), 1), ""
+    if "[Interface]" in config and "[Peer]" in config:
+        name = next_auto_exit_name()
+        if not name:
+            return "", "", "无法自动分配出口名。请改用命令行指定出口名。"
+        return name, config, ""
+    if not PROXY_URI_RE.match(first):
+        return "", "", "无法识别。请直接粘贴支持的节点链接：<code>%s</code>，或整段 WireGuard 配置。" % SUPPORTED_EXIT_LINKS
+    name = next_auto_exit_name()
+    if not name:
+        return "", "", "无法自动分配出口名。请改用：<code>出口名 链接</code>。"
+    return name, config, ""
+
+
 def op_del_exit(name):
     if not EXIT_ADD_NAME_RE.match(name) or name == "local":
         return "出口名无效（不能删除 local）。"
@@ -808,6 +830,15 @@ def parse_exit_names():
     return names
 
 
+def next_auto_exit_name():
+    existing = set(parse_exit_names())
+    for i in range(1, 100):
+        cand = "ex%d" % i
+        if cand not in existing:
+            return cand
+    return ""
+
+
 def op_ios_send(chat_id):
     """Send the iOS profile QR as an image (with the URL as caption)."""
     domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
@@ -962,48 +993,10 @@ def handle_message(msg):
     # Conversational flows (e.g. adding an exit).
     state = PENDING.get(chat_id)
     if state and state.get("action") == "add_exit_link":
-        payload = msg.get("text") or ""
-        first = payload.strip().splitlines()[0].strip() if payload.strip() else ""
-        name = ""
-        config = payload
-        parts = first.split(None, 1)
-        if len(parts) == 2 and EXIT_ADD_NAME_RE.match(parts[0]) and PROXY_URI_RE.match(parts[1].strip()):
-            name = parts[0]
-            config = payload.replace(first, parts[1].strip(), 1)
-        else:
-            for i in range(1, 100):
-                cand = "ex%d" % i
-                if cand not in parse_exit_names():
-                    name = cand
-                    break
-        if not name:
-            send(chat_id, "无法分配出口名。请改用：<code>出口名 链接</code>。")
+        name, config, err = parse_add_exit_input(msg.get("text") or "")
+        if err:
+            send(chat_id, err)
             return
-        PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在添加出口 <b>%s</b>…" % html.escape(name))
-        send_async(chat_id, lambda: op_add_exit(name, config), exits_menu())
-        return
-    if state and state.get("action") == "add_exit_name":
-        name = text.strip()
-        if not EXIT_ADD_NAME_RE.match(name) or name == "local":
-            send(chat_id, "名字无效。请用 1-11 位小写字母/数字（不能是 local）。再发一次，或 /cancel：")
-            return
-        PENDING[chat_id] = {"action": "add_exit_config", "name": name}
-        send(chat_id,
-             "✅ 出口名：<b>" + html.escape(name) + "</b>\n\n"
-             "🔗 <b>导入链接</b>\n"
-             "直接粘贴一条节点链接，或整段 WireGuard 配置，我会自动识别并添加。\n"
-             "⚠️ 配置里可能包含密钥/密码，会经 Telegram 传输。\n\n"
-             "支持：<code>ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://</code>\n"
-             "WireGuard 也可以直接粘贴含 <code>[Interface]</code> / <code>[Peer]</code> 的整段配置。\n\n"
-             "SOCKS5 远程 DNS：把 <code>socks5://</code> 换成 <code>socks5h://</code>，或另起一行写 <code>remote-dns: on</code>。\n"
-             "密码含特殊字符时，可用多行：\n"
-             "<code>socks5://host:端口\nuser: 账号\npass: 密码</code>\n\n"
-             "发送 /cancel 取消。")
-        return
-    if state and state.get("action") == "add_exit_config":
-        config = msg.get("text") or ""
-        name = state["name"]
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在添加出口 <b>%s</b>…" % html.escape(name))
         send_async(chat_id, lambda: op_add_exit(name, config), exits_menu())
@@ -1100,7 +1093,7 @@ def handle_callback(cb):
         edit(cb, op_show_rules() + "\n\n发送要删除的<b>序号</b>，或 /cancel 取消。")
     elif data == "exit_add":
         PENDING[chat_id] = {"action": "add_exit_link"}
-        edit(cb, "添加出口：直接粘贴一条节点链接即可。\n支持 <code>ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://</code>。\n\n也可以发 <code>出口名 链接</code> 指定名称；不指定时会自动用 ex1/ex2 这类名字。\n发送 /cancel 取消。")
+        edit(cb, "添加出口：直接粘贴一条节点链接即可。\n支持 <code>%s</code>。\n\n也可以发 <code>出口名 链接</code> 指定名称；不指定时会自动用 ex1/ex2 这类名字。\n发送 /cancel 取消。" % SUPPORTED_EXIT_LINKS)
     elif data == "dot:domain":
         PENDING[chat_id] = {"action": "dot_domain"}
         edit(cb,
