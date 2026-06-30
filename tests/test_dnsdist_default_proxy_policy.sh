@@ -10,8 +10,8 @@ fail() { echo "$1" >&2; exit 1; }
     || fail "private clients must spoof default overseas A records to the gateway IP"
 [[ "${template}" == *'enters the gateway and is sent through the selected exit'* ]] \
     || fail "dnsdist template must document the default gateway-entry model"
-[[ "${template}" == *'addAction(AndRule({nonPrivateClientRule, AllRule()}), PoolAction("overseas_public"))'* ]] \
-    || fail "public DoT clients must keep normal overseas DNS answers"
+[[ "${template}" == *'addAction(AndRule({nonPrivateClientRule, AllRule()}), PoolAction("remote"))'* ]] \
+    || fail "public DoT clients must keep normal remote DNS answers"
 [[ "${template}" == *'addAction(LuaRule(function(dq) return chinaList:check(dq.qname) end), PoolAction("china"))'* ]] \
     || fail "ChinaList must stay on the domestic DNS pool before default spoofing"
 

@@ -25,9 +25,8 @@ addTLSLocal("0.0.0.0:853", certPath, keyPath, {
 -- parallel, then falls back if they are unreachable from this server.
 newServer({address="127.0.0.1:5301", pool="china", name="china_dns_race", order=1, useClientSubnet=true})
 
--- Overseas DNS Pools (selected by source network)
-__OVERSEAS_PRIVATE_DNS_SERVERS__
-__OVERSEAS_PUBLIC_DNS_SERVERS__
+-- Remote DNS Pool (privdns-gateway style: international/proxy-side DNS)
+__REMOTE_DNS_SERVERS__
 
 -- =============================================================================
 -- ACL & Rate Limiting
@@ -84,13 +83,13 @@ addAction(LuaRule(function(dq) return chinaList:check(dq.qname) end), PoolAction
 -- leaking through the client's domestic network when a domain is not in GFWList.
 addAction(AndRule({privateClientRule, QTypeRule(DNSQType.A)}), SpoofAction(serverIP))
 
--- 4. Default public DoT: non-NPN clients keep normal overseas DNS answers.
+-- 4. Fallback remote DNS: non-A queries and non-NPN clients keep normal remote DNS answers.
 addAction(AndRule({privateClientRule, AllRule()}), SetECSOverrideAction(true))
 addAction(AndRule({privateClientRule, AllRule()}), SetECSAction(neutralECSv4, neutralECSv6))
-addAction(AndRule({privateClientRule, AllRule()}), PoolAction("overseas_private"))
+addAction(AndRule({privateClientRule, AllRule()}), PoolAction("remote"))
 addAction(AndRule({nonPrivateClientRule, AllRule()}), SetECSOverrideAction(true))
 addAction(AndRule({nonPrivateClientRule, AllRule()}), SetECSAction(neutralECSv4, neutralECSv6))
-addAction(AndRule({nonPrivateClientRule, AllRule()}), PoolAction("overseas_public"))
+addAction(AndRule({nonPrivateClientRule, AllRule()}), PoolAction("remote"))
 
 -- =============================================================================
 -- Cache
@@ -102,21 +101,15 @@ local chinaCache = newPacketCache(__PACKET_CACHE_SIZE__, {
     temporaryFailureTTL=60,
     staleTTL=300
 })
-local privateOverseasCache = newPacketCache(__PACKET_CACHE_SIZE__, {
+local remoteCache = newPacketCache(__PACKET_CACHE_SIZE__, {
     maxTTL=86400,
     minTTL=300,
     temporaryFailureTTL=60,
     staleTTL=300
 })
-local publicOverseasCache = newPacketCache(__PACKET_CACHE_SIZE__, {
-    maxTTL=86400,
-    minTTL=300,
-    temporaryFailureTTL=60,
-    staleTTL=300
-})
+
 getPool("china"):setCache(chinaCache)
-getPool("overseas_private"):setCache(privateOverseasCache)
-getPool("overseas_public"):setCache(publicOverseasCache)
+getPool("remote"):setCache(remoteCache)
 
 -- =============================================================================
 -- Web Console / API (optional, local only)

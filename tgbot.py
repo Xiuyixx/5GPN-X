@@ -690,23 +690,17 @@ def op_renew_cert():
 
 def op_dot_status():
     domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
-    private_dns = (_read_file("/etc/dnsdist/.overseas_private_dns") or
-                   _read_file("/etc/dnsdist/.overseas_dns") or "?")
-    public_dns = _read_file("/etc/dnsdist/.overseas_public_dns") or "?"
-    sniproxy_dns = (_read_file("/opt/proxy-gateway/etc/.sniproxy_dns") or
-                    _read_file("/etc/dnsdist/.sniproxy_dns") or "?")
+    remote_dns = (_read_file("/etc/dnsdist/.remote_dns") or
+                  _read_file("/etc/dnsdist/.overseas_dns") or "?")
+    local_dns = (_read_file("/etc/dnsdist/.local_dns") or "?")
     lines = [
         "🔐 <b>DoT 管理</b>",
         "当前域名：<code>%s</code>" % html.escape(domain),
     ]
-    if private_dns == public_dns == sniproxy_dns:
-        lines.append("当前 DNS：<code>%s</code>" % html.escape(private_dns))
-    else:
-        lines.extend([
-            "当前私网 DoT DNS：<code>%s</code>" % html.escape(private_dns),
-            "当前公网 DoT DNS：<code>%s</code>" % html.escape(public_dns),
-            "当前 sniproxy DNS：<code>%s</code>" % html.escape(sniproxy_dns),
-        ])
+    lines.extend([
+        "remote 国际 DNS：<code>%s</code>" % html.escape(remote_dns),
+        "local 国内 DNS：<code>%s</code>" % html.escape(local_dns),
+    ])
     return "\n".join(lines)
 
 
@@ -756,16 +750,24 @@ def op_set_dns(text):
     lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not lines:
         return "DNS 不能为空。"
-    if len(lines) > 1:
-        return "只需要发送一行 DNS，上游会同步用于私网 DoT、公网 DoT 和 sniproxy。"
-    private_dns = _dns_arg(lines[0])
-    if not private_dns:
+    if len(lines) > 2:
+        return "最多发送两行：第一行 remote 国际 DNS，第二行 local 国内 DNS。"
+    remote_dns = _dns_arg(lines[0])
+    local_dns = _dns_arg(lines[1]) if len(lines) > 1 else ""
+    if not remote_dns or (len(lines) > 1 and not local_dns):
         return "DNS 格式无效。只支持 IPv4/IPv6 地址，多个地址用空格或逗号分隔。"
-    ok, out = run2(["bash", MGMT, "--set-dns", private_dns], timeout=600)
+    cmd = ["bash", MGMT, "--set-dns", remote_dns]
+    if local_dns:
+        cmd.append(local_dns)
+    ok, out = run2(cmd, timeout=600)
     if ok:
-        return ("✅ <b>DNS 上游已更新</b>\n"
-                "已同步用于私网 DoT、公网 DoT 和 sniproxy：\n"
-                "<code>%s</code>" % html.escape(private_dns))
+        lines_out = [
+            "✅ <b>DNS 上游已更新</b>",
+            "remote 国际 DNS：<code>%s</code>" % html.escape(remote_dns),
+        ]
+        if local_dns:
+            lines_out.append("local 国内 DNS：<code>%s</code>" % html.escape(local_dns))
+        return "\n".join(lines_out)
     return "❌ <b>DNS 上游更新失败</b>\n%s" % html.escape(_reason(out))
 
 
@@ -1173,9 +1175,8 @@ def handle_callback(cb):
         PENDING[chat_id] = {"action": "dot_dns"}
         edit(cb,
              "发送新的 DNS 上游。\n\n"
-             "只需要发送一行，多个 DNS 用空格或逗号分隔。\n"
-             "这组 DNS 会同时用于私网 DoT、公网 DoT 和 sniproxy。\n\n"
-             "示例：\n<pre>1.1.1.1 8.8.8.8 9.9.9.9</pre>\n"
+             "第一行 remote 国际 DNS，第二行 local 国内 DNS 可选。多个 DNS 用空格或逗号分隔。\n\n"
+             "示例：\n<pre>1.1.1.1 8.8.8.8\n223.5.5.5 119.29.29.29</pre>\n"
              "发送 /cancel 取消。")
     elif data == "dot:force_domain":
         domain = LAST_FAILED_DOT_DOMAIN.get(chat_id)

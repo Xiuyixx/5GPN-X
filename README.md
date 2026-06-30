@@ -99,7 +99,8 @@ sudo ./install.sh
 ```bash
 export DOMAIN="dns.example.com"
 export EMAIL="admin@example.com"
-export DNS_UPSTREAMS="1.1.1.1,8.8.8.8,9.9.9.9"
+export REMOTE_DNS="1.1.1.1,8.8.8.8"
+export LOCAL_DNS="223.5.5.5,119.29.29.29"
 sudo ./install.sh
 ```
 
@@ -143,7 +144,7 @@ sudo ./install.sh --update-rules
 sudo ./install.sh --renew-cert
 sudo ./install.sh --set-dot-domain dns.example.com
 sudo ./install.sh --set-dot-domain-force dns.example.com
-sudo ./install.sh --set-dns "1.1.1.1 8.8.8.8"
+sudo ./install.sh --set-dns "1.1.1.1 8.8.8.8" "223.5.5.5 119.29.29.29"
 sudo ./install.sh -ios
 sudo ./install.sh --list-exits
 sudo ./install.sh --check-exits
@@ -287,11 +288,9 @@ sudo ./install.sh --set-policy Netflix hk
 ```bash
 DOMAIN="dns.example.com"
 EMAIL="admin@example.com"
-DNS_UPSTREAMS="1.1.1.1,8.8.8.8,9.9.9.9"
-OVERSEAS_DNS="1.1.1.1 8.8.8.8"
-PRIVATE_OVERSEAS_DNS="1.1.1.1 8.8.8.8"
-PUBLIC_OVERSEAS_DNS="1.1.1.1 8.8.8.8"
-SNIPROXY_DNS="1.1.1.1 8.8.8.8"
+REMOTE_DNS="1.1.1.1,8.8.8.8"
+LOCAL_DNS="223.5.5.5,119.29.29.29"
+DNS_UPSTREAMS="1.1.1.1,8.8.8.8"
 LOWMEM=1
 SINGBOX_VERSION="1.12.25"
 TG_BOT_TOKEN="123456:ABC"
@@ -300,9 +299,9 @@ TG_ADMIN_IDS="11111111,22222222"
 
 说明：
 
-- `DNS_UPSTREAMS` 会同时用于私网 DoT、公网 DoT 和 sniproxy。
-- `OVERSEAS_DNS` 是旧兼容变量，等同于 `PRIVATE_OVERSEAS_DNS`。
-- `PRIVATE_OVERSEAS_DNS`、`PUBLIC_OVERSEAS_DNS`、`SNIPROXY_DNS` 用于高级分组配置。
+- `REMOTE_DNS` 用于国际/代理侧解析，会同时供 dnsdist remote 池和 sniproxy 使用。
+- `LOCAL_DNS` 用于 ChinaList 国内直连解析，会写入 `china-dns-race-proxy` 的并发上游。
+- `DNS_UPSTREAMS`、`OVERSEAS_DNS`、`PRIVATE_OVERSEAS_DNS`、`SNIPROXY_DNS` 仍作为旧兼容变量，等同于 `REMOTE_DNS`。
 - `SINGBOX_VERSION` 可覆盖默认锁定版，但默认建议保持 `1.12.25`。
 
 ### Telegram Bot

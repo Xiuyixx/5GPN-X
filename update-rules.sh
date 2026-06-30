@@ -14,18 +14,17 @@ GFWLIST_EXTRA_FILE="${BASE_DIR}/gfwlist-extra-local.txt"
 DEFAULT_RULES_FILE="/etc/proxy-gateway/rules-default.conf"
 DNSDIST_TEMPLATE="${BASE_DIR}/dnsdist.conf.template"
 DNSDIST_CONF="/etc/dnsdist/dnsdist.conf"
-DEFAULT_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
-DEFAULT_PUBLIC_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8")
+DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
 
-render_overseas_dns_servers() {
+render_remote_dns_servers() {
     local input="${1:-}"
-    local pool="${2:-overseas}"
-    local prefix="${3:-overseas}"
+    local pool="${2:-remote}"
+    local prefix="${3:-remote}"
     local dns_list=()
     local item order=1 name
 
     if [[ -z "$input" ]]; then
-        dns_list=("${DEFAULT_OVERSEAS_DNS[@]}")
+        dns_list=("${DEFAULT_REMOTE_DNS[@]}")
     else
         input="${input//,/ }"
         read -r -a dns_list <<< "$input"
@@ -34,13 +33,40 @@ render_overseas_dns_servers() {
     for item in "${dns_list[@]}"; do
         [[ -z "$item" ]] && continue
         if [[ ! "$item" =~ ^[0-9A-Fa-f:.]+$ ]]; then
-            echo "[!] Skipping invalid overseas DNS address: $item" >&2
+            echo "[!] Skipping invalid remote DNS address: $item" >&2
             continue
         fi
         name="${prefix}${order}"
-        printf 'newServer({address="%s:53", pool="%s", name="%s", order=%d, useClientSubnet=true})\n' "$item" "$pool" "$name" "$order"
+        printf 'newServer({address="%s", pool="%s", name="%s", order=%d, useClientSubnet=true})\n' "$(dnsdist_upstream_address "$item")" "$pool" "$name" "$order"
         order=$((order + 1))
     done
+}
+
+dnsdist_upstream_address() {
+    local item="${1:-}" host port
+    if [[ "$item" == *:* ]]; then
+        if python3 - "$item" <<'PYEOF' >/dev/null 2>&1
+import ipaddress, sys
+ipaddress.ip_address(sys.argv[1])
+PYEOF
+        then
+            if [[ "$item" == *:*:* ]]; then
+                printf '[%s]:53' "$item"
+            else
+                printf '%s:53' "$item"
+            fi
+        else
+            host="${item%:*}"
+            port="${item##*:}"
+            if [[ "$host" == *:* ]]; then
+                printf '[%s]:%s' "$host" "$port"
+            else
+                printf '%s:%s' "$host" "$port"
+            fi
+        fi
+    else
+        printf '%s:53' "$item"
+    fi
 }
 
 append_local_gfwlist_extras() {
@@ -298,24 +324,21 @@ CERT_BASENAME="${DOMAIN}"
 if [[ -f "/opt/proxy-gateway/etc/.cert_basename" ]]; then
     CERT_BASENAME=$(cat "/opt/proxy-gateway/etc/.cert_basename")
 fi
-PRIVATE_OVERSEAS_DNS=$(cat "${BASE_DIR}/.overseas_private_dns" 2>/dev/null || cat "${BASE_DIR}/.overseas_dns" 2>/dev/null || echo "${DEFAULT_OVERSEAS_DNS[*]}")
-PUBLIC_OVERSEAS_DNS=$(cat "${BASE_DIR}/.overseas_public_dns" 2>/dev/null || echo "${DEFAULT_PUBLIC_OVERSEAS_DNS[*]}")
-OVERSEAS_PRIVATE_DNS_SERVERS=$(render_overseas_dns_servers "$PRIVATE_OVERSEAS_DNS" "overseas_private" "overseas_private")
-OVERSEAS_PUBLIC_DNS_SERVERS=$(render_overseas_dns_servers "$PUBLIC_OVERSEAS_DNS" "overseas_public" "overseas_public")
+REMOTE_DNS=$(cat "${BASE_DIR}/.remote_dns" 2>/dev/null || cat "${BASE_DIR}/.overseas_dns" 2>/dev/null || echo "${DEFAULT_REMOTE_DNS[*]}")
+REMOTE_DNS_SERVERS=$(render_remote_dns_servers "$REMOTE_DNS" "remote" "remote")
 PACKET_CACHE_SIZE=$(cat "${BASE_DIR}/.cache_size" 2>/dev/null || echo "500000")
 [[ "${PACKET_CACHE_SIZE}" =~ ^[0-9]+$ ]] || PACKET_CACHE_SIZE=500000
 
-python3 - "${DNSDIST_TEMPLATE}" "${GFWLIST_LUA}" "${CHINALIST_LUA}" "${SERVER_IP}" "${CERT_BASENAME}" "${OVERSEAS_PRIVATE_DNS_SERVERS}" "${OVERSEAS_PUBLIC_DNS_SERVERS}" "${PACKET_CACHE_SIZE}" "${DNSDIST_CONF}" <<'PYEOF'
+python3 - "${DNSDIST_TEMPLATE}" "${GFWLIST_LUA}" "${CHINALIST_LUA}" "${SERVER_IP}" "${CERT_BASENAME}" "${REMOTE_DNS_SERVERS}" "${PACKET_CACHE_SIZE}" "${DNSDIST_CONF}" <<'PYEOF'
 import sys
 template_path = sys.argv[1]
 gfw_path = sys.argv[2]
 china_path = sys.argv[3]
 server_ip = sys.argv[4]
 domain = sys.argv[5]
-overseas_private_servers = sys.argv[6]
-overseas_public_servers = sys.argv[7]
-packet_cache_size = sys.argv[8]
-output_path = sys.argv[9]
+remote_servers = sys.argv[6]
+packet_cache_size = sys.argv[7]
+output_path = sys.argv[8]
 with open(template_path, "r", encoding="utf-8") as f:
     content = f.read()
 with open(gfw_path, "r", encoding="utf-8") as f:
@@ -330,8 +353,7 @@ content = content.replace("__GFWLIST_RULES__", gfw_rules)
 content = content.replace("__CHINALIST_RULES__", china_rules)
 content = content.replace("__SERVER_IP__", server_ip)
 content = content.replace("__DOMAIN__", domain)
-content = content.replace("__OVERSEAS_PRIVATE_DNS_SERVERS__", overseas_private_servers)
-content = content.replace("__OVERSEAS_PUBLIC_DNS_SERVERS__", overseas_public_servers)
+content = content.replace("__REMOTE_DNS_SERVERS__", remote_servers)
 content = content.replace("__PACKET_CACHE_SIZE__", packet_cache_size)
 with open(output_path, "w", encoding="utf-8") as f:
     f.write(content)

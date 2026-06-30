@@ -23,18 +23,18 @@ if (-not $mainInstallMatch.Success) {
 }
 
 $mainInstall = $mainInstallMatch.Value
-$configureIndex = $mainInstall.IndexOf("configure_overseas_dns")
+$configureIndex = $mainInstall.IndexOf("configure_dns_upstreams")
 $installSniproxyIndex = $mainInstall.IndexOf("install_sniproxy")
 
 if ($configureIndex -lt 0 -or $installSniproxyIndex -lt 0 -or $configureIndex -gt $installSniproxyIndex) {
-    throw "configure_overseas_dns must run before install_sniproxy so sniproxy resolver uses custom overseas DNS"
+    throw "configure_dns_upstreams must run before install_sniproxy so sniproxy resolver uses custom remote DNS"
 }
 
 Assert-Contains $sniproxy 'resolver {' 'resolver stanza'
 Assert-Contains $sniproxy '__SNIPROXY_NAMESERVERS__' 'sniproxy DNS placeholder'
 Assert-Contains $sniproxy 'mode ipv4_only' 'sniproxy forced IPv4 mode'
 Assert-Contains $install 'render_sniproxy_dns' 'installer renders sniproxy resolver'
-Assert-Contains $install 'SNIPROXY_DNS' 'installer accepts sniproxy DNS variable'
+Assert-Contains $install 'REMOTE_DNS' 'installer accepts remote DNS variable'
 Assert-Contains $install '/etc/dnsdist/.sniproxy_dns' 'installer saves sniproxy DNS config'
 Assert-Contains $install '__SNIPROXY_NAMESERVERS__' 'installer replaces sniproxy DNS placeholder'
 Assert-Contains $readme 'sniproxy' 'README documents sniproxy'

@@ -14,31 +14,24 @@ function Assert-Contains {
     )
 
     if (-not $Haystack.Contains($Needle)) {
-        throw "Missing custom overseas DNS marker: $Description ($Needle)"
+        throw "Missing custom DNS marker: $Description ($Needle)"
     }
 }
 
-Assert-Contains $install 'DEFAULT_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")' 'default overseas DNS array'
-Assert-Contains $install 'configure_overseas_dns()' 'installer overseas DNS function'
-Assert-Contains $install 'OVERSEAS_DNS' 'installer environment variable'
-Assert-Contains $install 'PRIVATE_OVERSEAS_DNS' 'installer private overseas DNS variable'
-Assert-Contains $install 'PUBLIC_OVERSEAS_DNS' 'installer public overseas DNS variable'
-Assert-Contains $install 'SNIPROXY_DNS' 'installer sniproxy DNS variable'
-Assert-Contains $install '/etc/dnsdist/.overseas_dns' 'installer saves overseas DNS config'
-Assert-Contains $install '/etc/dnsdist/.overseas_private_dns' 'installer saves private overseas DNS config'
-Assert-Contains $install '/etc/dnsdist/.overseas_public_dns' 'installer saves public overseas DNS config'
-Assert-Contains $install '/etc/dnsdist/.sniproxy_dns' 'installer saves sniproxy DNS config'
-Assert-Contains $template '__OVERSEAS_PRIVATE_DNS_SERVERS__' 'dnsdist private overseas server placeholder'
-Assert-Contains $template '__OVERSEAS_PUBLIC_DNS_SERVERS__' 'dnsdist public overseas server placeholder'
-Assert-Contains $rules '.overseas_dns' 'rule updater reads saved overseas DNS config'
-Assert-Contains $rules '.overseas_private_dns' 'rule updater reads saved private overseas DNS config'
-Assert-Contains $rules '.overseas_public_dns' 'rule updater reads saved public overseas DNS config'
-Assert-Contains $rules '__OVERSEAS_PRIVATE_DNS_SERVERS__' 'rule updater replaces private overseas placeholder'
-Assert-Contains $rules '__OVERSEAS_PUBLIC_DNS_SERVERS__' 'rule updater replaces public overseas placeholder'
-Assert-Contains $rules 'useClientSubnet=true' 'overseas upstreams can receive neutral ECS'
-Assert-Contains $readme 'OVERSEAS_DNS' 'README documents overseas DNS variable'
-Assert-Contains $readme 'PRIVATE_OVERSEAS_DNS' 'README documents private overseas DNS variable'
-Assert-Contains $readme 'PUBLIC_OVERSEAS_DNS' 'README documents public overseas DNS variable'
-Assert-Contains $readme 'SNIPROXY_DNS' 'README documents sniproxy DNS variable'
+Assert-Contains $install 'DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")' 'default remote DNS array'
+Assert-Contains $install 'DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")' 'default local DNS array'
+Assert-Contains $install 'configure_dns_upstreams()' 'installer DNS function'
+Assert-Contains $install 'REMOTE_DNS' 'installer remote DNS variable'
+Assert-Contains $install 'LOCAL_DNS' 'installer local DNS variable'
+Assert-Contains $install '/etc/dnsdist/.remote_dns' 'installer saves remote DNS config'
+Assert-Contains $install '/etc/dnsdist/.local_dns' 'installer saves local DNS config'
+Assert-Contains $install 'china-dns-race-proxy -l 127.0.0.1:5301 -upstreams' 'installer passes local DNS to China DNS race proxy'
+Assert-Contains $template '__REMOTE_DNS_SERVERS__' 'dnsdist remote server placeholder'
+Assert-Contains $rules '.remote_dns' 'rule updater reads saved remote DNS config'
+Assert-Contains $rules '__REMOTE_DNS_SERVERS__' 'rule updater replaces remote placeholder'
+Assert-Contains $rules 'useClientSubnet=true' 'remote upstreams can receive neutral ECS'
+Assert-Contains $readme 'REMOTE_DNS' 'README documents remote DNS variable'
+Assert-Contains $readme 'LOCAL_DNS' 'README documents local DNS variable'
+Assert-Contains $readme 'DNS_UPSTREAMS' 'README documents legacy DNS alias'
 
-Write-Output "custom overseas DNS markers OK"
+Write-Output "custom DNS markers OK"

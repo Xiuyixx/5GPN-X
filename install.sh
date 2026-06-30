@@ -37,8 +37,8 @@ SINGBOX_CFG_GEN="/opt/proxy-gateway/bin/singbox-exit-config.py"
 SINGBOX_ROUTER_GEN="/opt/proxy-gateway/bin/singbox-router-config.py"
 RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
 SINGBOX_VERSION_DEFAULT="1.12.25"
-DEFAULT_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
-DEFAULT_PUBLIC_OVERSEAS_DNS=("1.1.1.1" "8.8.8.8")
+DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
+DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
 
 bootstrap_from_repo_if_needed() {
     local required=(
@@ -86,7 +86,7 @@ ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()   { echo -e "${RED}[ERR]${NC}  $*" >&2; }
 
-render_overseas_dns_servers() {
+render_remote_dns_servers() {
     local input="${1:-}"
     local pool="${2:-overseas}"
     local prefix="${3:-overseas}"
@@ -94,7 +94,7 @@ render_overseas_dns_servers() {
     local item order=1 name
 
     if [[ -z "$input" ]]; then
-        dns_list=("${DEFAULT_OVERSEAS_DNS[@]}")
+        dns_list=("${DEFAULT_REMOTE_DNS[@]}")
     else
         input="${input//,/ }"
         read -r -a dns_list <<< "$input"
@@ -103,13 +103,40 @@ render_overseas_dns_servers() {
     for item in "${dns_list[@]}"; do
         [[ -z "$item" ]] && continue
         if [[ ! "$item" =~ ^[0-9A-Fa-f:.]+$ ]]; then
-            warn "Skipping invalid overseas DNS address: $item"
+            warn "Skipping invalid remote DNS address: $item"
             continue
         fi
         name="${prefix}${order}"
-        printf 'newServer({address="%s:53", pool="%s", name="%s", order=%d, useClientSubnet=true})\n' "$item" "$pool" "$name" "$order"
+        printf 'newServer({address="%s", pool="%s", name="%s", order=%d, useClientSubnet=true})\n' "$(dnsdist_upstream_address "$item")" "$pool" "$name" "$order"
         order=$((order + 1))
     done
+}
+
+dnsdist_upstream_address() {
+    local item="${1:-}" host port
+    if [[ "$item" == *:* ]]; then
+        if python3 - "$item" <<'PYEOF' >/dev/null 2>&1
+import ipaddress, sys
+ipaddress.ip_address(sys.argv[1])
+PYEOF
+        then
+            if [[ "$item" == *:*:* ]]; then
+                printf '[%s]:53' "$item"
+            else
+                printf '%s:53' "$item"
+            fi
+        else
+            host="${item%:*}"
+            port="${item##*:}"
+            if [[ "$host" == *:* ]]; then
+                printf '[%s]:%s' "$host" "$port"
+            else
+                printf '%s:%s' "$host" "$port"
+            fi
+        fi
+    else
+        printf '%s:53' "$item"
+    fi
 }
 
 render_sniproxy_dns_nameservers() {
@@ -118,7 +145,7 @@ render_sniproxy_dns_nameservers() {
     local item
 
     if [[ -z "$input" ]]; then
-        dns_list=("${DEFAULT_OVERSEAS_DNS[@]}")
+        dns_list=("${DEFAULT_REMOTE_DNS[@]}")
     else
         input="${input//,/ }"
         read -r -a dns_list <<< "$input"
@@ -154,6 +181,75 @@ PYEOF
         out+=("$item")
     done
     [[ ${#out[@]} -gt 0 ]] || { err "DNS list cannot be empty"; exit 1; }
+    printf '%s' "${out[*]}"
+}
+
+normalize_dns_upstreams() {
+    local input="${1:-}"
+    local dns_list=() out=() item host port
+
+    input="${input//,/ }"
+    read -r -a dns_list <<< "$input"
+    for item in "${dns_list[@]}"; do
+        [[ -z "$item" ]] && continue
+        if [[ "$item" == *://* ]]; then
+            err "Invalid DNS upstream: $item. 5GPN-X dnsdist/china-dns-race-proxy accepts IP[:port], not DoH/DoT URLs."
+            exit 1
+        fi
+        if [[ "$item" == *:* ]]; then
+            if python3 - "$item" <<'PYEOF' >/dev/null 2>&1
+import ipaddress, sys
+ipaddress.ip_address(sys.argv[1])
+PYEOF
+            then
+                host="$item"
+                port="53"
+            else
+                host="${item%:*}"
+                port="${item##*:}"
+            fi
+        else
+            host="$item"
+            port="53"
+        fi
+        [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || { err "Invalid DNS upstream port: $item"; exit 1; }
+        python3 - "$host" <<'PYEOF' || { err "Invalid DNS upstream IP: $item"; exit 1; }
+import ipaddress
+import sys
+ipaddress.ip_address(sys.argv[1])
+PYEOF
+        if [[ "$port" == "53" ]]; then
+            out+=("$host")
+        else
+            out+=("$host:$port")
+        fi
+    done
+    [[ ${#out[@]} -gt 0 ]] || { err "DNS upstream list cannot be empty"; exit 1; }
+    printf '%s' "${out[*]}"
+}
+
+dns_upstreams_with_ports() {
+    local input="${1:-}" item out=()
+    read -r -a out <<< "$input"
+    for i in "${!out[@]}"; do
+        item="${out[$i]}"
+        if [[ "$item" == *:* ]] && ! python3 - "$item" <<'PYEOF' >/dev/null 2>&1
+import ipaddress, sys
+ipaddress.ip_address(sys.argv[1])
+PYEOF
+        then
+            if [[ "${item%:*}" == *:* ]]; then
+                out[$i]="[${item%:*}]:${item##*:}"
+            fi
+            continue
+        fi
+        if [[ "$item" == *:*:* ]]; then
+            out[$i]="[${item}]:53"
+        else
+            out[$i]="${item}:53"
+        fi
+    done
+    local IFS=,
     printf '%s' "${out[*]}"
 }
 
@@ -221,56 +317,36 @@ certbot_diagnostics() {
     fi
 }
 
-configure_overseas_dns() {
-    local legacy="${OVERSEAS_DNS:-}"
-    local private_selected="${PRIVATE_OVERSEAS_DNS:-$legacy}"
-    local public_selected="${PUBLIC_OVERSEAS_DNS:-}"
-    local sniproxy_selected="${SNIPROXY_DNS:-}"
-    local unified_selected="${DNS_UPSTREAMS:-}"
-    local split_dns=0
+configure_dns_upstreams() {
+    local remote_selected="${REMOTE_DNS:-${DNS_UPSTREAMS:-${OVERSEAS_DNS:-${PRIVATE_OVERSEAS_DNS:-${SNIPROXY_DNS:-}}}}}"
+    local local_selected="${LOCAL_DNS:-}"
 
-    if [[ -n "$unified_selected" ]]; then
-        private_selected="$unified_selected"
-        public_selected="$unified_selected"
-        sniproxy_selected="$unified_selected"
-    elif [[ -n "${PRIVATE_OVERSEAS_DNS:-}" || -n "${PUBLIC_OVERSEAS_DNS:-}" || -n "${SNIPROXY_DNS:-}" || -n "$legacy" ]]; then
-        split_dns=1
-    fi
-
-    if [[ -z "$private_selected" && -t 0 ]]; then
+    if [[ -z "$remote_selected" && -t 0 ]]; then
         echo ""
-        read -r -p "DNS 设置 [1.1.1.1,8.8.8.8,9.9.9.9]: " private_selected
-        unified_selected="$private_selected"
+        read -r -p "国际 DNS remote [1.1.1.1,8.8.8.8]: " remote_selected
+    fi
+    if [[ -z "$local_selected" && -t 0 ]]; then
+        read -r -p "国内 DNS local [223.5.5.5,119.29.29.29]: " local_selected
     fi
 
-    if [[ -z "$private_selected" ]]; then
-        private_selected="${DEFAULT_OVERSEAS_DNS[*]}"
-        [[ $split_dns -eq 0 ]] && unified_selected="$private_selected"
-    fi
-    if [[ -n "$unified_selected" || $split_dns -eq 0 ]]; then
-        public_selected="$private_selected"
-        sniproxy_selected="$private_selected"
-    else
-        [[ -n "$public_selected" ]] || public_selected="${DEFAULT_PUBLIC_OVERSEAS_DNS[*]}"
-        [[ -n "$sniproxy_selected" ]] || sniproxy_selected="$private_selected"
-    fi
+    [[ -n "$remote_selected" ]] || remote_selected="${DEFAULT_REMOTE_DNS[*]}"
+    [[ -n "$local_selected" ]] || local_selected="${DEFAULT_LOCAL_DNS[*]}"
 
-    OVERSEAS_DNS="$private_selected"
-    PRIVATE_OVERSEAS_DNS="$private_selected"
-    PUBLIC_OVERSEAS_DNS="$public_selected"
-    SNIPROXY_DNS="$sniproxy_selected"
+    REMOTE_DNS=$(normalize_dns_upstreams "$remote_selected")
+    LOCAL_DNS=$(normalize_dns_upstreams "$local_selected")
 
     mkdir -p "$CONF_DIR"
-    echo "$PRIVATE_OVERSEAS_DNS" > "${CONF_DIR}/.overseas_dns"
-    echo "$PRIVATE_OVERSEAS_DNS" > "${CONF_DIR}/.overseas_private_dns"
-    echo "$PUBLIC_OVERSEAS_DNS" > "${CONF_DIR}/.overseas_public_dns"
-    echo "$SNIPROXY_DNS" > "${CONF_DIR}/.sniproxy_dns"
-    if [[ "$PRIVATE_OVERSEAS_DNS" == "$PUBLIC_OVERSEAS_DNS" && "$PRIVATE_OVERSEAS_DNS" == "$SNIPROXY_DNS" ]]; then
-        info "DNS 设置: $PRIVATE_OVERSEAS_DNS"
-    else
-        info "DNS 设置: private=$PRIVATE_OVERSEAS_DNS public=$PUBLIC_OVERSEAS_DNS sniproxy=$SNIPROXY_DNS"
-    fi
+    echo "$REMOTE_DNS" > "${CONF_DIR}/.remote_dns"
+    echo "$LOCAL_DNS" > "${CONF_DIR}/.local_dns"
+    # Backward-compatible files for older helper scripts and existing installs.
+    echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_dns"
+    echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_private_dns"
+    echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_public_dns"
+    echo "$REMOTE_DNS" > "${CONF_DIR}/.sniproxy_dns"
+    info "DNS 设置: remote=$REMOTE_DNS local=$LOCAL_DNS"
 }
+
+configure_overseas_dns() { configure_dns_upstreams; }
 
 # =============================================================================
 # Command-line dispatch
@@ -288,10 +364,10 @@ Options:
                  Change DoT domain, issue certificate, reload dnsdist
   --set-dot-domain-force <domain>
                  Force-change DoT domain without issuing a certificate first
-  --set-dns <dns-list> [public-dns] [sniproxy-dns]
-                 Set DNS upstreams and reload dnsdist/sniproxy. By default one
-                 DNS list is applied to private DoT, public DoT, and sniproxy;
-                 optional extra lists keep advanced split-DNS use cases.
+  --set-dns <remote-dns> [local-dns]
+                 Set DNS upstreams and reload dnsdist/sniproxy/china DNS race.
+                 remote is used for international/proxy-side resolution; local
+                 is used for ChinaList direct resolution.
   --list-exits   List configured egress exits and which one is active
   --check-exits  Test reachability of each exit's upstream node (UP/DOWN)
   --add-exit <name> [wg.conf | socks5://... | ss://...]
@@ -328,10 +404,10 @@ Environment variables (for non-interactive use):
   DOMAIN         Your own fully-qualified domain (e.g. dns.example.com).
                  When set, the interactive domain prompt is skipped.
                  You must point its A record at this host's public IP.
-  OVERSEAS_DNS   Backward-compatible alias for PRIVATE_OVERSEAS_DNS
-  DNS_UPSTREAMS  Unified DNS upstream list for private/public DoT and sniproxy
-  PRIVATE_OVERSEAS_DNS / PUBLIC_OVERSEAS_DNS / SNIPROXY_DNS
-                 Advanced split-DNS overrides; omitted values follow DNS_UPSTREAMS
+  REMOTE_DNS     International/proxy-side DNS upstreams, IP[:port] list
+  LOCAL_DNS      Domestic ChinaList DNS upstreams, IP[:port] list
+  DNS_UPSTREAMS / OVERSEAS_DNS / PRIVATE_OVERSEAS_DNS / SNIPROXY_DNS
+                 Backward-compatible aliases for REMOTE_DNS
   EMAIL          Email for Let's Encrypt
   TG_BOT_TOKEN   Telegram bot token; enables the control bot when set
   TG_ADMIN_IDS   Comma-separated Telegram numeric IDs allowed to operate the bot
@@ -951,7 +1027,7 @@ install_sniproxy() {
 
     if [[ -f "${SCRIPT_DIR}/sniproxy.conf" ]]; then
         local sniproxy_nameservers
-        sniproxy_nameservers=$(render_sniproxy_dns_nameservers "$SNIPROXY_DNS")
+        sniproxy_nameservers=$(render_sniproxy_dns_nameservers "$REMOTE_DNS")
         python3 - "${SCRIPT_DIR}/sniproxy.conf" "$sniproxy_nameservers" /etc/sniproxy.conf <<'PYEOF'
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
@@ -1045,7 +1121,9 @@ install_china_dns_race_proxy() {
     export PATH=$PATH:/usr/local/go/bin
     go build -ldflags="-s -w" -o "${BASE_DIR}/bin/china-dns-race-proxy" china-dns-race-proxy.go
 
-    cat > /etc/systemd/system/china-dns-race-proxy.service <<'EOF'
+    local local_dns_with_ports
+    local_dns_with_ports=$(dns_upstreams_with_ports "$LOCAL_DNS")
+    cat > /etc/systemd/system/china-dns-race-proxy.service <<EOF
 [Unit]
 Description=China DNS race proxy
 After=network.target
@@ -1053,7 +1131,7 @@ Before=dnsdist.service
 
 [Service]
 Type=simple
-ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301
+ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}
 Restart=on-failure
 RestartSec=3
 User=root
@@ -1082,15 +1160,16 @@ install_dnsdist() {
     # Save domain and IP for template generation
     echo "$DOMAIN" > /etc/dnsdist/.domain
     echo "$PUBLIC_IP" > /etc/dnsdist/.public_ip
-    echo "$PRIVATE_OVERSEAS_DNS" > /etc/dnsdist/.overseas_dns
-    echo "$PRIVATE_OVERSEAS_DNS" > /etc/dnsdist/.overseas_private_dns
-    echo "$PUBLIC_OVERSEAS_DNS" > /etc/dnsdist/.overseas_public_dns
-    echo "$SNIPROXY_DNS" > /etc/dnsdist/.sniproxy_dns
+    echo "$REMOTE_DNS" > /etc/dnsdist/.remote_dns
+    echo "$LOCAL_DNS" > /etc/dnsdist/.local_dns
+    echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_dns
+    echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_private_dns
+    echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_public_dns
+    echo "$REMOTE_DNS" > /etc/dnsdist/.sniproxy_dns
     # Persist the packet-cache size so weekly rule updates keep the same value.
     echo "${PACKET_CACHE_SIZE:-500000}" > /etc/dnsdist/.cache_size
-    local overseas_private_servers overseas_public_servers
-    overseas_private_servers=$(render_overseas_dns_servers "$PRIVATE_OVERSEAS_DNS" "overseas_private" "overseas_private")
-    overseas_public_servers=$(render_overseas_dns_servers "$PUBLIC_OVERSEAS_DNS" "overseas_public" "overseas_public")
+    local remote_servers
+    remote_servers=$(render_remote_dns_servers "$REMOTE_DNS" "remote" "remote")
 
     # Determine actual certificate directory name
     local cert_basename="${DOMAIN}"
@@ -1099,7 +1178,7 @@ install_dnsdist() {
     fi
 
     # Generate initial config (empty rules, will be populated by update-rules.sh)
-    python3 - /etc/dnsdist/dnsdist.conf.template "${PUBLIC_IP}" "${cert_basename}" "$overseas_private_servers" "$overseas_public_servers" "${PACKET_CACHE_SIZE:-500000}" /etc/dnsdist/dnsdist.conf <<'PYEOF'
+    python3 - /etc/dnsdist/dnsdist.conf.template "${PUBLIC_IP}" "${cert_basename}" "$remote_servers" "${PACKET_CACHE_SIZE:-500000}" /etc/dnsdist/dnsdist.conf <<'PYEOF'
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
     content = f.read()
@@ -1107,10 +1186,9 @@ content = content.replace("__GFWLIST_RULES__", "-- (rules will be loaded by upda
 content = content.replace("__CHINALIST_RULES__", "-- (rules will be loaded by update-rules.sh)")
 content = content.replace("__SERVER_IP__", sys.argv[2])
 content = content.replace("__DOMAIN__", sys.argv[3])
-content = content.replace("__OVERSEAS_PRIVATE_DNS_SERVERS__", sys.argv[4])
-content = content.replace("__OVERSEAS_PUBLIC_DNS_SERVERS__", sys.argv[5])
-content = content.replace("__PACKET_CACHE_SIZE__", sys.argv[6])
-with open(sys.argv[7], "w", encoding="utf-8") as f:
+content = content.replace("__REMOTE_DNS_SERVERS__", sys.argv[4])
+content = content.replace("__PACKET_CACHE_SIZE__", sys.argv[5])
+with open(sys.argv[6], "w", encoding="utf-8") as f:
     f.write(content)
 PYEOF
 
@@ -2707,19 +2785,22 @@ force_set_dot_domain() {
 }
 
 set_custom_dns() {
-    local private_dns public_dns sniproxy_dns backup_dir sniproxy_backup=""
-    [[ -n "${1:-}" ]] || { err "Usage: $0 --set-dns <private-dns> [public-dns] [sniproxy-dns]"; exit 1; }
-    private_dns=$(normalize_dns_list "$1")
-    public_dns=$(normalize_dns_list "${2:-$private_dns}")
-    sniproxy_dns=$(normalize_dns_list "${3:-$private_dns}")
+    local remote_dns local_dns backup_dir sniproxy_backup="" china_service_backup=""
+    [[ -n "${1:-}" ]] || { err "Usage: $0 --set-dns <remote-dns> [local-dns]"; exit 1; }
+    remote_dns=$(normalize_dns_upstreams "$1")
+    local_dns=$(normalize_dns_upstreams "${2:-$(cat /etc/dnsdist/.local_dns 2>/dev/null || printf '%s' "${DEFAULT_LOCAL_DNS[*]}")}")
 
     mkdir -p "$CONF_DIR" /etc/dnsdist
     backup_dir=$(mktemp -d)
     for f in \
+        "${CONF_DIR}/.remote_dns" \
+        "${CONF_DIR}/.local_dns" \
         "${CONF_DIR}/.overseas_dns" \
         "${CONF_DIR}/.overseas_private_dns" \
         "${CONF_DIR}/.overseas_public_dns" \
         "${CONF_DIR}/.sniproxy_dns" \
+        /etc/dnsdist/.remote_dns \
+        /etc/dnsdist/.local_dns \
         /etc/dnsdist/.overseas_dns \
         /etc/dnsdist/.overseas_private_dns \
         /etc/dnsdist/.overseas_public_dns \
@@ -2730,14 +2811,22 @@ set_custom_dns() {
         sniproxy_backup="${backup_dir}/sniproxy.conf"
         cp -a /etc/sniproxy.conf "$sniproxy_backup"
     fi
+    if [[ -f /etc/systemd/system/china-dns-race-proxy.service ]]; then
+        china_service_backup="${backup_dir}/china-dns-race-proxy.service"
+        cp -a /etc/systemd/system/china-dns-race-proxy.service "$china_service_backup"
+    fi
 
     restore_dns_backup() {
         local f b
         for f in \
+            "${CONF_DIR}/.remote_dns" \
+            "${CONF_DIR}/.local_dns" \
             "${CONF_DIR}/.overseas_dns" \
             "${CONF_DIR}/.overseas_private_dns" \
             "${CONF_DIR}/.overseas_public_dns" \
             "${CONF_DIR}/.sniproxy_dns" \
+            /etc/dnsdist/.remote_dns \
+            /etc/dnsdist/.local_dns \
             /etc/dnsdist/.overseas_dns \
             /etc/dnsdist/.overseas_private_dns \
             /etc/dnsdist/.overseas_public_dns \
@@ -2752,21 +2841,37 @@ set_custom_dns() {
         if [[ -n "$sniproxy_backup" && -f "$sniproxy_backup" ]]; then
             cp -a "$sniproxy_backup" /etc/sniproxy.conf
         fi
+        if [[ -n "$china_service_backup" && -f "$china_service_backup" ]]; then
+            cp -a "$china_service_backup" /etc/systemd/system/china-dns-race-proxy.service
+            systemctl daemon-reload 2>/dev/null || true
+        fi
     }
 
-    echo "$private_dns" > "${CONF_DIR}/.overseas_dns"
-    echo "$private_dns" > "${CONF_DIR}/.overseas_private_dns"
-    echo "$public_dns" > "${CONF_DIR}/.overseas_public_dns"
-    echo "$sniproxy_dns" > "${CONF_DIR}/.sniproxy_dns"
-    echo "$private_dns" > /etc/dnsdist/.overseas_dns
-    echo "$private_dns" > /etc/dnsdist/.overseas_private_dns
-    echo "$public_dns" > /etc/dnsdist/.overseas_public_dns
-    echo "$sniproxy_dns" > /etc/dnsdist/.sniproxy_dns
-    if ! rewrite_sniproxy_dns "$sniproxy_dns"; then
+    echo "$remote_dns" > "${CONF_DIR}/.remote_dns"
+    echo "$local_dns" > "${CONF_DIR}/.local_dns"
+    echo "$remote_dns" > "${CONF_DIR}/.overseas_dns"
+    echo "$remote_dns" > "${CONF_DIR}/.overseas_private_dns"
+    echo "$remote_dns" > "${CONF_DIR}/.overseas_public_dns"
+    echo "$remote_dns" > "${CONF_DIR}/.sniproxy_dns"
+    echo "$remote_dns" > /etc/dnsdist/.remote_dns
+    echo "$local_dns" > /etc/dnsdist/.local_dns
+    echo "$remote_dns" > /etc/dnsdist/.overseas_dns
+    echo "$remote_dns" > /etc/dnsdist/.overseas_private_dns
+    echo "$remote_dns" > /etc/dnsdist/.overseas_public_dns
+    echo "$remote_dns" > /etc/dnsdist/.sniproxy_dns
+
+    if ! rewrite_sniproxy_dns "$remote_dns"; then
         restore_dns_backup
         rm -rf "$backup_dir"
         err "sniproxy config update failed; DNS upstreams rolled back"
         exit 1
+    fi
+
+    if [[ -f /etc/systemd/system/china-dns-race-proxy.service ]]; then
+        local local_dns_with_ports
+        local_dns_with_ports=$(dns_upstreams_with_ports "$local_dns")
+        sed -i -E "s#^ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127\\.0\\.0\\.1:5301( -upstreams [^[:space:]]+)?#ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}#" /etc/systemd/system/china-dns-race-proxy.service
+        systemctl daemon-reload
     fi
 
     if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
@@ -2786,11 +2891,11 @@ set_custom_dns() {
         fi
     fi
     systemctl restart sniproxy 2>/dev/null || true
+    systemctl restart china-dns-race-proxy 2>/dev/null || true
     rm -rf "$backup_dir"
     ok "DNS upstreams updated"
-    echo "Private DoT DNS: $private_dns"
-    echo "Public DoT DNS: $public_dns"
-    echo "sniproxy DNS: $sniproxy_dns"
+    echo "Remote DNS: $remote_dns"
+    echo "Local DNS: $local_dns"
 }
 
 # =============================================================================
@@ -2814,7 +2919,7 @@ main_install() {
     generate_domain
     verify_domain_dns
     install_cert
-    configure_overseas_dns
+    configure_dns_upstreams
     install_sniproxy
     install_quic_proxy
     install_china_dns_race_proxy
