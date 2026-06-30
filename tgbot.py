@@ -698,8 +698,8 @@ def op_dot_status():
         "当前域名：<code>%s</code>" % html.escape(domain),
     ]
     lines.extend([
-        "remote 国际 DNS：<code>%s</code>" % html.escape(remote_dns),
-        "local 国内 DNS：<code>%s</code>" % html.escape(local_dns),
+        "国际 DNS：<code>%s</code>" % html.escape(remote_dns),
+        "国内 DNS：<code>%s</code>" % html.escape(local_dns),
     ])
     return "\n".join(lines)
 
@@ -746,28 +746,34 @@ def _dns_arg(text):
     return " ".join(value.replace(",", " ").split())
 
 
-def op_set_dns(text):
-    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
-    if not lines:
-        return "DNS 不能为空。"
-    if len(lines) > 2:
-        return "最多发送两行：第一行 remote 国际 DNS，第二行 local 国内 DNS。"
-    remote_dns = _dns_arg(lines[0])
-    local_dns = _dns_arg(lines[1]) if len(lines) > 1 else ""
-    if not remote_dns or (len(lines) > 1 and not local_dns):
+def current_remote_dns():
+    return (_read_file("/etc/dnsdist/.remote_dns") or
+            _read_file("/etc/dnsdist/.overseas_dns") or "?")
+
+
+def current_local_dns():
+    return _read_file("/etc/dnsdist/.local_dns") or "?"
+
+
+def op_set_dns(kind, text):
+    dns = _dns_arg(text)
+    if not dns:
         return "DNS 格式无效。只支持 IPv4/IPv6 地址，多个地址用空格或逗号分隔。"
-    cmd = ["bash", MGMT, "--set-dns", remote_dns]
-    if local_dns:
-        cmd.append(local_dns)
+    if kind == "remote":
+        remote_dns = dns
+        local_dns = current_local_dns()
+    elif kind == "local":
+        remote_dns = current_remote_dns()
+        local_dns = dns
+    else:
+        return "DNS 类型无效。"
+    if remote_dns == "?" or local_dns == "?":
+        return "当前 DNS 配置不完整，请先在服务器上执行一次 --set-dns。"
+    cmd = ["bash", MGMT, "--set-dns", remote_dns, local_dns]
     ok, out = run2(cmd, timeout=600)
     if ok:
-        lines_out = [
-            "✅ <b>DNS 上游已更新</b>",
-            "remote 国际 DNS：<code>%s</code>" % html.escape(remote_dns),
-        ]
-        if local_dns:
-            lines_out.append("local 国内 DNS：<code>%s</code>" % html.escape(local_dns))
-        return "\n".join(lines_out)
+        label = "国际 DNS" if kind == "remote" else "国内 DNS"
+        return "✅ <b>%s 已更新</b>\n<code>%s</code>" % (label, html.escape(dns))
     return "❌ <b>DNS 上游更新失败</b>\n%s" % html.escape(_reason(out))
 
 
@@ -1007,7 +1013,8 @@ def exits_del_menu():
 def dot_menu():
     return [
         [{"text": "🌐 更改域名", "callback_data": "dot:domain"}],
-        [{"text": "🧭 更改 DNS", "callback_data": "dot:dns"}],
+        [{"text": "🌍 更改国际 DNS", "callback_data": "dot:dns_remote"}],
+        [{"text": "🇨🇳 更改国内 DNS", "callback_data": "dot:dns_local"}],
         [{"text": "🔄 续期证书", "callback_data": "act:renew"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
@@ -1102,11 +1109,12 @@ def handle_message(msg):
 
         background(do_set_dot_domain)
         return
-    if state and state.get("action") == "dot_dns":
+    if state and state.get("action") in ("dot_dns_remote", "dot_dns_local"):
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在更新 DNS 上游并重载 dnsdist/sniproxy…")
         dns_text = text
-        send_async(chat_id, lambda: op_set_dns(dns_text), dot_menu())
+        kind = "remote" if state.get("action") == "dot_dns_remote" else "local"
+        send_async(chat_id, lambda: op_set_dns(kind, dns_text), dot_menu())
         return
 
     send(chat_id, "未知命令。发送 /menu 打开操作面板。")
@@ -1171,12 +1179,17 @@ def handle_callback(cb):
              "<code>dns.example.com</code>\n\n"
              "要求：该域名 A 记录必须已经指向本机公网 IP，否则不会修改当前配置。\n"
              "发送 /cancel 取消。")
-    elif data == "dot:dns":
-        PENDING[chat_id] = {"action": "dot_dns"}
+    elif data == "dot:dns_remote":
+        PENDING[chat_id] = {"action": "dot_dns_remote"}
         edit(cb,
-             "发送新的 DNS 上游。\n\n"
-             "第一行 remote 国际 DNS，第二行 local 国内 DNS 可选。多个 DNS 用空格或逗号分隔。\n\n"
-             "示例：\n<pre>1.1.1.1 8.8.8.8\n223.5.5.5 119.29.29.29</pre>\n"
+             "发送新的国际 DNS。多个 DNS 用空格或逗号分隔。\n\n"
+             "示例：\n<pre>1.1.1.1 8.8.8.8</pre>\n"
+             "发送 /cancel 取消。")
+    elif data == "dot:dns_local":
+        PENDING[chat_id] = {"action": "dot_dns_local"}
+        edit(cb,
+             "发送新的国内 DNS。多个 DNS 用空格或逗号分隔。\n\n"
+             "示例：\n<pre>223.5.5.5 119.29.29.29</pre>\n"
              "发送 /cancel 取消。")
     elif data == "dot:force_domain":
         domain = LAST_FAILED_DOT_DOMAIN.get(chat_id)
