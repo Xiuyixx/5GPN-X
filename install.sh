@@ -258,17 +258,30 @@ rewrite_sniproxy_dns() {
     [[ -f /etc/sniproxy.conf ]] || return 0
     nameservers=$(render_sniproxy_dns_nameservers "$sniproxy_dns")
     python3 - /etc/sniproxy.conf "$nameservers" <<'PYEOF'
-import re
 import sys
 
 path, nameservers = sys.argv[1], sys.argv[2]
 with open(path, "r", encoding="utf-8") as f:
-    content = f.read()
-new = re.sub(r"resolver\s*\{.*?\}", "resolver {\n" + nameservers + "\n    mode ipv4_only\n}", content, count=1, flags=re.S)
-if new == content:
+    lines = f.read().splitlines()
+
+start = None
+end = None
+for idx, line in enumerate(lines):
+    if line.strip() == "resolver {":
+        start = idx
+        break
+if start is not None:
+    for idx in range(start + 1, len(lines)):
+        if lines[idx].strip() == "}":
+            end = idx
+            break
+if start is None or end is None:
     raise SystemExit("resolver block not found in /etc/sniproxy.conf")
+
+replacement = ["resolver {"] + nameservers.splitlines() + ["    mode ipv4_only", "}"]
+new_lines = lines[:start] + replacement + lines[end + 1:]
 with open(path, "w", encoding="utf-8") as f:
-    f.write(new)
+    f.write("\n".join(new_lines) + "\n")
 PYEOF
 }
 
