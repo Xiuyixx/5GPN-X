@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from urllib.parse import unquote, urlparse
@@ -257,7 +258,11 @@ def send_photo(chat_id, path, caption=""):
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8")).get("ok", False)
-    except Exception:
+    except Exception as e:
+        # Rare: TG API rejects the photo upload (size, format, transient 5xx).
+        # The caller falls back to a text-only URL reply, but without this
+        # log we'd have zero forensic trail for "why did the QR disappear?".
+        print("[warn] send_photo failed: %s" % e, file=sys.stderr)
         return False
 
 
@@ -926,10 +931,17 @@ def op_ios_send(chat_id):
     if not url:
         return "未找到 iOS 描述文件地址,先在服务器上 `--ios` 生成。"
     cap = ("📱 <b>iOS DoT 描述文件</b>\n扫码安装(仅蜂窝网启用):\n<code>%s</code>" % html.escape(url))
-    png = "/tmp/pgw-ios-qr.png"
-    ok, _ = run2(["qrencode", "-o", png, "-s", "8", "-m", "2", url], timeout=15)
-    if ok and send_photo(chat_id, png, cap):
-        return None  # delivered as a photo
+    fd, png = tempfile.mkstemp(prefix="pgw-ios-qr-", suffix=".png")
+    os.close(fd)
+    try:
+        ok, _ = run2(["qrencode", "-o", png, "-s", "8", "-m", "2", url], timeout=15)
+        if ok and send_photo(chat_id, png, cap):
+            return None  # delivered as a photo
+    finally:
+        try:
+            os.unlink(png)
+        except OSError:
+            pass
     # fallback: just the URL (text)
     return cap
 

@@ -38,7 +38,13 @@ command -v tar >/dev/null 2>&1 || pkg_install tar || { err "tar is required"; ex
 DL=""
 if command -v curl >/dev/null 2>&1; then DL="curl -fsSL"
 elif command -v wget >/dev/null 2>&1; then DL="wget -qO-"
-else pkg_install curl && DL="curl -fsSL" || { err "curl or wget is required"; exit 1; }
+else
+    if pkg_install curl; then
+        DL="curl -fsSL"
+    else
+        err "curl or wget is required"
+        exit 1
+    fi
 fi
 
 info "Downloading ${REPO}@${BRANCH} into ${DIR} ..."

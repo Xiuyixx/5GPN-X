@@ -285,22 +285,38 @@ with open(path, "w", encoding="utf-8") as f:
 PYEOF
 }
 
+restore_or_remove_file() {
+    # Safely restore <file> to <old_value> if non-empty, otherwise remove it.
+    # Written as if/else so a failed write does NOT cascade into an rm (which
+    # the shell-idiom `A && B || C` would happily do on a partial failure).
+    local old_value="${1-}" target="${2-}"
+    [[ -n "$target" ]] || return 0
+    if [[ -n "$old_value" ]]; then
+        if ! printf '%s\n' "$old_value" > "$target"; then
+            err "restore_or_remove_file: failed to restore $target"
+            return 1
+        fi
+    else
+        rm -f "$target"
+    fi
+}
+
 resolve_domain_a_records() {
-    local domain="${1:-}" resolver="" out=""
+    local domain="${1:-}" resolver="" line=""
     local records=()
     local public_resolvers=(1.1.1.1 8.8.8.8 9.9.9.9 223.5.5.5 114.114.114.114)
 
     if command -v dig >/dev/null 2>&1; then
         for resolver in "${public_resolvers[@]}"; do
-            while IFS= read -r out; do
-                [[ "$out" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && records+=("$out")
+            while IFS= read -r line; do
+                [[ "$line" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && records+=("$line")
             done < <(dig +time=2 +tries=1 +short A "$domain" @"$resolver" 2>/dev/null || true)
         done
     fi
 
     if command -v getent >/dev/null 2>&1; then
-        while IFS= read -r out; do
-            [[ "$out" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && records+=("$out")
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && records+=("$line")
         done < <(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' || true)
     fi
 
@@ -2733,17 +2749,17 @@ set_dot_domain() {
 
     if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
         if ! /usr/local/bin/update-dnsdist-rules.sh; then
-            [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
-            [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
-            [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+            restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
+            restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+            restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
             /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
             err "dnsdist config update failed; DoT domain rolled back"
             exit 1
         fi
     elif ! systemctl restart dnsdist; then
-        [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
-        [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
-        [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+        restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
+        restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+        restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
         err "dnsdist restart failed; DoT domain rolled back"
         exit 1
     fi
@@ -2777,17 +2793,17 @@ force_set_dot_domain() {
 
     if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
         if ! /usr/local/bin/update-dnsdist-rules.sh; then
-            [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
-            [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
-            [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+            restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
+            restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+            restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
             /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
             err "dnsdist config update failed; DoT domain rolled back"
             exit 1
         fi
     elif ! systemctl restart dnsdist; then
-        [[ -n "$old_conf_domain" ]] && echo "$old_conf_domain" > "${CONF_DIR}/.domain" || rm -f "${CONF_DIR}/.domain"
-        [[ -n "$old_dnsdist_domain" ]] && echo "$old_dnsdist_domain" > /etc/dnsdist/.domain || rm -f /etc/dnsdist/.domain
-        [[ -n "$old_cert_basename" ]] && echo "$old_cert_basename" > "${CONF_DIR}/.cert_basename" || rm -f "${CONF_DIR}/.cert_basename"
+        restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
+        restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+        restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
         err "dnsdist restart failed; DoT domain rolled back"
         exit 1
     fi
