@@ -11,21 +11,22 @@
 - `172.22.0.0/16` 私网客户端访问 DNS/DoT。
 - ChinaList 域名走国内 DNS 解析，适合保持本地访问体验。
 - 非 ChinaList 的 IPv4 查询默认返回服务器本机 IP，让国际 HTTP/HTTPS/QUIC 流量进入网关。
-- sniproxy / quic-proxy 负责按 SNI/Host 转发，出站流量由当前出口控制。
+- wa-shim / sniproxy / quic-proxy 负责 WhatsApp Noise、SNI/Host 和 QUIC 转发，出站流量由当前出口控制。
 - 出口可以是本机直出、WireGuard、SOCKS5、Shadowsocks、VMess、Trojan、VLESS、Hysteria2、TUIC、AnyTLS 或 HTTP/HTTPS 代理。
 
-项目默认适配低内存 VPS，512 MB 主机也可运行；首次添加 URI 类出口时会自动安装锁定版 sing-box `1.12.25` 作为 TUN/tun2socks 引擎。
+项目默认适配低内存 VPS，512 MB 主机也可运行；首次添加 URI 类出口时会自动安装锁定版 mihomo `1.19.28` 作为 TUN 出口和智能分流内核。
 
 ## 功能特点
 
 - DNS + DoT：dnsdist 提供 TCP/UDP 53 和 TCP 853，支持来源网段策略、AAAA NODATA、ECS 覆盖和高 QPS 限制。
 - 国内解析优化：ChinaList 查询转发到本机 `china-dns-race-proxy`，并发查询多个国内 DNS，必要时 fallback。
 - 默认国际流量进网关：私网客户端的非 ChinaList IPv4 查询劫持到服务器 IP，减少国际站漏走客户端国内 IP 的情况。
-- TCP 透明代理：sniproxy 监听 80/443，通过 SNI/Host 转发 HTTP/HTTPS，不解密 TLS。
+- TCP 透明代理：sniproxy 监听 80 和回环端口 8443，通过 SNI/Host 转发 HTTP/HTTPS，不解密 TLS。
+- iOS WhatsApp Patch：wa-shim 监听 TCP 443，仅把客户端网段内以 `ED` / `WA` 开头的无 SNI Noise 连接送往 WhatsApp，其余连接原样、fail-open 转交 sniproxy。
 - QUIC 透明代理：内置 Go 实现的 `quic-proxy` 监听 UDP 443，解析 QUIC Initial 中的 SNI 后转发。
 - 多协议出口：支持 WireGuard、SOCKS5/SOCKS5H、SS/SS2022、VMess、Trojan、VLESS、Hysteria2、TUIC、AnyTLS、HTTP/HTTPS。
 - 出口切换：通过 `ip rule fwmark` + 独立路由表 `100`，只让代理进程的出站流量走所选出口，不影响 SSH、DNS、证书续期等本机流量。
-- 智能分流：`smart` 出口可按域名、IP、GEOSITE、GEOIP、RULE-SET 分流到不同出口、直连或拒绝。
+- 智能分流：mihomo `smart` 出口可按域名、IP、GEOSITE、GEOIP、RULE-SET 分流；远程 `.mrs`、Clash YAML 和文本规则集由内核定时更新。
 - Telegram Bot：支持状态查看、出口管理、规则更新、DoT 域名和 DNS 管理、日志查看、iOS 二维码等常用操作。
 - iOS 描述文件：自动生成 DoT mobileconfig，并通过 `8111` 端口按需提供下载。
 - 低内存模式：≤ 1 GB 内存自动降低缓存和内核参数，限制 Go 进程内存，并使用 systemd socket 按需启动 iOS 文件服务。
@@ -149,6 +150,7 @@ sudo ./install.sh -ios
 sudo ./install.sh --list-exits
 sudo ./install.sh --check-exits
 sudo ./install.sh --setup-tgbot
+sudo ./install.sh --setup-whatsapp
 sudo ./install.sh --uninstall
 ```
 
@@ -219,7 +221,7 @@ DOMAIN,api.example.com,direct
 GEOSITE,telegram,us
 GEOIP,cn,direct
 RULE-SET,https://example.com/list.txt,us
-RULE-SET,https://example.com/rules.srs,jp
+RULE-SET,https://example.com/rules.mrs,jp
 DOMAIN-SUFFIX,cn,direct
 FINAL,us
 EOF
@@ -230,6 +232,15 @@ sudo ./install.sh --show-rules
 ```
 
 规则类型支持：`DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD`、`IP-CIDR`、`GEOSITE`、`GEOIP`、`RULE-SET`、`FINAL`。
+
+单独添加一条最高优先级规则或远程规则集，不需要覆盖整份文件：
+
+```bash
+sudo ./install.sh --add-rule 'DOMAIN-SUFFIX,openai.com,us'
+sudo ./install.sh --add-ruleset 'https://example.com/openai.mrs' us
+```
+
+`RULE-SET` 支持 mihomo `.mrs`、Clash YAML 和纯文本列表；旧 sing-box `.srs` 会明确拒绝。生成器会按 `domain-set` / `geosite` / `geoip` 等文件名推断 provider 类型；命名不明确时可在 URL 后加 `#domain`、`#ipcidr` 或 `#classical`。远程 provider 由 mihomo 按 24 小时默认间隔更新，配置生成阶段不下载远程内容。
 
 策略可以是已配置的出口名，也可以是 `direct` 或 `block`。
 
@@ -251,6 +262,9 @@ sudo ./install.sh --set-policy Netflix hk
 | `/opt/proxy-gateway` | 运行时主目录 |
 | `/opt/proxy-gateway/bin/proxy-gateway-ctl` | 安装后的管理脚本 |
 | `/opt/proxy-gateway/bin/tgbot.py` | Telegram Bot |
+| `/opt/proxy-gateway/bin/mihomo` | 锁定版 mihomo 内核 |
+| `/opt/proxy-gateway/bin/wa-shim.py` | WhatsApp 无 SNI shim |
+| `/opt/proxy-gateway/etc/mihomo/<出口>` | mihomo 运行目录与 provider 缓存 |
 | `/opt/proxy-gateway/www/ios-dot.mobileconfig` | iOS DoT 描述文件 |
 | `/opt/proxy-gateway/etc/current-exit` | 当前出口 |
 | `/opt/proxy-gateway/etc/tgbot.env` | Bot Token 和管理员 ID，权限 `600` |
@@ -265,7 +279,8 @@ sudo ./install.sh --set-policy Netflix hk
 | 22 | TCP | 公网 | SSH |
 | 53 | TCP/UDP | `172.22.0.0/16` | 普通 DNS |
 | 80 | TCP | `172.22.0.0/16`，证书签发时临时公网 | HTTP 透明代理 / ACME HTTP-01 |
-| 443 | TCP | `172.22.0.0/16` | HTTPS 透明代理 |
+| 443 | TCP | `172.22.0.0/16` | wa-shim（WhatsApp 无 SNI / HTTPS fail-open） |
+| 8443 | TCP | 回环 | sniproxy TLS 后端，不对公网开放 |
 | 443 | UDP | `172.22.0.0/16` | QUIC 透明代理 |
 | 853 | TCP | 公网 | DNS over TLS |
 | 8111 | TCP | 公网 | iOS 描述文件下载 |
@@ -292,7 +307,7 @@ REMOTE_DNS="1.1.1.1,8.8.8.8"
 LOCAL_DNS="223.5.5.5,119.29.29.29"
 DNS_UPSTREAMS="1.1.1.1,8.8.8.8"
 LOWMEM=1
-SINGBOX_VERSION="1.12.25"
+MIHOMO_VERSION="1.19.28"
 TG_BOT_TOKEN="123456:ABC"
 TG_ADMIN_IDS="11111111,22222222"
 ```
@@ -302,7 +317,7 @@ TG_ADMIN_IDS="11111111,22222222"
 - `REMOTE_DNS` 用于国际/代理侧解析，会同时供 dnsdist remote 池和 sniproxy 使用。
 - `LOCAL_DNS` 用于 ChinaList 国内直连解析，会写入 `china-dns-race-proxy` 的并发上游。
 - `DNS_UPSTREAMS`、`OVERSEAS_DNS`、`PRIVATE_OVERSEAS_DNS`、`SNIPROXY_DNS` 仍作为旧兼容变量，等同于 `REMOTE_DNS`。
-- `SINGBOX_VERSION` 可覆盖默认锁定版，但默认建议保持 `1.12.25`。
+- `MIHOMO_VERSION` 可覆盖默认锁定版，但默认建议保持 `1.19.28`。
 
 ### Telegram Bot
 
@@ -337,7 +352,7 @@ sudo systemctl restart proxy-gateway-tgbot
 | `/cancel` | 取消当前输入 |
 | `/id` | 获取自己的 Telegram 数字 ID |
 
-Bot 添加出口流程：点击 `🌐 出口` -> `➕ 添加出口`，直接粘贴节点链接即可。链接有备注时会提取节点名称作为出口名；也可以发送 `出口名 链接` 手动指定名称。
+Bot 添加出口流程：点击 `🌐 出口` -> `➕ 添加出口`，直接粘贴节点链接即可。链接有备注时会提取节点名称作为出口名；也可以发送 `出口名 链接` 手动指定名称。智能分流页面可直接添加单条规则或发送 `规则集URL 目标` 添加 mihomo rule-provider。
 
 支持的链接前缀：
 
@@ -386,12 +401,15 @@ sudo ./install.sh --update-rules
 ```bash
 systemctl status dnsdist
 systemctl status sniproxy
+systemctl status wa-shim
+systemctl status 'proxy-gateway-mihomo@*'
 systemctl status quic-proxy
 systemctl status china-dns-race-proxy
 systemctl status proxy-gateway-tgbot
 
 journalctl -u dnsdist -f
 journalctl -u sniproxy -f
+journalctl -u wa-shim -f
 journalctl -u quic-proxy -f
 journalctl -u china-dns-race-proxy -f
 journalctl -u proxy-gateway-tgbot -f
@@ -408,6 +426,14 @@ curl -I --resolve youtube.com:443:127.0.0.1 https://youtube.com
 
 检查域名 A 记录是否指向服务器公网 IP，并确认 TCP 80 可被公网访问。证书申请或续期时脚本会临时停止 sniproxy 并放行公网 80，完成后恢复 80/443 白名单。
 
+### 从旧 sing-box 版本升级要注意什么？
+
+这是一次内核级迁移。安装器会停用旧 sing-box 服务，把旧 JSON 和类型文件备份到 `/etc/proxy-gateway/exits/singbox-backup/`，并安全切回 `local`。旧 JSON 没有保留原始分享链接，部分协议无法无损反推，因此 URI 出口需要用原节点链接重新执行 `--add-exit`；`rules.conf` 和策略映射会保留，出口补齐后可重新 `--set-rules` / `--set-exit smart`。
+
+### WhatsApp Patch 如何限制风险？
+
+wa-shim 仅对 `172.22.0.0/16` 和 loopback 来源启用 ED/WA 分流，公网来源不会被转发到 WhatsApp。未知协议、TLS ClientHello、短包和超时都 fail-open 到本机 sniproxy；上游 DNS 回复若等于网关自身 IP 会被拒绝，避免劫持环路。wa-shim 以 `pxout` 用户运行，因此 WhatsApp 消息连接跟随当前 mihomo/WireGuard 出口。
+
 ### 如何卸载？
 
 ```bash
@@ -421,7 +447,8 @@ sudo ./install.sh --uninstall
 当前 main 分支的重要行为：
 
 - 私网客户端非 ChinaList IPv4 查询默认返回服务器 IP，国际 HTTP/HTTPS/QUIC 默认进入网关。
-- sing-box URI 出口默认锁定 `1.12.25`，用于多协议 TUN 出口和智能分流。
+- mihomo URI 出口默认锁定 `1.19.28`，用于多协议 TUN 出口和原生 rule-provider 智能分流。
+- iOS WhatsApp 无 SNI 补丁内置启用，普通 TLS 仍 fail-open 到 sniproxy。
 - Telegram Bot 支持直接粘贴节点链接添加出口，并从节点备注提取出口名。
 - 添加出口后，Bot 出口列表会立即刷新；新出口 TUN 设备进入 `UP` 状态后才写路由，避免刚添加后立刻切换失败。
 - 保留 GFWList / ChinaList 更新、本地 GFWList 补充、iOS 描述文件、低内存模式和 Telegram 管理面板。

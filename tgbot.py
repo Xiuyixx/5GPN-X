@@ -44,6 +44,7 @@ API = "https://api.telegram.org/bot%s/" % TOKEN
 SERVICES = [
     "dnsdist",
     "sniproxy",
+    "wa-shim",
     "quic-proxy",
     "china-dns-race-proxy",
     "proxy-gateway-ios-profile",
@@ -52,6 +53,7 @@ SERVICES = [
 RESTART_SERVICES = [
     "dnsdist",
     "sniproxy",
+    "wa-shim",
     "quic-proxy",
     "china-dns-race-proxy",
     "proxy-gateway-ios-profile.socket",
@@ -832,7 +834,7 @@ def op_show_rules():
 def op_set_rules(text):
     if not (text or "").strip():
         return "规则不能为空。"
-    # Always goes through --set-rules, so sing-box validates before it takes effect.
+    # Always goes through --set-rules, so mihomo validates before commit.
     ok, out = run2(["bash", MGMT, "--set-rules"], inp=text, timeout=180)
     if ok:
         m = re.search(r"\((\d+) rules\)", out)
@@ -848,6 +850,22 @@ def op_add_rule(line):
     txt = _read_file(RULES_PATH)
     newtext = (txt.rstrip("\n") + "\n" + line + "\n") if txt.strip() else (line + "\n")
     return op_set_rules(newtext)
+
+
+def op_add_ruleset(text):
+    parts = (text or "").strip().split(None, 1)
+    if len(parts) != 2:
+        return "请发送：<code>规则集URL 目标</code>，目标可为出口名、分类、direct 或 block。"
+    source, target = parts
+    if not re.match(r"^https?://\S+$", source):
+        return "规则集必须是 http(s) URL。"
+    if not target.strip() or any(ch in target for ch in "\r\n,"):
+        return "规则集目标无效。"
+    ok, out = run2(["bash", MGMT, "--add-ruleset", source, target.strip()], timeout=600)
+    if ok:
+        return "✅ <b>规则集已添加</b>\n<code>%s</code> → <b>%s</b>" % (
+            html.escape(source), html.escape(target.strip()))
+    return "❌ <b>规则集添加失败</b>\n%s" % html.escape(_reason(out))
 
 
 def op_del_rule(num):
@@ -969,6 +987,7 @@ def rules_menu():
          {"text": "✏️ 设置规则", "callback_data": "rules:set"}],
         [{"text": "➕ 添加一条", "callback_data": "rules:add"},
          {"text": "🗑 删除一条", "callback_data": "rules:del"}],
+        [{"text": "🔗 添加规则集", "callback_data": "rules:addset"}],
         [{"text": "⚡ 启用智能分流", "callback_data": "rules:enable"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
@@ -1102,6 +1121,11 @@ def handle_message(msg):
         send(chat_id, "⏳ 正在添加规则…")
         send(chat_id, op_add_rule(text), rules_menu())
         return
+    if state and state.get("action") == "rules_addset":
+        PENDING.pop(chat_id, None)
+        send(chat_id, "⏳ 正在校验并添加规则集…")
+        send_async(chat_id, lambda: op_add_ruleset(text), rules_menu())
+        return
     if state and state.get("action") == "rules_del":
         PENDING.pop(chat_id, None)
         send(chat_id, op_del_rule(text), rules_menu())
@@ -1178,6 +1202,13 @@ def handle_callback(cb):
     elif data == "rules:add":
         PENDING[chat_id] = {"action": "rules_add"}
         edit(cb, "发送要追加的<b>一条</b>规则，例如：\n<code>DOMAIN-SUFFIX,youtube.com,att</code>\n发送 /cancel 取消。")
+    elif data == "rules:addset":
+        PENDING[chat_id] = {"action": "rules_addset"}
+        edit(cb,
+             "发送规则集 URL 和目标，中间用空格分隔。\n"
+             "示例：\n<code>https://example.com/openai.mrs att</code>\n\n"
+             "支持 mihomo <code>.mrs</code>、Clash YAML 和纯文本规则集；目标可为出口名、分类、"
+             "<code>direct</code> 或 <code>block</code>。发送 /cancel 取消。")
     elif data == "rules:del":
         PENDING[chat_id] = {"action": "rules_del"}
         edit(cb, op_show_rules() + "\n\n发送要删除的<b>序号</b>，或 /cancel 取消。")

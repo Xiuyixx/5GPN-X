@@ -30,17 +30,17 @@ if [[ "${install}" != *'systemctl restart china-dns-race-proxy'* ]]; then
     exit 1
 fi
 
-if [[ "${install}" != *'for svc in dnsdist sniproxy quic-proxy china-dns-race-proxy'* ]]; then
+if [[ "${install}" != *'for svc in dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy'* ]]; then
     echo "install.sh --status must include china-dns-race-proxy." >&2
     exit 1
 fi
 
-if [[ "${install}" != *'systemctl stop dnsdist sniproxy quic-proxy china-dns-race-proxy proxy-gateway-ios-profile'* ]]; then
+if [[ "${install}" != *'systemctl stop dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile'* ]]; then
     echo "install.sh --uninstall must stop china-dns-race-proxy." >&2
     exit 1
 fi
 
-if [[ "${install}" != *'rm -f /etc/systemd/system/{sniproxy,quic-proxy,china-dns-race-proxy,'* ]]; then
+if [[ "${install}" != *'rm -f /etc/systemd/system/{sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,'* ]]; then
     echo "install.sh --uninstall must remove china-dns-race-proxy.service." >&2
     exit 1
 fi

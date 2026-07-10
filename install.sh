@@ -24,7 +24,7 @@ EXIT_USER="pxout"
 EXIT_MARK="0x1"
 EXIT_TABLE="100"
 WG_DIR="/etc/wireguard"
-# Exit types: wireguard (wg-quick) | sing-box proxy types (tun2socks).
+# Exit types: wireguard (wg-quick) | mihomo proxy types (TUN egress).
 EXITS_DIR="/etc/proxy-gateway/exits"
 RULES_FILE="/etc/proxy-gateway/rules.conf"
 POLICY_MAP="/etc/proxy-gateway/policy-map.conf"
@@ -32,19 +32,19 @@ KEEP_FILE="/etc/proxy-gateway/keep-categories"
 DIRECT_FILE="/etc/proxy-gateway/direct-categories"
 RULES_DEFAULT="/etc/proxy-gateway/rules-default.conf"
 RULESET_CACHE="/etc/proxy-gateway/rulesets"
-SINGBOX_BIN="/opt/proxy-gateway/bin/sing-box"
-SINGBOX_CFG_GEN="/opt/proxy-gateway/bin/singbox-exit-config.py"
-SINGBOX_ROUTER_GEN="/opt/proxy-gateway/bin/singbox-router-config.py"
+MIHOMO_BIN="/opt/proxy-gateway/bin/mihomo"
+MIHOMO_CFG_GEN="/opt/proxy-gateway/bin/mihomo-exit-config.py"
+MIHOMO_ROUTER_GEN="/opt/proxy-gateway/bin/mihomo-router-config.py"
 RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
-SINGBOX_VERSION_DEFAULT="1.12.25"
+MIHOMO_VERSION_DEFAULT="1.19.28"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
 DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
 
 bootstrap_from_repo_if_needed() {
     local required=(
         install.sh renew-hook.sh sniproxy.conf quic-proxy.go china-dns-race-proxy.go
-        dnsdist.conf.template update-rules.sh ios-http.py tgbot.py rules-import.py
-        singbox-exit-config.py singbox-router-config.py rules-default.conf
+        dnsdist.conf.template update-rules.sh ios-http.py tgbot.py wa-shim.py rules-import.py
+        mihomo-exit-config.py mihomo-router-config.py rules-default.conf
     )
     local missing=0 f tmpdir
 
@@ -402,7 +402,7 @@ Options:
   --add-exit <name> [wg.conf | socks5://... | ss://...]
                  Register an egress exit. Accepts a WireGuard client config
                  (file/stdin/paste) OR a SOCKS5 / Shadowsocks(2022) URI. The
-                 socks/ss types use a sing-box TUN engine (auto-installed).
+                 URI types use a locked mihomo TUN engine (auto-installed).
   --set-exit <name|local|smart>
                  Switch proxy egress to <name>, 'local' for direct egress, or
                  'smart' for rule-based per-domain routing (see --set-rules).
@@ -413,6 +413,10 @@ Options:
                  'smart' exit: route domains to exits / direct / block, with
                  local lists, remote rule-set URLs, geosite/geoip.
   --show-rules   Print the current smart-routing rules.
+  --add-rule <rule>
+                 Add one top-priority smart rule and rebuild atomically.
+  --add-ruleset <url|path> <exit|category|direct|block>
+                 Add a mihomo rule-provider source and rebuild atomically.
   --import-rules <rule-list-file>
                  Convert a rule list into smart rules (categories),
                  seed the category->exit policy map, and rebuild the router.
@@ -425,6 +429,8 @@ Options:
   --show-policy  Print the category -> target policy map.
   --setup-tgbot  Install/enable the Telegram control bot (uses TG_BOT_TOKEN /
                  TG_ADMIN_IDS env vars, or prompts interactively).
+  --setup-whatsapp
+                 Install/repair the iOS WhatsApp no-SNI TCP/443 shim.
   --uninstall    Remove all installed components
   -ios          Regenerate iOS DoT profile and QR code
   -h, --help     Show this help
@@ -440,6 +446,7 @@ Environment variables (for non-interactive use):
   EMAIL          Email for Let's Encrypt
   TG_BOT_TOKEN   Telegram bot token; enables the control bot when set
   TG_ADMIN_IDS   Comma-separated Telegram numeric IDs allowed to operate the bot
+  MIHOMO_VERSION Override the locked mihomo version (default: ${MIHOMO_VERSION_DEFAULT})
 EOF
 }
 
@@ -1094,6 +1101,67 @@ EOF
     ok "sniproxy installed"
 }
 
+install_whatsapp_shim() {
+    local shim_dns self_ips
+    info "Installing iOS WhatsApp no-SNI shim..."
+    [[ -f "${SCRIPT_DIR}/wa-shim.py" ]] || { err "wa-shim.py not found in ${SCRIPT_DIR}"; return 1; }
+    mkdir -p "${BASE_DIR}/bin" "${CONF_DIR}"
+    install -m 0755 "${SCRIPT_DIR}/wa-shim.py" "${BASE_DIR}/bin/wa-shim.py"
+
+    # Keep WhatsApp DNS names in the gateway's persistent local supplement so
+    # the weekly GFWList refresh cannot remove the interception.
+    mkdir -p /etc/dnsdist
+    touch /etc/dnsdist/gfwlist-extra-local.txt
+    for domain in whatsapp.net whatsapp.com; do
+        grep -qxF "$domain" /etc/dnsdist/gfwlist-extra-local.txt || echo "$domain" >> /etc/dnsdist/gfwlist-extra-local.txt
+    done
+
+    shim_dns="${REMOTE_DNS:-$(cat "${CONF_DIR}/.remote_dns" 2>/dev/null || echo '1.1.1.1 8.8.8.8')}"
+    self_ips="${PUBLIC_IP:-},127.0.0.1,::1,"
+    # Include every current local address in the shim loop guard. Whitespace is
+    # converted to commas because the systemd EnvironmentFile value is CSV.
+    self_ips+="$(hostname -I 2>/dev/null | tr ' ' ',' | tr -d '\n')"
+    cat > "${CONF_DIR}/wa-shim.env" <<EOF
+WA_SHIM_LISTEN=0.0.0.0
+WA_SHIM_PORT=443
+WA_SHIM_BACKEND=127.0.0.1:8443
+WA_SHIM_WA_HOST=g.whatsapp.net
+WA_SHIM_RESOLVER=${shim_dns%% *},8.8.8.8
+WA_SHIM_SELF_IPS=${self_ips}
+WA_SHIM_ALLOW_CIDR=172.22.0.0/16,127.0.0.0/8
+EOF
+    chmod 600 "${CONF_DIR}/wa-shim.env"
+
+    cat > /etc/systemd/system/wa-shim.service <<EOF
+[Unit]
+Description=5GPN-X iOS WhatsApp no-SNI shim
+After=network-online.target sniproxy.service
+Wants=network-online.target
+Requires=sniproxy.service
+
+[Service]
+Type=simple
+EnvironmentFile=${CONF_DIR}/wa-shim.env
+ExecStart=/usr/bin/python3 ${BASE_DIR}/bin/wa-shim.py
+Restart=always
+RestartSec=2
+User=${EXIT_USER}
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable wa-shim.service 2>/dev/null || true
+    ok "WhatsApp no-SNI shim installed (public :443 -> sniproxy 127.0.0.1:8443)"
+}
+
 # =============================================================================
 # quic-proxy (UDP / QUIC SNI proxy)
 # =============================================================================
@@ -1663,6 +1731,12 @@ restore_reverse_proxy_firewall() {
 
 prepare_certbot_standalone() {
     CERT_STOPPED_SNIPROXY=0
+    CERT_STOPPED_WA_SHIM=0
+    if systemctl is-active --quiet wa-shim 2>/dev/null; then
+        info "Stopping wa-shim temporarily during certificate maintenance..."
+        systemctl stop wa-shim
+        CERT_STOPPED_WA_SHIM=1
+    fi
     if systemctl is-active --quiet sniproxy 2>/dev/null; then
         info "Stopping sniproxy temporarily so certbot can bind TCP/80..."
         systemctl stop sniproxy
@@ -1678,6 +1752,9 @@ cleanup_certbot_standalone() {
         info "Starting sniproxy after certbot..."
         systemctl start sniproxy || warn "sniproxy failed to restart after certbot; run: systemctl status sniproxy"
     fi
+    if [[ "${CERT_STOPPED_WA_SHIM:-0}" == "1" ]]; then
+        systemctl start wa-shim || warn "wa-shim failed to restart after certbot"
+    fi
     return $rc
 }
 
@@ -1688,6 +1765,7 @@ install_certbot_firewall_hooks() {
 #!/bin/bash
 set -e
 systemctl stop sniproxy 2>/dev/null || true
+systemctl stop wa-shim 2>/dev/null || true
 if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
     nft insert rule inet filter input tcp dport 80 accept 2>/dev/null || true
 elif command -v iptables >/dev/null 2>&1; then
@@ -1703,6 +1781,7 @@ elif command -v iptables >/dev/null 2>&1; then
     while iptables -D INPUT -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null; do :; done
 fi
 systemctl start sniproxy 2>/dev/null || true
+systemctl start wa-shim 2>/dev/null || true
 EOF
     chmod +x /usr/local/bin/proxy-gateway-open-cert-http.sh /usr/local/bin/proxy-gateway-restore-firewall.sh
     cp /usr/local/bin/proxy-gateway-open-cert-http.sh /etc/letsencrypt/renewal-hooks/pre/10-proxy-gateway-open-http.sh
@@ -1727,7 +1806,7 @@ ensure_proxy_user() {
 exit_conf_path()    { echo "${WG_DIR}/pgw-${1}.conf"; }       # wireguard config
 exit_iface()        { echo "pgw-${1}"; }                      # device name (wg or TUN)
 exit_type_file()    { echo "${EXITS_DIR}/${1}.type"; }
-exit_singbox_conf() { echo "${EXITS_DIR}/${1}.json"; }
+exit_mihomo_conf()  { echo "${EXITS_DIR}/${1}.yaml"; }
 
 # An exit's type: explicit .type file wins; else inferred from a wg config.
 exit_type() {
@@ -1755,54 +1834,96 @@ list_exit_names() {
     return 0
 }
 
-# Download the locked sing-box 1.12.x build on first need for URI exits.
-ensure_singbox() {
-    [[ -x "${SINGBOX_BIN}" ]] && return 0
-    info "Installing locked sing-box ${SINGBOX_VERSION_DEFAULT} (tun2socks engine for URI exits)..."
+# Download the locked mihomo build on first need for URI exits.
+ensure_mihomo() {
+    [[ -x "${MIHOMO_BIN}" ]] && return 0
+    info "Installing locked mihomo ${MIHOMO_VERSION_DEFAULT} (TUN engine for URI exits)..."
     local ver arch tmp url
-    # Locked by default. Override with SINGBOX_VERSION only when explicitly needed.
-    ver="${SINGBOX_VERSION:-${SINGBOX_VERSION_DEFAULT}}"
+    ver="${MIHOMO_VERSION:-${MIHOMO_VERSION_DEFAULT}}"
     case "$(uname -m)" in
         x86_64) arch=amd64 ;;
         aarch64|arm64) arch=arm64 ;;
-        *) arch=amd64 ;;
+        armv7l) arch=armv7 ;;
+        *) err "Unsupported architecture for mihomo: $(uname -m)"; return 1 ;;
     esac
-    url="https://github.com/SagerNet/sing-box/releases/download/v${ver}/sing-box-${ver}-linux-${arch}.tar.gz"
+    url="https://github.com/MetaCubeX/mihomo/releases/download/v${ver}/mihomo-linux-${arch}-v${ver}.gz"
     tmp="$(mktemp -d)"
-    if ! curl -fsSL --max-time 90 "$url" -o "$tmp/sb.tar.gz"; then
-        rm -rf "$tmp"; err "Failed to download sing-box ${ver}. Set SINGBOX_VERSION=<ver> and retry. URL: $url"; return 1
+    if ! curl -fsSL --max-time 90 "$url" -o "$tmp/mihomo.gz"; then
+        rm -rf "$tmp"; err "Failed to download mihomo ${ver}. Set MIHOMO_VERSION=<ver> and retry. URL: $url"; return 1
     fi
-    tar -xzf "$tmp/sb.tar.gz" -C "$tmp" 2>/dev/null || { rm -rf "$tmp"; err "Failed to extract sing-box archive"; return 1; }
+    if ! gzip -dc "$tmp/mihomo.gz" > "$tmp/mihomo"; then
+        rm -rf "$tmp"; err "Failed to extract mihomo archive"; return 1
+    fi
     mkdir -p "${BASE_DIR}/bin"
-    if ! install -m 0755 "$tmp"/sing-box-*/sing-box "${SINGBOX_BIN}" 2>/dev/null; then
-        rm -rf "$tmp"; err "sing-box binary not found in archive"; return 1
-    fi
+    install -m 0755 "$tmp/mihomo" "${MIHOMO_BIN}"
     rm -rf "$tmp"
-    ok "sing-box ${ver} installed: ${SINGBOX_BIN}"
+    ok "mihomo ${ver} installed: ${MIHOMO_BIN}"
 }
 
-# systemd template that runs sing-box for one socks/shadowsocks exit.
-install_singbox_unit() {
-    cat > /etc/systemd/system/proxy-gateway-singbox@.service <<EOF
+# systemd template that runs mihomo for one URI or smart-routing exit.
+install_mihomo_unit() {
+    cat > /etc/systemd/system/proxy-gateway-mihomo@.service <<EOF
 [Unit]
-Description=Proxy Gateway sing-box exit (%i)
+Description=Proxy Gateway mihomo exit (%i)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${SINGBOX_BIN} run -c ${EXITS_DIR}/%i.json
+ExecStart=${MIHOMO_BIN} -d ${CONF_DIR}/mihomo/%i -f ${EXITS_DIR}/%i.yaml
 # Recreating the TUN drops the table-100 route; re-apply it after (re)start.
 ExecStartPost=-/usr/local/bin/proxy-gateway-apply-exit.sh
 Restart=on-failure
 RestartSec=5
 User=root
 LimitNOFILE=65535
+Environment=SKIP_SYSTEM_IPV6_CHECK=1
+Environment=GOGC=50
+Environment=GOMEMLIMIT=128MiB
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    mkdir -p "${CONF_DIR}/mihomo"
+    # Complete replacement: disable and remove the obsolete sing-box template.
+    systemctl stop 'proxy-gateway-singbox@*.service' 2>/dev/null || true
+    rm -f /etc/systemd/system/proxy-gateway-singbox@.service
+    rm -f "${BASE_DIR}/bin/sing-box" "${BASE_DIR}/bin/singbox-exit-config.py" \
+        "${BASE_DIR}/bin/singbox-router-config.py"
     systemctl daemon-reload
+}
+
+# sing-box JSON does not retain the original share URI, and several protocols
+# cannot be translated back to mihomo losslessly. Preserve the old files for
+# recovery, invalidate those exits, and make the routing state safe. The smart
+# exit is rebuilt separately from rules.conf, which remains untouched.
+migrate_singbox_exits() {
+    shopt -s nullglob
+    local old=0 current_removed=0 f name backup="${EXITS_DIR}/singbox-backup"
+    local current="local"
+    [[ -f "${CONF_DIR}/current-exit" ]] && current="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
+    for f in "${EXITS_DIR}"/*.json; do
+        old=1
+        name="$(basename "$f" .json)"
+        [[ "$name" == "$current" ]] && current_removed=1
+        mkdir -p "$backup"
+        mv "$f" "${backup}/${name}.json"
+        if [[ -f "$(exit_type_file "$name")" ]]; then
+            cp -a "$(exit_type_file "$name")" "${backup}/${name}.type"
+            rm -f "$(exit_type_file "$name")"
+        fi
+    done
+    shopt -u nullglob
+    [[ $old -eq 1 ]] || return 0
+
+    systemctl stop 'proxy-gateway-singbox@*.service' 2>/dev/null || true
+    if [[ $current_removed -eq 1 ]]; then
+        echo local > "${CONF_DIR}/current-exit"
+        ip route flush table "${EXIT_TABLE}" 2>/dev/null || true
+        ip rule del fwmark "${EXIT_MARK}" table "${EXIT_TABLE}" priority "${EXIT_RULE_PRIO}" 2>/dev/null || true
+    fi
+    warn "Legacy sing-box exits were backed up to ${backup}."
+    warn "Re-add URI exits from their original share links; smart rules can then be rebuilt with --set-rules."
 }
 
 # Bring an exit's device up / down by type.
@@ -1813,9 +1934,9 @@ exit_up() {
             command -v wg-quick >/dev/null 2>&1 || { err "wg-quick not installed"; return 1; }
             wg-quick up "pgw-${name}" ;;
         shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router)
-            ensure_singbox || return 1
-            install_singbox_unit
-            systemctl start "proxy-gateway-singbox@${name}.service" ;;
+            ensure_mihomo || return 1
+            install_mihomo_unit
+            systemctl start "proxy-gateway-mihomo@${name}.service" ;;
         *) err "Unknown type for exit '$name'"; return 1 ;;
     esac
 }
@@ -1824,20 +1945,20 @@ exit_down() {
     local name="$1" t; t="$(exit_type "$name")"
     case "$t" in
         wireguard)        wg-quick down "pgw-${name}" 2>/dev/null || true ;;
-        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl stop "proxy-gateway-singbox@${name}.service" 2>/dev/null || true ;;
+        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl stop "proxy-gateway-mihomo@${name}.service" 2>/dev/null || true ;;
     esac
 }
 
 # "host port" of a URI exit's upstream server (empty for wireguard/router).
 exit_server() {
-    local jf; jf="$(exit_singbox_conf "$1")"
+    local jf; jf="$(exit_mihomo_conf "$1")"
     [[ -f "$jf" ]] || return 0
     python3 - "$jf" <<'PY' 2>/dev/null
 import json, sys
 try:
-    o = json.load(open(sys.argv[1]))["outbounds"][0]
+    o = json.load(open(sys.argv[1]))["proxies"][0]
     if o.get("server"):
-        print(o["server"], o.get("server_port", ""))
+        print(o["server"], o.get("port", ""))
 except Exception:
     pass
 PY
@@ -1889,7 +2010,7 @@ check_exits() {
     done < <(list_exit_names)
 }
 
-# Wait (≤5s) for the pgw-<name> device to appear and become UP (sing-box TUN creation is async).
+# Wait (≤5s) for the pgw-<name> device to appear and become UP (mihomo TUN creation is async).
 exit_wait_device() {
     local iface="pgw-${1}" i
     for i in $(seq 1 50); do
@@ -1932,7 +2053,7 @@ etype="wireguard"
 if ! ip link show "${iface}" >/dev/null 2>&1; then
     case "${etype}" in
         wireguard)        wg-quick up "${iface}" 2>/dev/null || { echo "[!] exit '${current}' (wireguard) failed to start"; exit 1; } ;;
-        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl start "proxy-gateway-singbox@${current}.service" 2>/dev/null || { echo "[!] exit '${current}' (${etype}) failed to start"; exit 1; } ;;
+        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl start "proxy-gateway-mihomo@${current}.service" 2>/dev/null || { echo "[!] exit '${current}' (${etype}) failed to start"; exit 1; } ;;
     esac
 fi
 
@@ -1952,12 +2073,12 @@ setup_exit_switching() {
     mkdir -p "${CONF_DIR}"
     [[ -f "${CONF_DIR}/current-exit" ]] || echo "local" > "${CONF_DIR}/current-exit"
 
-    # Install the sing-box config generators (per-exit + smart router).
+    # Install the mihomo config generators (per-exit + smart router).
     mkdir -p "${BASE_DIR}/bin"
-    [[ -f "${SCRIPT_DIR}/singbox-exit-config.py" ]] && \
-        install -m 0755 "${SCRIPT_DIR}/singbox-exit-config.py" "${SINGBOX_CFG_GEN}"
-    [[ -f "${SCRIPT_DIR}/singbox-router-config.py" ]] && \
-        install -m 0755 "${SCRIPT_DIR}/singbox-router-config.py" "${SINGBOX_ROUTER_GEN}"
+    [[ -f "${SCRIPT_DIR}/mihomo-exit-config.py" ]] && \
+        install -m 0755 "${SCRIPT_DIR}/mihomo-exit-config.py" "${MIHOMO_CFG_GEN}"
+    [[ -f "${SCRIPT_DIR}/mihomo-router-config.py" ]] && \
+        install -m 0755 "${SCRIPT_DIR}/mihomo-router-config.py" "${MIHOMO_ROUTER_GEN}"
     [[ -f "${SCRIPT_DIR}/rules-import.py" ]] && \
         install -m 0755 "${SCRIPT_DIR}/rules-import.py" "${RULES_IMPORT}"
 
@@ -1965,6 +2086,9 @@ setup_exit_switching() {
     mkdir -p "$(dirname "${RULES_DEFAULT}")"
     [[ -f "${SCRIPT_DIR}/rules-default.conf" ]] && \
         install -m 0644 "${SCRIPT_DIR}/rules-default.conf" "${RULES_DEFAULT}"
+
+    install_mihomo_unit
+    migrate_singbox_exits
 
     install_apply_exit_helper
 
@@ -2004,7 +2128,7 @@ list_exits() {
             wireguard)
                 detail="$(grep -i '^[[:space:]]*Endpoint' "$(exit_conf_path "$n")" 2>/dev/null | head -n1 | sed 's/.*=[[:space:]]*//')" ;;
             shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http)
-                detail="$(grep -oE '"server": *"[^"]+"|"server_port": *[0-9]+' "$(exit_singbox_conf "$n")" 2>/dev/null | head -n2 | sed 's/.*: *//; s/"//g' | paste -sd: -)" ;;
+                detail="$(grep -oE '"server": *"[^"]+"|"port": *[0-9]+' "$(exit_mihomo_conf "$n")" 2>/dev/null | head -n2 | sed 's/.*: *//; s/"//g' | paste -sd: -)" ;;
             router)
                 detail="rules:$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)" ;;
             *) detail="?" ;;
@@ -2043,7 +2167,7 @@ PYNAME
         cat > "$tmp"
     fi
 
-    # A proxy URI -> multi-protocol URI exit via sing-box. Grab the WHOLE first
+    # A proxy URI -> multi-protocol URI exit via mihomo. Grab the WHOLE first
     # scheme line (not just a non-space token) so a single-line password can
     # contain spaces and other special chars; only CR / surrounding space trimmed.
     local uri type px_user px_pass px_rdns
@@ -2070,19 +2194,22 @@ PYNAME
         # Optional explicit remote-DNS toggle (socks5h:// already implies it).
         px_rdns="$(grep -iE '^[[:space:]]*remote-?dns[[:space:]]*[:=]' "$tmp" | head -n1 | sed -E 's/^[[:space:]]*[^:=]+[:=][[:space:]]*//' | tr -d '\r' || true)"
         rm -f "$tmp"
-        [[ -f "${SINGBOX_CFG_GEN}" ]] || { err "Config generator missing: ${SINGBOX_CFG_GEN}"; exit 1; }
-        ensure_singbox || exit 1
-        local json gen_err
-        json="$(exit_singbox_conf "$name")"
-        if ! gen_err="$(PGW_USER="$px_user" PGW_PASS="$px_pass" PGW_REMOTE_DNS="$px_rdns" python3 "${SINGBOX_CFG_GEN}" "$name" "$uri" 2>&1 >"${json}.tmp")"; then
-            err "Failed to parse URI: ${gen_err}"; rm -f "${json}.tmp"; exit 1
+        [[ -f "${MIHOMO_CFG_GEN}" ]] || { err "Config generator missing: ${MIHOMO_CFG_GEN}"; exit 1; }
+        ensure_mihomo || exit 1
+        local yaml gen_err
+        yaml="$(exit_mihomo_conf "$name")"
+        if ! gen_err="$(PGW_USER="$px_user" PGW_PASS="$px_pass" PGW_REMOTE_DNS="$px_rdns" python3 "${MIHOMO_CFG_GEN}" "$name" "$uri" 2>&1 >"${yaml}.tmp")"; then
+            err "Failed to parse URI: ${gen_err}"; rm -f "${yaml}.tmp"; exit 1
         fi
-        install_singbox_unit
-        if ! "${SINGBOX_BIN}" check -c "${json}.tmp" >/dev/null 2>&1; then
-            err "sing-box rejected the generated config:"; "${SINGBOX_BIN}" check -c "${json}.tmp" 2>&1 | sed 's/^/    /' >&2
-            rm -f "${json}.tmp"; exit 1
+        install_mihomo_unit
+        mkdir -p "${CONF_DIR}/mihomo/${name}"
+        if ! "${MIHOMO_BIN}" -d "${CONF_DIR}/mihomo/${name}" -t -f "${yaml}.tmp" >/dev/null 2>&1; then
+            err "mihomo rejected the generated config:"; "${MIHOMO_BIN}" -d "${CONF_DIR}/mihomo/${name}" -t -f "${yaml}.tmp" 2>&1 | sed 's/^/    /' >&2
+            rm -f "${yaml}.tmp"; exit 1
         fi
-        install -m 600 "${json}.tmp" "${json}"; rm -f "${json}.tmp"
+        install -m 600 "${yaml}.tmp" "${yaml}"; rm -f "${yaml}.tmp"
+        printf '%s\n' "$uri" > "${EXITS_DIR}/${name}.uri"
+        chmod 600 "${EXITS_DIR}/${name}.uri"
         echo "$type" > "$(exit_type_file "$name")"
         ok "Exit '$name' added (type: $type)"
         info "Activate it with: $0 --set-exit $name"
@@ -2119,7 +2246,9 @@ del_exit() {
         set_exit local
     fi
     exit_down "$name"
-    rm -f "$(exit_conf_path "$name")" "$(exit_singbox_conf "$name")" "$(exit_type_file "$name")"
+    rm -f "$(exit_conf_path "$name")" "$(exit_mihomo_conf "$name")" \
+        "$(exit_type_file "$name")" "${EXITS_DIR}/${name}.uri"
+    rm -rf "${CONF_DIR}/mihomo/${name}"
     ok "Exit '$name' removed"
 }
 
@@ -2159,34 +2288,35 @@ set_exit() {
 }
 
 # Regenerate the 'smart' router config from RULES_FILE + POLICY_MAP, validate it
-# with sing-box, and install it (reloading if smart is the active exit).
+# with mihomo, and install it (reloading if smart is the active exit).
 regen_smart() {
     [[ -f "${RULES_FILE}" ]] || { err "No rules yet. Use --set-rules or --import-rules first."; exit 1; }
-    [[ -f "${SINGBOX_ROUTER_GEN}" ]] || { err "Router generator missing: ${SINGBOX_ROUTER_GEN}"; exit 1; }
+    [[ -f "${MIHOMO_ROUTER_GEN}" ]] || { err "Router generator missing: ${MIHOMO_ROUTER_GEN}"; exit 1; }
     ensure_proxy_user
     mkdir -p "${EXITS_DIR}" "${RULESET_CACHE}"; chmod 700 "${EXITS_DIR}"
     [[ -x /usr/local/bin/proxy-gateway-apply-exit.sh ]] || setup_exit_switching >/dev/null
-    ensure_singbox || exit 1
-    install_singbox_unit
+    ensure_mihomo || exit 1
+    install_mihomo_unit
 
-    info "Building smart router config (fetching/compiling rule-sets — may take a while)..."
+    info "Building smart mihomo config and rule providers..."
     # Effective rules = built-in defaults (e.g. speedtest) first, then user rules.
     local eff; eff="$(mktemp)"
     [[ -f "${RULES_DEFAULT}" ]] && cat "${RULES_DEFAULT}" >> "$eff"
     cat "${RULES_FILE}" >> "$eff"
-    local json gen_err; json="$(exit_singbox_conf smart)"
+    local yaml gen_err; yaml="$(exit_mihomo_conf smart)"
     if ! gen_err="$(EXITS_DIR="${EXITS_DIR}" WG_DIR="${WG_DIR}" PGW_RULESET_CACHE="${RULESET_CACHE}" \
-                    PGW_POLICY_MAP="${POLICY_MAP}" SINGBOX_BIN="${SINGBOX_BIN}" \
-                    python3 "${SINGBOX_ROUTER_GEN}" "$eff" 2>&1 >"${json}.tmp")"; then
-        err "Rules error: ${gen_err}"; rm -f "${json}.tmp" "$eff"; exit 1
+                    PGW_POLICY_MAP="${POLICY_MAP}" \
+                    python3 "${MIHOMO_ROUTER_GEN}" "$eff" 2>&1 >"${yaml}.tmp")"; then
+        err "Rules error: ${gen_err}"; rm -f "${yaml}.tmp" "$eff"; exit 1
     fi
     rm -f "$eff"
-    if ! "${SINGBOX_BIN}" check -c "${json}.tmp" >/dev/null 2>&1; then
-        err "sing-box rejected the generated router config:"
-        "${SINGBOX_BIN}" check -c "${json}.tmp" 2>&1 | sed 's/^/    /' >&2
-        rm -f "${json}.tmp"; exit 1
+    mkdir -p "${CONF_DIR}/mihomo/smart"
+    if ! "${MIHOMO_BIN}" -d "${CONF_DIR}/mihomo/smart" -t -f "${yaml}.tmp" >/dev/null 2>&1; then
+        err "mihomo rejected the generated router config:"
+        "${MIHOMO_BIN}" -d "${CONF_DIR}/mihomo/smart" -t -f "${yaml}.tmp" 2>&1 | sed 's/^/    /' >&2
+        rm -f "${yaml}.tmp"; exit 1
     fi
-    install -m 600 "${json}.tmp" "${json}"; rm -f "${json}.tmp"
+    install -m 600 "${yaml}.tmp" "${yaml}"; rm -f "${yaml}.tmp"
     echo router > "$(exit_type_file smart)"
 
     local n; n="$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)"
@@ -2194,7 +2324,7 @@ regen_smart() {
     local cur="local"
     [[ -f "${CONF_DIR}/current-exit" ]] && cur="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
     if [[ "$cur" == "smart" ]]; then
-        systemctl restart "proxy-gateway-singbox@smart.service" 2>/dev/null || true
+        systemctl restart "proxy-gateway-mihomo@smart.service" 2>/dev/null || true
         /usr/local/bin/proxy-gateway-apply-exit.sh >/dev/null 2>&1 || true
         ok "Reloaded the active smart router."
     else
@@ -2219,9 +2349,65 @@ set_rules() {
         echo "Paste routing rules for the 'smart' exit, end with Ctrl-D:"
         cat > "$tmp"
     fi
+    local old old_policy; old="$(mktemp)"; old_policy="$(mktemp)"
+    if [[ -f "${RULES_FILE}" ]]; then
+        cp -a "${RULES_FILE}" "$old"
+    else
+        : > "$old"
+    fi
+    if [[ -f "${POLICY_MAP}" ]]; then
+        cp -a "${POLICY_MAP}" "$old_policy"
+    else
+        : > "$old_policy"
+    fi
     install -m 644 "$tmp" "${RULES_FILE}"; rm -f "$tmp"
     init_policy_map
-    regen_smart
+    if ! (regen_smart); then
+        install -m 644 "$old" "${RULES_FILE}"
+        install -m 644 "$old_policy" "${POLICY_MAP}"
+        (regen_smart) >/dev/null 2>&1 || true
+        rm -f "$old" "$old_policy"
+        err "Rules rejected; previous rules restored"
+        exit 1
+    fi
+    rm -f "$old" "$old_policy"
+}
+
+# Add a single highest-priority rule without replacing the existing file. The
+# full config is generated and validated before the new rules file is committed.
+add_rule() {
+    local rule="${1:-}" old tmp
+    [[ -n "$rule" ]] || { err "Usage: $0 --add-rule <TYPE,value,policy>"; exit 1; }
+    [[ "$rule" != *$'\n'* && "$rule" != *$'\r'* ]] || { err "A rule must be one line"; exit 1; }
+    mkdir -p "$(dirname "${RULES_FILE}")"
+    old="$(mktemp)"; tmp="$(mktemp)"
+    if [[ -f "${RULES_FILE}" ]]; then
+        cp -a "${RULES_FILE}" "$old"
+    else
+        : > "$old"
+    fi
+    { printf '%s\n' "$rule"; cat "$old"; } > "$tmp"
+    install -m 644 "$tmp" "${RULES_FILE}"
+    if ! (regen_smart); then
+        install -m 644 "$old" "${RULES_FILE}"
+        init_policy_map
+        (regen_smart) >/dev/null 2>&1 || true
+        rm -f "$old" "$tmp"
+        err "Rule rejected; previous rules restored"
+        exit 1
+    fi
+    rm -f "$old" "$tmp"
+}
+
+add_ruleset() {
+    local source="${1:-}" policy="${2:-}"
+    [[ -n "$source" && -n "$policy" ]] || { err "Usage: $0 --add-ruleset <url|path> <exit|category|direct|block>"; exit 1; }
+    case "$source" in
+        http://*|https://*) ;;
+        /*) [[ -f "$source" ]] || { err "Rule-set file not found: $source"; exit 1; } ;;
+        *) err "Rule-set source must be an http(s) URL or absolute local path"; exit 1 ;;
+    esac
+    add_rule "RULE-SET,${source},${policy}"
 }
 
 # Import a full rule list: convert -> rules.conf, seed the policy map,
@@ -2250,18 +2436,30 @@ import_rules() {
         info "Forcing to direct: ${direct}"
     fi
 
+    local old_rules old_policy
+    old_rules="$(mktemp)"; old_policy="$(mktemp)"
+    [[ -f "${RULES_FILE}" ]] && cp -a "${RULES_FILE}" "$old_rules" || : > "$old_rules"
+    [[ -f "${POLICY_MAP}" ]] && cp -a "${POLICY_MAP}" "$old_policy" || : > "$old_policy"
     info "Converting rule list..."
     PGW_KEEP_CATEGORIES="$keep" PGW_DIRECT_CATEGORIES="$direct" python3 "${RULES_IMPORT}" "$src" \
         2>/tmp/pgw-import.err >"${RULES_FILE}.tmp" || true
     if [[ ! -s "${RULES_FILE}.tmp" ]]; then
-        err "Conversion produced no rules:"; sed 's/^/    /' /tmp/pgw-import.err >&2; rm -f "${RULES_FILE}.tmp"; exit 1
+        err "Conversion produced no rules:"; sed 's/^/    /' /tmp/pgw-import.err >&2; rm -f "${RULES_FILE}.tmp" "$old_rules" "$old_policy"; exit 1
     fi
     install -m 644 "${RULES_FILE}.tmp" "${RULES_FILE}"; rm -f "${RULES_FILE}.tmp"
     grep -E '^(converted|CATEGORIES)' /tmp/pgw-import.err | sed 's/^/[INFO] /'
 
     init_policy_map
     info "Categories were seeded in ${POLICY_MAP} (edit on the bot or with --set-policy)."
-    regen_smart
+    if ! (regen_smart); then
+        install -m 644 "$old_rules" "${RULES_FILE}"
+        install -m 644 "$old_policy" "${POLICY_MAP}"
+        (regen_smart) >/dev/null 2>&1 || true
+        rm -f "$old_rules" "$old_policy"
+        err "Imported rules rejected; previous rules and policy restored"
+        exit 1
+    fi
+    rm -f "$old_rules" "$old_policy"
 }
 
 # Rebuild POLICY_MAP to match the current rules: keep existing mappings for
@@ -2291,7 +2489,7 @@ init_policy_map() {
 }
 
 set_policy() {
-    local cat="${1:-}" target="${2:-}"
+    local cat="${1:-}" target="${2:-}" old
     [[ -z "$cat" || -z "$target" ]] && { err "Usage: $0 --set-policy <category> <exit|direct|block>"; exit 1; }
     # Validate target.
     case "$target" in
@@ -2299,12 +2497,20 @@ set_policy() {
         *) exit_exists "$target" || { err "Unknown target '$target' (use an exit name, direct, or block)"; exit 1; } ;;
     esac
     mkdir -p "$(dirname "${POLICY_MAP}")"; touch "${POLICY_MAP}"
+    old="$(mktemp)"; cp -a "${POLICY_MAP}" "$old"
     # Remove existing mapping for this category, then add the new one.
     grep -vF "${cat}=" "${POLICY_MAP}" > "${POLICY_MAP}.tmp" 2>/dev/null || true
     mv "${POLICY_MAP}.tmp" "${POLICY_MAP}"
     printf '%s=%s\n' "$cat" "$target" >> "${POLICY_MAP}"
+    if ! (regen_smart); then
+        install -m 644 "$old" "${POLICY_MAP}"
+        (regen_smart) >/dev/null 2>&1 || true
+        rm -f "$old"
+        err "Policy rejected; previous policy restored"
+        exit 1
+    fi
+    rm -f "$old"
     ok "Mapped category '$cat' -> $target"
-    regen_smart
 }
 
 show_policy() {
@@ -2329,9 +2535,12 @@ del_policy() {
 # Rename a category (rule group): update the policy map key AND every rule whose
 # target is that category, then rebuild — all in one pass.
 rename_policy() {
-    local old="${1:-}" new="${2:-}"
+    local old="${1:-}" new="${2:-}" old_rules old_map
     [[ -z "$old" || -z "$new" ]] && { err "Usage: $0 --rename-policy <old> <new>"; exit 1; }
     [[ "$new" =~ ^[A-Za-z0-9_-]+$ || "$new" =~ [^[:ascii:]] ]] || { err "Invalid new name"; exit 1; }
+    old_rules="$(mktemp)"; old_map="$(mktemp)"
+    [[ -f "${RULES_FILE}" ]] && cp -a "${RULES_FILE}" "$old_rules" || : > "$old_rules"
+    [[ -f "${POLICY_MAP}" ]] && cp -a "${POLICY_MAP}" "$old_map" || : > "$old_map"
     if [[ -f "${POLICY_MAP}" ]]; then
         awk -F= -v o="$old" -v n="$new" 'BEGIN{OFS="="} $1==o{$1=n} {print}' "${POLICY_MAP}" > "${POLICY_MAP}.tmp" \
             && mv "${POLICY_MAP}.tmp" "${POLICY_MAP}"
@@ -2342,8 +2551,16 @@ rename_policy() {
             { k=split($0,a,","); if(a[k]==o){ a[k]=n; line=a[1]; for(i=2;i<=k;i++) line=line","a[i]; print line } else print $0 }
         ' "${RULES_FILE}" > "${RULES_FILE}.tmp" && mv "${RULES_FILE}.tmp" "${RULES_FILE}"
     fi
+    if ! (regen_smart); then
+        install -m 644 "$old_rules" "${RULES_FILE}"
+        install -m 644 "$old_map" "${POLICY_MAP}"
+        (regen_smart) >/dev/null 2>&1 || true
+        rm -f "$old_rules" "$old_map"
+        err "Rename rejected; previous rules and policy restored"
+        exit 1
+    fi
+    rm -f "$old_rules" "$old_map"
     ok "Renamed rule group '$old' -> '$new'"
-    regen_smart
 }
 
 # One-click: route a single domain to a target, handling BOTH layers —
@@ -2484,6 +2701,7 @@ start_services() {
     systemctl restart china-dns-race-proxy || { err "china-dns-race-proxy failed to start"; journalctl -u china-dns-race-proxy --no-pager -n 20; exit 1; }
     systemctl restart dnsdist || { err "dnsdist failed to start"; journalctl -u dnsdist --no-pager -n 20; exit 1; }
     systemctl restart sniproxy || { err "sniproxy failed to start"; journalctl -u sniproxy --no-pager -n 20; exit 1; }
+    systemctl restart wa-shim || { err "wa-shim failed to start"; journalctl -u wa-shim --no-pager -n 20; exit 1; }
     systemctl restart quic-proxy || { err "quic-proxy failed to start"; journalctl -u quic-proxy --no-pager -n 20; exit 1; }
     ok "All services started"
 }
@@ -2534,7 +2752,7 @@ show_status() {
     echo "=========================================="
     echo "      Proxy Gateway Status"
     echo "=========================================="
-    for svc in dnsdist sniproxy quic-proxy china-dns-race-proxy; do
+    for svc in dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy; do
         status=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
         if [[ "$status" == "active" ]]; then
             echo -e "$svc: ${GREEN}running${NC}"
@@ -2583,14 +2801,17 @@ do_uninstall() {
         wg-quick down "$(basename "$f" .conf)" 2>/dev/null || true
     done
     for f in "${EXITS_DIR}"/*.type; do
+        systemctl stop "proxy-gateway-mihomo@$(basename "$f" .type).service" 2>/dev/null || true
         systemctl stop "proxy-gateway-singbox@$(basename "$f" .type).service" 2>/dev/null || true
     done
     shopt -u nullglob
 
-    systemctl stop dnsdist sniproxy quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
-    systemctl disable dnsdist sniproxy quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
-    rm -f /etc/systemd/system/{sniproxy,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-dnsdist-rules,proxy-gateway-exit,proxy-gateway-tgbot}.*
-    rm -f /etc/systemd/system/proxy-gateway-ios-profile@.service /etc/systemd/system/proxy-gateway-singbox@.service
+    systemctl stop dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
+    systemctl disable dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
+    rm -f /etc/systemd/system/{sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-dnsdist-rules,proxy-gateway-exit,proxy-gateway-tgbot}.*
+    rm -f /etc/systemd/system/proxy-gateway-ios-profile@.service \
+        /etc/systemd/system/proxy-gateway-mihomo@.service \
+        /etc/systemd/system/proxy-gateway-singbox@.service
     rm -rf /etc/systemd/system/quic-proxy.service.d /etc/systemd/system/china-dns-race-proxy.service.d
     systemctl daemon-reload
 
@@ -2828,6 +3049,7 @@ set_custom_dns() {
         "${CONF_DIR}/.overseas_private_dns" \
         "${CONF_DIR}/.overseas_public_dns" \
         "${CONF_DIR}/.sniproxy_dns" \
+        "${CONF_DIR}/wa-shim.env" \
         /etc/dnsdist/.remote_dns \
         /etc/dnsdist/.local_dns \
         /etc/dnsdist/.overseas_dns \
@@ -2854,6 +3076,7 @@ set_custom_dns() {
             "${CONF_DIR}/.overseas_private_dns" \
             "${CONF_DIR}/.overseas_public_dns" \
             "${CONF_DIR}/.sniproxy_dns" \
+            "${CONF_DIR}/wa-shim.env" \
             /etc/dnsdist/.remote_dns \
             /etc/dnsdist/.local_dns \
             /etc/dnsdist/.overseas_dns \
@@ -2889,6 +3112,10 @@ set_custom_dns() {
     echo "$remote_dns" > /etc/dnsdist/.overseas_public_dns
     echo "$remote_dns" > /etc/dnsdist/.sniproxy_dns
 
+    if [[ -f "${CONF_DIR}/wa-shim.env" ]]; then
+        sed -i -E "s#^WA_SHIM_RESOLVER=.*#WA_SHIM_RESOLVER=${remote_dns%% *},8.8.8.8#" "${CONF_DIR}/wa-shim.env"
+    fi
+
     if ! rewrite_sniproxy_dns "$remote_dns"; then
         restore_dns_backup
         rm -rf "$backup_dir"
@@ -2920,6 +3147,7 @@ set_custom_dns() {
         fi
     fi
     systemctl restart sniproxy 2>/dev/null || true
+    systemctl restart wa-shim 2>/dev/null || true
     systemctl restart china-dns-race-proxy 2>/dev/null || true
     rm -rf "$backup_dir"
     ok "DNS upstreams updated"
@@ -2950,6 +3178,7 @@ main_install() {
     install_cert
     configure_dns_upstreams
     install_sniproxy
+    install_whatsapp_shim
     install_quic_proxy
     install_china_dns_race_proxy
     install_dnsdist
@@ -3022,6 +3251,13 @@ case "${1:-}" in
         check_root
         set_custom_dns "${2:-}" "${3:-}" "${4:-}"
         ;;
+    --setup-whatsapp)
+        check_root
+        get_public_ip
+        ensure_proxy_user
+        install_whatsapp_shim
+        systemctl restart sniproxy wa-shim
+        ;;
     --list-exits)
         list_exits
         ;;
@@ -3040,6 +3276,14 @@ case "${1:-}" in
     --set-rules)
         check_root
         set_rules "${2:-}"
+        ;;
+    --add-rule)
+        check_root
+        add_rule "${2:-}"
+        ;;
+    --add-ruleset)
+        check_root
+        add_ruleset "${2:-}" "${3:-}"
         ;;
     --import-rules)
         check_root
