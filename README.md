@@ -428,7 +428,7 @@ curl -I --resolve youtube.com:443:127.0.0.1 https://youtube.com
 
 ### 从旧 sing-box 版本升级要注意什么？
 
-这是一次内核级迁移。安装器会停用旧 sing-box 服务，把旧 JSON 和类型文件备份到 `/etc/proxy-gateway/exits/singbox-backup/`，并安全切回 `local`。旧 JSON 没有保留原始分享链接，部分协议无法无损反推，因此 URI 出口需要用原节点链接重新执行 `--add-exit`；`rules.conf` 和策略映射会保留，出口补齐后可重新 `--set-rules` / `--set-exit smart`。
+这是一次内核级迁移。安装器会停用并删除旧 sing-box 服务和二进制，把旧 JSON 与类型文件备份到 `/etc/proxy-gateway/exits/singbox-backup/`。只有当前正在使用的出口属于这些失效旧配置时才会回退到 `local`；当前 WireGuard 出口不受影响。旧 JSON 没有保留原始分享链接，部分协议无法无损反推，因此 URI 出口需要用原节点链接重新执行 `--add-exit`；`rules.conf` 和策略映射会保留，出口补齐后可重新执行 `--set-rules` / `--set-exit smart`。
 
 ### WhatsApp Patch 如何限制风险？
 

@@ -399,10 +399,11 @@ Options:
                  is used for ChinaList direct resolution.
   --list-exits   List configured egress exits and which one is active
   --check-exits  Test reachability of each exit's upstream node (UP/DOWN)
-  --add-exit <name> [wg.conf | socks5://... | ss://...]
+  --add-exit <name> [wg.conf | proxy-uri]
                  Register an egress exit. Accepts a WireGuard client config
-                 (file/stdin/paste) OR a SOCKS5 / Shadowsocks(2022) URI. The
-                 URI types use a locked mihomo TUN engine (auto-installed).
+                 (file/stdin/paste) OR ss/vmess/trojan/vless/hysteria2/tuic/
+                 anytls/socks/http URI. URI types use the locked mihomo TUN
+                 engine (auto-installed).
   --set-exit <name|local|smart>
                  Switch proxy egress to <name>, 'local' for direct egress, or
                  'smart' for rule-based per-domain routing (see --set-rules).
@@ -2163,7 +2164,7 @@ PYNAME
     elif [[ ! -t 0 ]]; then
         cat > "$tmp"
     else
-        echo "Paste a WireGuard config OR a socks5://... / ss://... URI for '$name', end with Ctrl-D:"
+        echo "Paste a WireGuard config OR a supported proxy URI for '$name', end with Ctrl-D:"
         cat > "$tmp"
     fi
 
@@ -3218,8 +3219,8 @@ main_install() {
     echo "  $0 --renew-cert"
     echo "  $0 -ios"
     echo "  $0 --list-exits"
-    echo "  $0 --add-exit <name> <wg.conf|socks5://...|ss://...>"
-    echo "  $0 --set-exit <name|local>"
+    echo "  $0 --add-exit <name> <wg.conf|proxy-uri>"
+    echo "  $0 --set-exit <name|local|smart>"
     echo "  $0 --setup-tgbot                 # 配置/启用 Telegram 控制 Bot"
     echo "  $0 --uninstall"
     echo "=========================================="

@@ -86,6 +86,9 @@ done
 [[ "${install_body}" == *'ip route replace default dev'* ]] || fail "exit must route through pgw device"
 [[ "${install_body}" != *'SINGBOX_VERSION_DEFAULT'* ]] || fail "sing-box runtime must be removed"
 [[ "${install_body}" != *'ensure_singbox()'* ]] || fail "sing-box runtime function must be removed"
+for scheme in vmess trojan vless hysteria2 tuic anytls socks http; do
+    [[ "${install_body}" == *"$scheme"* ]] || fail "install help/runtime must document $scheme exits"
+done
 [[ "${install_body}" == *'[[ $current_removed -eq 1 ]]'* ]] || fail "migration must preserve an active WireGuard exit"
 
 echo "exit proxy types policy OK"
