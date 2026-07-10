@@ -25,11 +25,13 @@ import http.client
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
 import urllib.request
 
@@ -76,29 +78,76 @@ SUPPORTED_EXIT_LINKS = "ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// a
 # Telegram API
 # --------------------------------------------------------------------------- #
 _TG_LOCAL = threading.local()
+_BG_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="pgw-bg")
+_CALLBACK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pgw-callback")
+_TG_API_TIMEOUT = 12
+_TG_POLL_TIMEOUT = 35
+_TG_API_IDLE_SECONDS = 25
+
+
+def _tg_slot(method):
+    return "poll" if method == "getUpdates" else "api"
+
+
+def _close_tg_conn(slot):
+    conn = getattr(_TG_LOCAL, slot + "_conn", None)
+    try:
+        if conn:
+            conn.close()
+    except Exception:
+        pass
+    setattr(_TG_LOCAL, slot + "_conn", None)
+    setattr(_TG_LOCAL, slot + "_last_used", 0.0)
+
+
+def _configure_tg_socket(conn, timeout):
+    """Keep long polls alive through short-idle NATs and bound API stalls."""
+    conn.timeout = timeout
+    sock = getattr(conn, "sock", None)
+    if sock is None:
+        return
+    try:
+        sock.settimeout(timeout)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for name, value in (("TCP_KEEPIDLE", 15), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
+            option = getattr(socket, name, None)
+            if option is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, option, value)
+    except OSError:
+        pass
 
 
 def tg(method, **params):
     data = json.dumps(params).encode("utf-8")
     path = "/bot%s/%s" % (TOKEN, method)
     headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
+    slot = _tg_slot(method)
+    timeout = _TG_POLL_TIMEOUT if slot == "poll" else _TG_API_TIMEOUT
+    conn = getattr(_TG_LOCAL, slot + "_conn", None)
+    last_used = getattr(_TG_LOCAL, slot + "_last_used", 0.0)
+    if slot == "api" and conn is not None and time.monotonic() - last_used > _TG_API_IDLE_SECONDS:
+        _close_tg_conn(slot)
     for attempt in (0, 1):
         try:
-            conn = getattr(_TG_LOCAL, "conn", None)
+            conn = getattr(_TG_LOCAL, slot + "_conn", None)
             if conn is None:
-                conn = http.client.HTTPSConnection("api.telegram.org", timeout=70)
-                _TG_LOCAL.conn = conn
+                conn = http.client.HTTPSConnection("api.telegram.org", timeout=timeout)
+                setattr(_TG_LOCAL, slot + "_conn", conn)
+            _configure_tg_socket(conn, timeout)
             conn.request("POST", path, data, headers)
+            _configure_tg_socket(conn, timeout)
             raw = conn.getresponse().read()
+            setattr(_TG_LOCAL, slot + "_last_used", time.monotonic())
             return json.loads(raw.decode("utf-8")) if raw else {}
         except Exception as e:
             try:
-                conn = getattr(_TG_LOCAL, "conn", None)
+                conn = getattr(_TG_LOCAL, slot + "_conn", None)
                 if conn:
                     conn.close()
             except Exception:
                 pass
-            _TG_LOCAL.conn = None
+            setattr(_TG_LOCAL, slot + "_conn", None)
+            setattr(_TG_LOCAL, slot + "_last_used", 0.0)
             if attempt:
                 return {"ok": False, "error": str(e)}
 
@@ -110,24 +159,14 @@ def background(fn, *args):
         except Exception as e:
             print("[err] background task: %s" % e, file=sys.stderr)
 
-    threading.Thread(target=go, daemon=True).start()
+    _BG_EXECUTOR.submit(go)
 
 
 def answer_callback_async(cb_id):
     def go():
-        data = json.dumps({"callback_query_id": cb_id}).encode("utf-8")
-        req = urllib.request.Request(
-            API + "answerCallbackQuery",
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=20):
-                pass
-        except Exception:
-            pass
+        tg("answerCallbackQuery", callback_query_id=cb_id)
 
-    threading.Thread(target=go, daemon=True).start()
+    _CALLBACK_EXECUTOR.submit(go)
 
 
 def send(chat_id, text, keyboard=None, mono=False):
@@ -1333,7 +1372,8 @@ def handle_callback(cb):
     elif data == "rules:showrs":
         edit(cb, op_show_rulesets(), back_kb("menu:rules"))
     elif data == "act:status":
-        edit(cb, op_status(), back_kb("menu:main"))
+        edit(cb, "⏳ 正在获取运行状态…")
+        edit_async(cb, op_status, back_kb("menu:main"))
     elif data.startswith("logs:"):
         svc = data[len("logs:"):]
         edit(cb, "📜 正在取 <b>%s</b> 日志…" % html.escape(svc))
@@ -1459,7 +1499,9 @@ def main():
     print("proxy-gateway tgbot started; admins=%s" % sorted(ADMIN_IDS), file=sys.stderr)
     offset = None
     while True:
-        params = {"timeout": 50}
+        # Stay below common 30s idle TCP timeouts so the next update does not
+        # wait for a stale long-poll socket to fail first.
+        params = {"timeout": 25}
         if offset is not None:
             params["offset"] = offset
         resp = tg("getUpdates", **params)
