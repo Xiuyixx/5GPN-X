@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # Assertions intentionally match literal shell snippets.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +22,9 @@ bot_body="$(cat "${bot}")"
 # --- never run a shell on user input ----------------------------------------
 [[ "${bot_body}" != *'shell=True'* ]] || fail "tgbot.py must never use shell=True"
 [[ "${bot_body}" != *'os.system'* ]] || fail "tgbot.py must never use os.system"
+[[ "${bot_body}" == *'def validate_mgmt_path('* ]] || fail "tgbot.py must validate the management entrypoint"
+[[ "${bot_body}" == *'os.path.isabs(MGMT)'* ]] || fail "tgbot.py MGMT must be an absolute path"
+[[ "${bot_body}" == *'os.path.isfile(MGMT)'* ]] || fail "tgbot.py MGMT must point to an existing file"
 
 # --- Telegram button interactions should stay responsive ---------------------
 [[ "${bot_body}" == *'http.client.HTTPSConnection("api.telegram.org"'* ]] || fail "tgbot.py must reuse a keep-alive Telegram HTTPS connection"
@@ -81,6 +85,8 @@ bot_body="$(cat "${bot}")"
 [[ "${bot_body}" == *'链接里的节点名称作为出口名'* ]] || fail "add-exit prompt must explain node-name based naming"
 [[ "${bot_body}" == *'这条节点链接没有可用名称'* ]] || fail "unnamed links must ask for an explicit exit name"
 [[ "${bot_body}" == *'也可以发 <code>出口名 链接</code> 指定名称'* ]] || fail "add-exit prompt must keep optional explicit naming"
+[[ "${bot_body}" != *'1-11 位小写字母/数字'* ]] || fail "add-exit invalid-name message must match actual validation"
+[[ "${bot_body}" == *'1-16 位字母/数字/中文/_/-'* ]] || fail "add-exit invalid-name message must document actual validation"
 
 # --- install wiring ---------------------------------------------------------
 [[ "${install_body}" == *'setup_tgbot()'* ]] || fail "install.sh must define setup_tgbot"

@@ -301,6 +301,13 @@ def run(argv, timeout=120, inp=None):
         return "[error: %s]" % e
 
 
+def validate_mgmt_path():
+    if not os.path.isabs(MGMT) or not os.path.isfile(MGMT):
+        print("MGMT must be an absolute path to the management script: %s" % MGMT,
+              file=sys.stderr)
+        sys.exit(1)
+
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -324,15 +331,15 @@ def run2(argv, timeout=120, inp=None):
 
 def _reason(out, n=4):
     """A short, human-readable reason from command output (for failures)."""
-    lines = [l.strip() for l in _strip_ansi(out).splitlines() if l.strip()]
-    errs = [l for l in lines if re.search(r"\[!\]|\[ERR\]|error|fail|invalid|拒绝|失败", l, re.I)]
+    lines = [line.strip() for line in _strip_ansi(out).splitlines() if line.strip()]
+    errs = [line for line in lines if re.search(r"\[!\]|\[ERR\]|error|fail|invalid|拒绝|失败", line, re.I)]
     picked = (errs or lines)[-n:]
     text = "\n".join(picked)
     return (text[:600] + "…") if len(text) > 600 else text
 
 
 def _tail_output(out, n=20, limit=1800):
-    lines = [l.rstrip() for l in _strip_ansi(out).splitlines() if l.strip()]
+    lines = [line.rstrip() for line in _strip_ansi(out).splitlines() if line.strip()]
     text = "\n".join(lines[-n:]) or "(no output)"
     return (text[-limit:] + "…") if len(text) > limit else text
 
@@ -585,7 +592,7 @@ def exits_overview_text():
 
 def op_add_exit(name, payload):
     if not EXIT_ADD_NAME_RE.match(name) or name == "local":
-        return "出口名无效（需 1-11 位小写字母/数字，且不能为 local）。"
+        return "出口名无效（需 1-16 位字母/数字/中文/_/-，且不能为 local）。"
     text = (payload or "").strip()
     is_uri = bool(PROXY_URI_RE.match(text))
     is_wg = "[Interface]" in payload and "[Peer]" in payload
@@ -818,8 +825,8 @@ def _rule_entries():
     """(all file lines, [(line_index, text)] for effective rules)."""
     txt = _read_file(RULES_PATH)
     lines = txt.splitlines() if txt else []
-    entries = [(i, l) for i, l in enumerate(lines)
-               if l.strip() and not l.strip().startswith(("#", ";"))]
+    entries = [(i, line) for i, line in enumerate(lines)
+               if line.strip() and not line.strip().startswith(("#", ";"))]
     return lines, entries
 
 
@@ -879,7 +886,7 @@ def op_del_rule(num):
     if n < 1 or n > len(entries):
         return "序号超出范围（1-%d）。" % len(entries)
     drop = entries[n - 1][0]
-    return op_set_rules("\n".join(l for i, l in enumerate(lines) if i != drop) + "\n")
+    return op_set_rules("\n".join(line for i, line in enumerate(lines) if i != drop) + "\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -1009,7 +1016,8 @@ def policy_targets_menu(idx):
     for e in _targets():
         row.append({"text": e, "callback_data": "ps:%d:%s" % (idx, e)})
         if len(row) == 3:
-            rows.append(row); row = []
+            rows.append(row)
+            row = []
     if row:
         rows.append(row)
     rows.append([{"text": "🌍 直连", "callback_data": "ps:%d:direct" % idx},
@@ -1369,6 +1377,7 @@ def main():
     if not TOKEN:
         print("TG_BOT_TOKEN is not set", file=sys.stderr)
         sys.exit(1)
+    validate_mgmt_path()
     if not ADMIN_IDS:
         print("[warn] TG_ADMIN_IDS is empty; no one can operate. Use /id to find yours.",
               file=sys.stderr)
