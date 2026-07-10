@@ -317,6 +317,10 @@ fi
 
 echo "[*] Generating dnsdist configuration..."
 
+DNSDIST_CONF_TMP=$(mktemp "${DNSDIST_CONF}.tmp.XXXXXX")
+cleanup_dnsdist_conf_tmp() { rm -f "${DNSDIST_CONF_TMP:-}"; }
+trap cleanup_dnsdist_conf_tmp EXIT
+
 SERVER_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' || echo "127.0.0.1")
 DOMAIN=$(cat "${BASE_DIR}/.domain" 2>/dev/null || echo "example.com")
 
@@ -329,7 +333,7 @@ REMOTE_DNS_SERVERS=$(render_remote_dns_servers "$REMOTE_DNS" "remote" "remote")
 PACKET_CACHE_SIZE=$(cat "${BASE_DIR}/.cache_size" 2>/dev/null || echo "500000")
 [[ "${PACKET_CACHE_SIZE}" =~ ^[0-9]+$ ]] || PACKET_CACHE_SIZE=500000
 
-python3 - "${DNSDIST_TEMPLATE}" "${GFWLIST_LUA}" "${CHINALIST_LUA}" "${SERVER_IP}" "${CERT_BASENAME}" "${REMOTE_DNS_SERVERS}" "${PACKET_CACHE_SIZE}" "${DNSDIST_CONF}" <<'PYEOF'
+python3 - "${DNSDIST_TEMPLATE}" "${GFWLIST_LUA}" "${CHINALIST_LUA}" "${SERVER_IP}" "${CERT_BASENAME}" "${REMOTE_DNS_SERVERS}" "${PACKET_CACHE_SIZE}" "${DNSDIST_CONF_TMP}" <<'PYEOF'
 import sys
 template_path = sys.argv[1]
 gfw_path = sys.argv[2]
@@ -363,7 +367,7 @@ echo "[OK]   dnsdist configuration generated"
 
 if command -v dnsdist >/dev/null 2>&1; then
     echo "[*] Validating dnsdist configuration..."
-    if ! dnsdist --check-config -C "${DNSDIST_CONF}"; then
+    if ! dnsdist --check-config -C "${DNSDIST_CONF_TMP}"; then
         echo "[!] Generated dnsdist configuration failed validation; leaving running dnsdist unchanged." >&2
         exit 1
     fi
@@ -371,6 +375,10 @@ if command -v dnsdist >/dev/null 2>&1; then
 else
     echo "[!]    dnsdist binary not found; skipping config validation"
 fi
+
+install -m 0644 "${DNSDIST_CONF_TMP}" "${DNSDIST_CONF}"
+rm -f "${DNSDIST_CONF_TMP}"
+trap - EXIT
 
 ensure_dnsdist_active() {
     sleep 1

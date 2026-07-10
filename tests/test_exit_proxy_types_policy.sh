@@ -75,6 +75,8 @@ vmess_payload='eyJhZGQiOiJleGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6IjAwMDAwMDAwL
 out="$(python3 "${gen}" us "vmess://${vmess_payload}")"
 grep -q '"type": "vmess"' <<<"$out" || fail "vmess URI must yield a vmess proxy"
 if python3 "${gen}" us 'ftp://x' >/dev/null 2>&1; then fail "generator must reject unsupported URIs"; fi
+if python3 "${gen}" us 'socks5://1.2.3.4:70000' >/dev/null 2>&1; then fail "generator must reject out-of-range ports"; fi
+if python3 "${gen}" us 'trojan://pw@:443' >/dev/null 2>&1; then fail "generator must reject missing server hosts"; fi
 
 for m in 'ensure_mihomo()' 'exit_type()' 'exit_up()' 'exit_down()' 'install_mihomo_unit()' 'exit_wait_device()' 'migrate_singbox_exits()'; do
     [[ "${install_body}" == *"${m}"* ]] || fail "install.sh missing function: ${m}"

@@ -33,7 +33,30 @@ def parse_hostport(value):
     match = re.match(r"^\[(.+)\]:(\d+)$", value) or re.match(r"^(.+):(\d+)$", value)
     if not match:
         die("cannot parse host:port from %r" % value)
-    return match.group(1), int(match.group(2))
+    return require_host(match.group(1)), valid_port(match.group(2))
+
+
+def require_host(value):
+    if not value:
+        die("proxy URI missing server host")
+    return value
+
+
+def valid_port(value):
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        die("proxy URI port must be an integer")
+    if not 1 <= port <= 65535:
+        die("proxy URI port out of range: %s" % value)
+    return port
+
+
+def parsed_port(parsed, default):
+    try:
+        return valid_port(parsed.port or default)
+    except ValueError as exc:
+        die("invalid proxy URI port: %s" % exc)
 
 
 def query_map(parsed):
@@ -121,7 +144,7 @@ def parse_vmess(uri):
         data = json.loads(b64decode_any(uri[8:]))
     except Exception as exc:
         die("invalid vmess:// payload: %s" % exc)
-    host, port = data.get("add"), int(data.get("port") or 443)
+    host, port = require_host(data.get("add")), valid_port(data.get("port") or 443)
     proxy = {"name": "out", "type": "vmess", "server": host, "port": port,
              "uuid": data.get("id", ""), "alterId": int(data.get("aid", 0) or 0),
              "cipher": data.get("scy") or "auto", "udp": True}
@@ -134,7 +157,7 @@ def parse_vmess(uri):
 def parse_trojan(uri):
     parsed, proxy = urlparse(uri), {"name": "out", "type": "trojan", "udp": True}
     query = query_map(parsed)
-    proxy.update(server=parsed.hostname, port=parsed.port or 443, password=unquote(parsed.username or ""))
+    proxy.update(server=require_host(parsed.hostname), port=parsed_port(parsed, 443), password=unquote(parsed.username or ""))
     tls_fields(proxy, query.get("sni") or query.get("peer") or parsed.hostname,
                truthy(query.get("allowInsecure")))
     transport_fields(proxy, query.get("type"), query.get("host"), query.get("path"),
@@ -145,8 +168,8 @@ def parse_trojan(uri):
 def parse_vless(uri):
     parsed = urlparse(uri)
     query = query_map(parsed)
-    proxy = {"name": "out", "type": "vless", "server": parsed.hostname,
-             "port": parsed.port or 443, "uuid": unquote(parsed.username or ""), "udp": True}
+    proxy = {"name": "out", "type": "vless", "server": require_host(parsed.hostname),
+             "port": parsed_port(parsed, 443), "uuid": unquote(parsed.username or ""), "udp": True}
     if query.get("flow"):
         proxy["flow"] = query["flow"]
     security = (query.get("security") or "tls").lower()
@@ -166,9 +189,10 @@ def parse_vless(uri):
 
 def parse_hysteria2(uri):
     parsed, query = urlparse(uri), query_map(urlparse(uri))
-    proxy = {"name": "out", "type": "hysteria2", "server": parsed.hostname,
-             "port": parsed.port or 443, "password": unquote(parsed.username or ""), "udp": True,
-             "sni": query.get("sni") or parsed.hostname,
+    host = require_host(parsed.hostname)
+    proxy = {"name": "out", "type": "hysteria2", "server": host,
+             "port": parsed_port(parsed, 443), "password": unquote(parsed.username or ""), "udp": True,
+             "sni": query.get("sni") or host,
              "skip-cert-verify": truthy(query.get("insecure"))}
     if query.get("obfs"):
         proxy["obfs"] = query["obfs"]
@@ -180,9 +204,10 @@ def parse_tuic(uri):
     parsed, query = urlparse(uri), query_map(urlparse(uri))
     raw_user = unquote(parsed.username or "")
     uuid, password = raw_user.split(":", 1) if ":" in raw_user else (raw_user, unquote(parsed.password or ""))
-    return {"name": "out", "type": "tuic", "server": parsed.hostname,
-            "port": parsed.port or 443, "uuid": uuid, "password": password, "udp": True,
-            "sni": query.get("sni") or parsed.hostname,
+    host = require_host(parsed.hostname)
+    return {"name": "out", "type": "tuic", "server": host,
+            "port": parsed_port(parsed, 443), "uuid": uuid, "password": password, "udp": True,
+            "sni": query.get("sni") or host,
             "skip-cert-verify": truthy(query.get("allow_insecure")),
             "udp-relay-mode": query.get("udp_relay_mode") or "native",
             "congestion-controller": query.get("congestion_control") or "bbr"}
@@ -190,22 +215,24 @@ def parse_tuic(uri):
 
 def parse_anytls(uri):
     parsed, query = urlparse(uri), query_map(urlparse(uri))
-    return {"name": "out", "type": "anytls", "server": parsed.hostname,
-            "port": parsed.port or 443, "password": unquote(parsed.username or ""), "udp": True,
-            "sni": query.get("sni") or parsed.hostname,
+    host = require_host(parsed.hostname)
+    return {"name": "out", "type": "anytls", "server": host,
+            "port": parsed_port(parsed, 443), "password": unquote(parsed.username or ""), "udp": True,
+            "sni": query.get("sni") or host,
             "skip-cert-verify": truthy(query.get("insecure"))}
 
 
 def parse_http(uri):
     parsed = urlparse(uri)
-    proxy = {"name": "out", "type": "http", "server": parsed.hostname,
-             "port": parsed.port or (443 if parsed.scheme.lower() == "https" else 80)}
+    host = require_host(parsed.hostname)
+    proxy = {"name": "out", "type": "http", "server": host,
+             "port": parsed_port(parsed, 443 if parsed.scheme.lower() == "https" else 80)}
     if parsed.username:
         proxy["username"] = unquote(parsed.username)
     if parsed.password:
         proxy["password"] = unquote(parsed.password)
     if parsed.scheme.lower() == "https":
-        tls_fields(proxy, parsed.hostname)
+        tls_fields(proxy, host)
     return proxy
 
 
