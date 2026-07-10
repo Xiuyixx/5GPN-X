@@ -21,6 +21,7 @@ Environment:
 
 import html
 import base64
+import hashlib
 import http.client
 import json
 import os
@@ -891,6 +892,13 @@ def _ruleset_entries():
     return lines, entries
 
 
+def _plain_rule_entries():
+    """Return effective rules excluding RULE-SET entries managed separately."""
+    lines, entries = _rule_entries()
+    return lines, [(i, line) for i, line in entries
+                   if not line.strip().upper().startswith("RULE-SET,")]
+
+
 def op_show_rulesets():
     _, entries = _ruleset_entries()
     if not entries:
@@ -909,18 +917,22 @@ def op_show_rulesets():
     return "📚 <b>当前规则集</b>（%d 个）：\n%s" % (len(entries), "\n".join(body))
 
 
-def op_del_ruleset(num):
-    try:
-        n = int(str(num).strip())
-    except ValueError:
-        return "请发送要删除的规则集序号（数字）。"
-    lines, entries = _ruleset_entries()
+def _entry_token(text):
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:10]
+
+
+def _delete_entry(entries_fn, index, token, empty_text):
+    lines, entries = entries_fn()
     if not entries:
-        return "当前没有规则集可删除。"
-    if n < 1 or n > len(entries):
-        return "序号超出范围（1-%d）。" % len(entries)
-    drop = entries[n - 1][0]
+        return empty_text
+    if index < 0 or index >= len(entries) or _entry_token(entries[index][1]) != token:
+        return "规则列表已经变化，请返回后重新打开删除列表。"
+    drop = entries[index][0]
     return op_set_rules("\n".join(line for i, line in enumerate(lines) if i != drop) + "\n")
+
+
+def op_del_ruleset_button(index, token):
+    return _delete_entry(_ruleset_entries, index, token, "当前没有规则集可删除。")
 
 
 def op_set_rules(text):
@@ -960,18 +972,8 @@ def op_add_ruleset(text):
     return "❌ <b>规则集添加失败</b>\n%s" % html.escape(_reason(out))
 
 
-def op_del_rule(num):
-    try:
-        n = int(str(num).strip())
-    except ValueError:
-        return "请发送要删除的规则序号（数字）。"
-    lines, entries = _rule_entries()
-    if not entries:
-        return "当前没有规则可删除。"
-    if n < 1 or n > len(entries):
-        return "序号超出范围（1-%d）。" % len(entries)
-    drop = entries[n - 1][0]
-    return op_set_rules("\n".join(line for i, line in enumerate(lines) if i != drop) + "\n")
+def op_del_rule_button(index, token):
+    return _delete_entry(_plain_rule_entries, index, token, "当前没有规则可删除。")
 
 
 # --------------------------------------------------------------------------- #
@@ -1062,7 +1064,7 @@ def op_ios_send(chat_id):
 def main_menu():
     return [
         [{"text": "📊 状态", "callback_data": "act:status"},
-         {"text": "🌐 出口", "callback_data": "menu:exits"}],
+         {"text": "🌐 出口管理", "callback_data": "menu:exits"}],
         [{"text": "📑 分流管理", "callback_data": "menu:rules"},
          {"text": "🔐 DoT 管理", "callback_data": "menu:dot"}],
         [{"text": "♻️ 重启服务", "callback_data": "act:restart"},
@@ -1077,14 +1079,53 @@ def rules_menu():
          {"text": "📚 规则集", "callback_data": "rules:showrs"},
          {"text": "✏️ 规则设置", "callback_data": "rules:set"}],
         [{"text": "➕ 添加规则", "callback_data": "rules:add"},
-         {"text": "🗑 删除规则", "callback_data": "rules:del"}],
+         {"text": "🗑 删除规则", "callback_data": "menu:rules_del"}],
         [{"text": "➕ 添加规则集", "callback_data": "rules:addset"},
-         {"text": "🗑 删规则集", "callback_data": "rules:delrs"}],
+         {"text": "🗑 删规则集", "callback_data": "menu:rulesets_del"}],
         [{"text": "🎯 分类→出口映射", "callback_data": "menu:policy"}],
         [{"text": "🔄 更新规则", "callback_data": "act:update_rules"},
          {"text": "⚡ 启用分流", "callback_data": "rules:enable"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
+
+
+def _short_button_text(text, limit=48):
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def rules_del_menu():
+    rows = []
+    _, entries = _plain_rule_entries()
+    for index, (_, line) in enumerate(entries):
+        label = _short_button_text(line.strip())
+        data = "ruledel:%d:%s" % (index, _entry_token(line))
+        rows.append([{"text": "🗑 " + label, "callback_data": data}])
+    if not rows:
+        rows.append([{"text": "（没有可删除的规则）", "callback_data": "menu:rules"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
+    return rows
+
+
+def rulesets_del_menu():
+    rows = []
+    _, entries = _ruleset_entries()
+    for index, (_, line) in enumerate(entries):
+        parts = line.strip().split(",", 2)
+        if len(parts) == 3:
+            source = parts[1].strip()
+            target = parts[2].strip()
+            parsed = urlparse(source)
+            name = os.path.basename(parsed.path.rstrip("/")) or parsed.netloc or source
+            label = "%s → %s" % (name, target)
+        else:
+            label = line.strip()
+        data = "rulesetdel:%d:%s" % (index, _entry_token(line))
+        rows.append([{"text": "🗑 " + _short_button_text(label), "callback_data": data}])
+    if not rows:
+        rows.append([{"text": "（没有可删除的规则集）", "callback_data": "menu:rules"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
+    return rows
 
 
 def policy_menu():
@@ -1221,14 +1262,6 @@ def handle_message(msg):
         send(chat_id, "⏳ 正在校验并添加规则集…")
         send_async(chat_id, lambda: op_add_ruleset(text), rules_menu())
         return
-    if state and state.get("action") == "rules_del":
-        PENDING.pop(chat_id, None)
-        send(chat_id, op_del_rule(text), rules_menu())
-        return
-    if state and state.get("action") == "rules_delrs":
-        PENDING.pop(chat_id, None)
-        send(chat_id, op_del_ruleset(text), rules_menu())
-        return
     if state and state.get("action") == "dot_domain":
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在校验域名 A 记录并签发证书，可能需要 1-2 分钟…")
@@ -1278,6 +1311,10 @@ def handle_callback(cb):
         edit(cb, "选择一个操作：", main_menu())
     elif data == "menu:rules":
         edit(cb, "📑 <b>分流管理</b>：按域名把代理流量分到不同出口 / 直连 / 拒绝。", rules_menu())
+    elif data == "menu:rules_del":
+        edit(cb, "选择要删除的规则：", rules_del_menu())
+    elif data == "menu:rulesets_del":
+        edit(cb, "选择要删除的规则集：", rulesets_del_menu())
     elif data == "menu:policy":
         edit(cb, "🎯 <b>分类 → 出口</b> 映射（点一个分类来修改目标）：", policy_menu())
     elif data == "menu:exits":
@@ -1324,12 +1361,6 @@ def handle_callback(cb):
              "目标：出口名 / 分类 / <code>direct</code> / <code>block</code>\n\n"
              "添加后点「🔄 更新规则」可立即拉取生效。\n\n"
              "发送 /cancel 取消。")
-    elif data == "rules:delrs":
-        PENDING[chat_id] = {"action": "rules_delrs"}
-        edit(cb, op_show_rulesets() + "\n\n发送要删除的规则集<b>序号</b>，或 /cancel 取消。")
-    elif data == "rules:del":
-        PENDING[chat_id] = {"action": "rules_del"}
-        edit(cb, op_show_rules() + "\n\n发送要删除的规则<b>序号</b>，或 /cancel 取消。")
     elif data == "exit_add":
         PENDING[chat_id] = {"action": "add_exit_link"}
         edit(cb, "添加出口：直接粘贴一条节点链接即可，我会使用链接里的节点名称作为出口名。\n支持 <code>%s</code>。\n\n如果链接没有名称，也可以发 <code>出口名 链接</code> 指定名称。\n发送 /cancel 取消。" % SUPPORTED_EXIT_LINKS)
@@ -1381,6 +1412,24 @@ def handle_callback(cb):
     elif data == "exits:check":
         edit(cb, "⏳ 正在检查出口连通性…")
         edit_async(cb, op_check_exits, back_kb("menu:exits"))
+    elif data.startswith("ruledel:"):
+        try:
+            _, raw_index, token = data.split(":", 2)
+            index = int(raw_index)
+        except (ValueError, IndexError):
+            edit(cb, "删除按钮无效，请重新打开规则列表。", back_kb("menu:rules_del"))
+        else:
+            edit(cb, "⏳ 正在删除规则并校验配置…")
+            edit_async(cb, lambda: op_del_rule_button(index, token), back_kb("menu:rules_del"))
+    elif data.startswith("rulesetdel:"):
+        try:
+            _, raw_index, token = data.split(":", 2)
+            index = int(raw_index)
+        except (ValueError, IndexError):
+            edit(cb, "删除按钮无效，请重新打开规则集列表。", back_kb("menu:rulesets_del"))
+        else:
+            edit(cb, "⏳ 正在删除规则集并校验配置…")
+            edit_async(cb, lambda: op_del_ruleset_button(index, token), back_kb("menu:rulesets_del"))
 
     # ---- actions (⏳ then result, all in one bubble) ----
     elif data == "act:update_rules":
