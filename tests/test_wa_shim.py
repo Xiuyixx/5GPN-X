@@ -43,7 +43,9 @@ async def fail_open_on_edge_error():
     class Writer:
         def get_extra_info(self, _name): return ("172.22.1.2", 1234)
         def close(self): pass
-    reader = asyncio.StreamReader(); reader.feed_data(b"ED\0\1"); reader.feed_eof()
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"ED\0\1")
+    reader.feed_eof()
     await wa.handle(reader, Writer())
     wa.relay, wa.resolve_edge, wa.source_allowed = original_relay, original_resolve, original_allowed
     return calls

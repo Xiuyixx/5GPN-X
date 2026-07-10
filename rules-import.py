@@ -33,7 +33,8 @@ def csv_split(s):
         if ch == '"':
             q = not q
         elif ch == "," and not q:
-            out.append(cur); cur = ""
+            out.append(cur)
+            cur = ""
         else:
             cur += ch
     out.append(cur)

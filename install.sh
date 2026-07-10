@@ -817,7 +817,8 @@ install_deps() {
         tar -C /usr/local -xzf /tmp/go.tar.gz
         rm -f /tmp/go.tar.gz
         export PATH=$PATH:/usr/local/go/bin
-        echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+        # shellcheck disable=SC2016 # Write a literal profile snippet for future shells.
+        printf '%s\n' 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
     fi
 
     ok "Go version: $(go version)"
@@ -1555,7 +1556,7 @@ EOF
     mem_pages=$(awk '/MemTotal/ { printf "%d", ($2 * 1024) / 4096 }' /proc/meminfo 2>/dev/null || echo "")
     if [[ -n "$mem_pages" && "$mem_pages" -gt 0 ]]; then
         {
-            echo "net.ipv4.tcp_mem=$((mem_pages / 100 * 12)) $((mem_pages / 100 * 50)) $((mem_pages / 100 * 70))"
+            echo "net.ipv4.tcp_mem=$((mem_pages * 12 / 100)) $((mem_pages * 50 / 100)) $((mem_pages * 70 / 100))"
         } >> /etc/sysctl.d/99-proxy-gateway.conf
     fi
 
@@ -1983,13 +1984,13 @@ preflight_exit() {
             warn "Exit '$name' upstream ${host}:${port} is UNREACHABLE — traffic via it will fail."
         fi
     elif [[ "$t" == "router" ]]; then
-        for tgt in $(awk -F= 'NF==2{print $2}' "${POLICY_MAP}" 2>/dev/null | sort -u); do
+        while IFS= read -r tgt; do
             case "$tgt" in direct|block|"") continue ;; esac
             hp="$(exit_server "$tgt")"; host="${hp%% *}"; port="${hp##* }"
             if ! exit_reachable "$host" "$port"; then
                 warn "Smart target '$tgt' (${host}:${port}) is UNREACHABLE — rules using it will blackhole."
             fi
-        done
+        done < <(awk -F= 'NF==2{print $2}' "${POLICY_MAP}" 2>/dev/null | sort -u)
     fi
 }
 
@@ -2439,8 +2440,16 @@ import_rules() {
 
     local old_rules old_policy
     old_rules="$(mktemp)"; old_policy="$(mktemp)"
-    [[ -f "${RULES_FILE}" ]] && cp -a "${RULES_FILE}" "$old_rules" || : > "$old_rules"
-    [[ -f "${POLICY_MAP}" ]] && cp -a "${POLICY_MAP}" "$old_policy" || : > "$old_policy"
+    if [[ -f "${RULES_FILE}" ]]; then
+        cp -a "${RULES_FILE}" "$old_rules"
+    else
+        : > "$old_rules"
+    fi
+    if [[ -f "${POLICY_MAP}" ]]; then
+        cp -a "${POLICY_MAP}" "$old_policy"
+    else
+        : > "$old_policy"
+    fi
     info "Converting rule list..."
     PGW_KEEP_CATEGORIES="$keep" PGW_DIRECT_CATEGORIES="$direct" python3 "${RULES_IMPORT}" "$src" \
         2>/tmp/pgw-import.err >"${RULES_FILE}.tmp" || true
@@ -2540,8 +2549,16 @@ rename_policy() {
     [[ -z "$old" || -z "$new" ]] && { err "Usage: $0 --rename-policy <old> <new>"; exit 1; }
     [[ "$new" =~ ^[A-Za-z0-9_-]+$ || "$new" =~ [^[:ascii:]] ]] || { err "Invalid new name"; exit 1; }
     old_rules="$(mktemp)"; old_map="$(mktemp)"
-    [[ -f "${RULES_FILE}" ]] && cp -a "${RULES_FILE}" "$old_rules" || : > "$old_rules"
-    [[ -f "${POLICY_MAP}" ]] && cp -a "${POLICY_MAP}" "$old_map" || : > "$old_map"
+    if [[ -f "${RULES_FILE}" ]]; then
+        cp -a "${RULES_FILE}" "$old_rules"
+    else
+        : > "$old_rules"
+    fi
+    if [[ -f "${POLICY_MAP}" ]]; then
+        cp -a "${POLICY_MAP}" "$old_map"
+    else
+        : > "$old_map"
+    fi
     if [[ -f "${POLICY_MAP}" ]]; then
         awk -F= -v o="$old" -v n="$new" 'BEGIN{OFS="="} $1==o{$1=n} {print}' "${POLICY_MAP}" > "${POLICY_MAP}.tmp" \
             && mv "${POLICY_MAP}.tmp" "${POLICY_MAP}"
@@ -2624,7 +2641,7 @@ setup_tgbot() {
         read -r -p "授权的 Telegram 数字 ID（逗号分隔，可留空，稍后用 /id 获取再填）: " ids
     fi
     # Keep only digits and separators, then normalise to comma-separated.
-    ids="$(printf '%s' "$ids" | tr ', ' '\n\n' | grep -E '^[0-9]+$' | paste -sd ',' - 2>/dev/null || true)"
+    ids="$(printf '%s' "$ids" | tr ', ' '\n' | grep -E '^[0-9]+$' | paste -sd ',' - 2>/dev/null || true)"
 
     local py; py="$(command -v python3 || echo /usr/bin/python3)"
 
