@@ -692,6 +692,11 @@ def op_update_rules():
         parts.append("• GFWList：%s 域名" % gfw.group(1))
     if cn:
         parts.append("• ChinaList：%s 域名" % cn.group(1))
+    # Also refresh mihomo smart routing rule-sets (re-download remote rule-sets)
+    smart_active = _is_active("proxy-gateway-mihomo@smart.service") == "active"
+    if smart_active:
+        run2(["systemctl", "restart", "proxy-gateway-mihomo@smart.service"], timeout=60)
+        parts.append("• 远程规则集已刷新（mihomo 重载）")
     return "\n".join(parts)
 
 
@@ -833,9 +838,50 @@ def _rule_entries():
 def op_show_rules():
     _, entries = _rule_entries()
     if not entries:
-        return "（还没有分流规则）\n用「✏️ 设置规则」粘贴一份，或「➕ 添加一条」。"
+        return "（还没有分流规则）\n用「✏️ 规则设置」粘贴一份，或「➕ 添加规则」逐条添加。"
     body = "\n".join("%d. %s" % (i + 1, e[1].strip()) for i, e in enumerate(entries))
-    return "🧭 <b>当前分流规则</b>（%d 条）：\n<pre>%s</pre>" % (len(entries), html.escape(body))
+    return "📋 <b>当前分流规则</b>（%d 条）：\n<pre>%s</pre>" % (len(entries), html.escape(body))
+
+
+def _ruleset_entries():
+    """Return (all file lines, [(line_index, text)] for RULE-SET lines only)."""
+    txt = _read_file(RULES_PATH)
+    lines = txt.splitlines() if txt else []
+    entries = [(i, line) for i, line in enumerate(lines)
+               if line.strip().upper().startswith("RULE-SET,")]
+    return lines, entries
+
+
+def op_show_rulesets():
+    _, entries = _ruleset_entries()
+    if not entries:
+        return "（还没有规则集）\n用「➕ 添加规则集」添加远程或本地规则集。"
+    body = []
+    for i, (_, line) in enumerate(entries):
+        parts = line.strip().split(",", 2)
+        if len(parts) >= 3:
+            url = parts[1].strip()
+            target = parts[2].strip()
+            # shorten long URLs for display
+            short_url = url if len(url) <= 50 else url[:47] + "…"
+            body.append("%d. %s → <b>%s</b>" % (i + 1, html.escape(short_url), html.escape(target)))
+        else:
+            body.append("%d. %s" % (i + 1, html.escape(line.strip())))
+    return "📚 <b>当前规则集</b>（%d 个）：\n%s" % (len(entries), "\n".join(body))
+
+
+def op_del_ruleset(num):
+    try:
+        n = int(str(num).strip())
+    except ValueError:
+        return "请发送要删除的规则集序号（数字）。"
+    lines, entries = _ruleset_entries()
+    if not entries:
+        return "当前没有规则集可删除。"
+    if n < 1 or n > len(entries):
+        return "序号超出范围（1-%d）。" % len(entries)
+    drop = entries[n - 1][0]
+    return op_set_rules("\n".join(line for i, line in enumerate(lines) if i != drop) + "\n")
 
 
 def op_set_rules(text):
@@ -988,11 +1034,13 @@ def main_menu():
 
 def rules_menu():
     return [
-        [{"text": "📋 查看规则", "callback_data": "rules:show"},
-         {"text": "➕ 添加规则", "callback_data": "rules:add"},
+        [{"text": "📋 规则列表", "callback_data": "rules:show"},
+         {"text": "📚 规则集", "callback_data": "rules:showrs"},
+         {"text": "✏️ 规则设置", "callback_data": "rules:set"}],
+        [{"text": "➕ 添加规则", "callback_data": "rules:add"},
          {"text": "🗑 删除规则", "callback_data": "rules:del"}],
-        [{"text": "✏️ 设置规则", "callback_data": "rules:set"},
-         {"text": "🔗 添加规则集", "callback_data": "rules:addset"}],
+        [{"text": "➕ 添加规则集", "callback_data": "rules:addset"},
+         {"text": "🗑 删规则集", "callback_data": "rules:delrs"}],
         [{"text": "🎯 分类→出口映射", "callback_data": "menu:policy"}],
         [{"text": "🔄 更新规则", "callback_data": "act:update_rules"},
          {"text": "⚡ 启用分流", "callback_data": "rules:enable"}],
@@ -1138,6 +1186,10 @@ def handle_message(msg):
         PENDING.pop(chat_id, None)
         send(chat_id, op_del_rule(text), rules_menu())
         return
+    if state and state.get("action") == "rules_delrs":
+        PENDING.pop(chat_id, None)
+        send(chat_id, op_del_ruleset(text), rules_menu())
+        return
     if state and state.get("action") == "dot_domain":
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在校验域名 A 记录并签发证书，可能需要 1-2 分钟…")
@@ -1203,23 +1255,42 @@ def handle_callback(cb):
     elif data == "rules:set":
         PENDING[chat_id] = {"action": "rules_set"}
         edit(cb,
-             "粘贴<b>整份</b>分流规则（首行优先）。示例：\n"
-             "<pre>DOMAIN-SUFFIX,google.com,att\nGEOSITE,netflix,att\n"
-             "GEOIP,cn,direct\nFINAL,att</pre>\n"
-             "策略：出口名 / <code>direct</code> / <code>block</code>。\n发送 /cancel 取消。")
+             "✏️ <b>规则设置</b>\n\n"
+             "粘贴完整的分流规则（将替换当前所有规则，首行优先匹配）。\n\n"
+             "格式：<code>类型,匹配值,出口</code>\n"
+             "出口：出口名 / <code>direct</code>（直连）/ <code>block</code>（拦截）\n\n"
+             "示例：\n"
+             "<pre>DOMAIN-SUFFIX,google.com,us\n"
+             "GEOSITE,netflix,us\n"
+             "GEOIP,cn,direct\n"
+             "FINAL,us</pre>\n\n"
+             "发送 /cancel 取消。")
     elif data == "rules:add":
         PENDING[chat_id] = {"action": "rules_add"}
-        edit(cb, "发送要追加的<b>一条</b>规则，例如：\n<code>DOMAIN-SUFFIX,youtube.com,att</code>\n发送 /cancel 取消。")
+        edit(cb,
+             "➕ <b>添加规则</b>\n\n"
+             "发送一条规则，将追加到现有规则末尾。\n\n"
+             "格式：<code>类型,匹配值,出口</code>\n"
+             "示例：<code>DOMAIN-SUFFIX,youtube.com,us</code>\n\n"
+             "常用类型：DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR\n\n"
+             "发送 /cancel 取消。")
     elif data == "rules:addset":
         PENDING[chat_id] = {"action": "rules_addset"}
         edit(cb,
-             "发送规则集 URL 和目标，中间用空格分隔。\n"
-             "示例：\n<code>https://example.com/openai.mrs att</code>\n\n"
-             "支持 mihomo <code>.mrs</code>、Clash YAML 和纯文本规则集；目标可为出口名、分类、"
-             "<code>direct</code> 或 <code>block</code>。发送 /cancel 取消。")
+             "➕ <b>添加规则集</b>\n\n"
+             "发送规则集 URL 和目标出口，用空格分隔。\n\n"
+             "格式：<code>URL 出口</code>\n"
+             "示例：<code>https://example.com/openai.mrs us</code>\n\n"
+             "支持格式：mihomo <code>.mrs</code>、Clash YAML、纯文本规则集\n"
+             "目标：出口名 / 分类 / <code>direct</code> / <code>block</code>\n\n"
+             "添加后点「🔄 更新规则」可立即拉取生效。\n\n"
+             "发送 /cancel 取消。")
+    elif data == "rules:delrs":
+        PENDING[chat_id] = {"action": "rules_delrs"}
+        edit(cb, op_show_rulesets() + "\n\n发送要删除的规则集<b>序号</b>，或 /cancel 取消。")
     elif data == "rules:del":
         PENDING[chat_id] = {"action": "rules_del"}
-        edit(cb, op_show_rules() + "\n\n发送要删除的<b>序号</b>，或 /cancel 取消。")
+        edit(cb, op_show_rules() + "\n\n发送要删除的规则<b>序号</b>，或 /cancel 取消。")
     elif data == "exit_add":
         PENDING[chat_id] = {"action": "add_exit_link"}
         edit(cb, "添加出口：直接粘贴一条节点链接即可，我会使用链接里的节点名称作为出口名。\n支持 <code>%s</code>。\n\n如果链接没有名称，也可以发 <code>出口名 链接</code> 指定名称。\n发送 /cancel 取消。" % SUPPORTED_EXIT_LINKS)
@@ -1259,6 +1330,8 @@ def handle_callback(cb):
     # ---- views ----
     elif data == "rules:show":
         edit(cb, op_show_rules(), back_kb("menu:rules"))
+    elif data == "rules:showrs":
+        edit(cb, op_show_rulesets(), back_kb("menu:rules"))
     elif data == "act:status":
         edit(cb, op_status(), back_kb("menu:main"))
     elif data.startswith("logs:"):
