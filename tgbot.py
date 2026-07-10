@@ -275,6 +275,10 @@ def back_kb(target="menu:main", label="« 返回"):
     return [[{"text": label, "callback_data": target}]]
 
 
+def cancel_kb(section):
+    return [[{"text": "✖ 取消", "callback_data": "cancel:" + section}]]
+
+
 def send_photo(chat_id, path, caption=""):
     """Upload a local image via multipart/form-data (sendPhoto)."""
     try:
@@ -1240,7 +1244,7 @@ def handle_message(msg):
     if state and state.get("action") == "add_exit_link":
         name, config, err = parse_add_exit_input(msg.get("text") or "")
         if err:
-            send(chat_id, err)
+            send(chat_id, err, cancel_kb("exits"))
             return
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在添加出口 <b>%s</b>…" % html.escape(name))
@@ -1306,7 +1310,16 @@ def handle_callback(cb):
     answer_callback_async(cb_id)
 
     # ---- navigation (edit the same bubble) ----
-    if data == "menu:main":
+    if data == "cancel:rules":
+        PENDING.pop(chat_id, None)
+        edit(cb, "📑 <b>分流管理</b>\n选择一个操作：", rules_menu())
+    elif data == "cancel:exits":
+        PENDING.pop(chat_id, None)
+        edit(cb, "🌐 <b>出口管理</b>\n选择一个操作：", exits_menu())
+    elif data == "cancel:dot":
+        PENDING.pop(chat_id, None)
+        edit(cb, op_dot_status(), dot_menu())
+    elif data == "menu:main":
         PENDING.pop(chat_id, None)
         edit(cb, "选择一个操作：", main_menu())
     elif data == "menu:rules":
@@ -1339,8 +1352,8 @@ def handle_callback(cb):
              "<pre>DOMAIN-SUFFIX,google.com,us\n"
              "GEOSITE,netflix,us\n"
              "GEOIP,cn,direct\n"
-             "FINAL,us</pre>\n\n"
-             "发送 /cancel 取消。")
+             "FINAL,us</pre>",
+             cancel_kb("rules"))
     elif data == "rules:add":
         PENDING[chat_id] = {"action": "rules_add"}
         edit(cb,
@@ -1348,8 +1361,8 @@ def handle_callback(cb):
              "发送一条规则，将追加到现有规则末尾。\n\n"
              "格式：<code>类型,匹配值,出口</code>\n"
              "示例：<code>DOMAIN-SUFFIX,youtube.com,us</code>\n\n"
-             "常用类型：DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR\n\n"
-             "发送 /cancel 取消。")
+             "常用类型：DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR",
+             cancel_kb("rules"))
     elif data == "rules:addset":
         PENDING[chat_id] = {"action": "rules_addset"}
         edit(cb,
@@ -1359,30 +1372,38 @@ def handle_callback(cb):
              "示例：<code>https://example.com/openai.mrs us</code>\n\n"
              "支持格式：mihomo <code>.mrs</code>、Clash YAML、纯文本规则集\n"
              "目标：出口名 / 分类 / <code>direct</code> / <code>block</code>\n\n"
-             "添加后点「🔄 更新规则」可立即拉取生效。\n\n"
-             "发送 /cancel 取消。")
+             "添加后点「🔄 更新规则」可立即拉取生效。",
+             cancel_kb("rules"))
     elif data == "exit_add":
         PENDING[chat_id] = {"action": "add_exit_link"}
-        edit(cb, "添加出口：直接粘贴一条节点链接即可，我会使用链接里的节点名称作为出口名。\n支持 <code>%s</code>。\n\n如果链接没有名称，也可以发 <code>出口名 链接</code> 指定名称。\n发送 /cancel 取消。" % SUPPORTED_EXIT_LINKS)
+        edit(cb,
+             "➕ <b>添加出口</b>\n\n"
+             "直接发送一条节点链接，我会使用链接里的节点名称作为出口名。\n\n"
+             "支持：<code>%s</code>\n\n"
+             "链接没有名称时，也可以发 <code>出口名 链接</code> 指定名称。" % SUPPORTED_EXIT_LINKS,
+             cancel_kb("exits"))
     elif data == "dot:domain":
         PENDING[chat_id] = {"action": "dot_domain"}
         edit(cb,
-             "发送新的 DoT 域名，例如：\n"
-             "<code>dns.example.com</code>\n\n"
-             "要求：该域名 A 记录必须已经指向本机公网 IP，否则不会修改当前配置。\n"
-             "发送 /cancel 取消。")
+             "🌐 <b>更改 DoT 域名</b>\n\n"
+             "发送新的完整域名。\n"
+             "示例：<code>dns.example.com</code>\n\n"
+             "域名 A 记录必须已经指向本机公网 IP，否则不会修改当前配置。",
+             cancel_kb("dot"))
     elif data == "dot:dns_remote":
         PENDING[chat_id] = {"action": "dot_dns_remote"}
         edit(cb,
-             "发送新的国际 DNS。多个 DNS 用空格或逗号分隔。\n\n"
-             "示例：\n<pre>1.1.1.1 8.8.8.8</pre>\n"
-             "发送 /cancel 取消。")
+             "🌍 <b>更改国际 DNS</b>\n\n"
+             "发送新的 DNS 地址，多个地址用空格或逗号分隔。\n\n"
+             "示例：<pre>1.1.1.1 8.8.8.8</pre>",
+             cancel_kb("dot"))
     elif data == "dot:dns_local":
         PENDING[chat_id] = {"action": "dot_dns_local"}
         edit(cb,
-             "发送新的国内 DNS。多个 DNS 用空格或逗号分隔。\n\n"
-             "示例：\n<pre>223.5.5.5 119.29.29.29</pre>\n"
-             "发送 /cancel 取消。")
+             "🇨🇳 <b>更改国内 DNS</b>\n\n"
+             "发送新的 DNS 地址，多个地址用空格或逗号分隔。\n\n"
+             "示例：<pre>223.5.5.5 119.29.29.29</pre>",
+             cancel_kb("dot"))
     elif data == "dot:force_domain":
         domain = LAST_FAILED_DOT_DOMAIN.get(chat_id)
         if not domain:
@@ -1490,7 +1511,6 @@ BOT_COMMANDS = [
     ("status", "查看运行状态"),
     ("exits", "出口管理（切换/添加/删除）"),
     ("rules", "分流管理"),
-    ("cancel", "取消当前操作"),
     ("id", "获取我的 Telegram ID"),
 ]
 

@@ -51,6 +51,9 @@ bot_body="$(cat "${bot}")"
 [[ "${bot_body}" == *'deleteMyCommands'* ]] || fail "tgbot.py must clear stale Telegram command scopes on startup"
 [[ "${bot_body}" == *'{"type": "all_private_chats"}'* ]] || fail "tgbot.py must register commands for private chats scope"
 [[ "${bot_body}" == *'setMyCommands'* ]] || fail "tgbot.py must register Telegram slash commands on startup"
+[[ "${bot_body}" == *'def cancel_kb('* ]] || fail "conversational forms must expose a cancel button"
+[[ "${bot_body}" != *'发送 /cancel'* ]] || fail "conversational forms must not ask users to type /cancel"
+[[ "${bot_body}" != *'("cancel", "取消当前操作")'* ]] || fail "/cancel must not occupy the Telegram command menu"
 
 # --- user-supplied values must be validated ---------------------------------
 [[ "${bot_body}" == *'EXIT_NAME_RE'* ]] || fail "tgbot.py must validate exit names"
