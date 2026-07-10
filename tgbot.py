@@ -845,7 +845,7 @@ def op_set_rules(text):
     ok, out = run2(["bash", MGMT, "--set-rules"], inp=text, timeout=180)
     if ok:
         m = re.search(r"\((\d+) rules\)", out)
-        return ("✅ <b>分流规则已更新</b>（%s 条）\n用「⚡ 启用智能分流」或在 🌐 出口 选 smart 生效。"
+        return ("✅ <b>分流规则已更新</b>（%s 条）\n用「⚡ 启用分流」或在 🌐 出口 选 smart 生效。"
                 % (m.group(1) if m else "?"))
     return "❌ <b>规则设置失败</b>\n%s" % html.escape(_reason(out))
 
@@ -978,24 +978,24 @@ def main_menu():
     return [
         [{"text": "📊 状态", "callback_data": "act:status"},
          {"text": "🌐 出口", "callback_data": "menu:exits"}],
-        [{"text": "🧭 智能分流", "callback_data": "menu:rules"},
-         {"text": "🔄 更新规则", "callback_data": "act:update_rules"}],
-        [{"text": "🔐 DoT 管理", "callback_data": "menu:dot"},
-         {"text": "♻️ 重启服务", "callback_data": "act:restart"}],
-        [{"text": "📜 日志", "callback_data": "menu:logs"},
-         {"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
+        [{"text": "📑 分流管理", "callback_data": "menu:rules"},
+         {"text": "🔐 DoT 管理", "callback_data": "menu:dot"}],
+        [{"text": "♻️ 重启服务", "callback_data": "act:restart"},
+         {"text": "📜 日志", "callback_data": "menu:logs"}],
+        [{"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
     ]
 
 
 def rules_menu():
     return [
-        [{"text": "🎯 分类→出口映射", "callback_data": "menu:policy"}],
         [{"text": "📋 查看规则", "callback_data": "rules:show"},
-         {"text": "✏️ 设置规则", "callback_data": "rules:set"}],
-        [{"text": "➕ 添加一条", "callback_data": "rules:add"},
-         {"text": "🗑 删除一条", "callback_data": "rules:del"}],
-        [{"text": "🔗 添加规则集", "callback_data": "rules:addset"}],
-        [{"text": "⚡ 启用智能分流", "callback_data": "rules:enable"}],
+         {"text": "➕ 添加规则", "callback_data": "rules:add"},
+         {"text": "🗑 删除规则", "callback_data": "rules:del"}],
+        [{"text": "✏️ 设置规则", "callback_data": "rules:set"},
+         {"text": "🔗 添加规则集", "callback_data": "rules:addset"}],
+        [{"text": "🎯 分类→出口映射", "callback_data": "menu:policy"}],
+        [{"text": "🔄 更新规则", "callback_data": "act:update_rules"},
+         {"text": "⚡ 启用分流", "callback_data": "rules:enable"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
 
@@ -1102,7 +1102,7 @@ def handle_message(msg):
         elif text.startswith("/exits"):
             send_async(chat_id, exits_overview_text, keyboard_fn=exits_menu)
         elif text.startswith("/rules"):
-            send(chat_id, "🧭 <b>智能分流</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
+            send(chat_id, "📑 <b>分流管理</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
         else:
             send(chat_id, "未知命令。发送 /menu 打开操作面板。")
         return
@@ -1186,7 +1186,7 @@ def handle_callback(cb):
         PENDING.pop(chat_id, None)
         edit(cb, "选择一个操作：", main_menu())
     elif data == "menu:rules":
-        edit(cb, "🧭 <b>智能分流</b>：按域名把代理流量分到不同出口 / 直连 / 拒绝。", rules_menu())
+        edit(cb, "📑 <b>分流管理</b>：按域名把代理流量分到不同出口 / 直连 / 拒绝。", rules_menu())
     elif data == "menu:policy":
         edit(cb, "🎯 <b>分类 → 出口</b> 映射（点一个分类来修改目标）：", policy_menu())
     elif data == "menu:exits":
@@ -1272,7 +1272,7 @@ def handle_callback(cb):
     # ---- actions (⏳ then result, all in one bubble) ----
     elif data == "act:update_rules":
         edit(cb, "⏳ 正在更新规则，请稍候…")
-        edit_async(cb, op_update_rules, back_kb("menu:main"))
+        edit_async(cb, op_update_rules, back_kb("menu:rules"))
     elif data == "act:renew":
         edit(cb, "⏳ 正在续期证书，请稍候…")
         edit_async(cb, op_renew_cert, back_kb("menu:main"))
@@ -1327,7 +1327,7 @@ BOT_COMMANDS = [
     ("menu", "打开操作面板"),
     ("status", "查看运行状态"),
     ("exits", "出口管理（切换/添加/删除）"),
-    ("rules", "智能分流规则"),
+    ("rules", "分流管理"),
     ("cancel", "取消当前操作"),
     ("id", "获取我的 Telegram ID"),
 ]
