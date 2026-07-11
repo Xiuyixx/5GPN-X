@@ -163,7 +163,6 @@ install.sh        # 安装/管理入口（唯一需要直接运行的脚本）
 quick-install.sh  # 一键安装引导
 lib/              # 组件源码与模板（tgbot、wa-shim、Go 代理、dnsdist 模板等）
 tests/            # 策略测试
-docs/             # 附加文档
 ```
 
 ### 关键路径
