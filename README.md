@@ -80,7 +80,7 @@ sudo ./install.sh --uninstall           # 卸载
 默认出口为 `local`（本机公网 IP 直出）。
 
 ```bash
-# WireGuard：先在出口 VPS 上运行 lib/exit-server-setup.sh 生成配置
+# WireGuard：导入你自己准备好的 WireGuard client 配置
 sudo ./install.sh --add-exit us us.conf
 
 # URI 出口

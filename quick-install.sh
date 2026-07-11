@@ -56,6 +56,6 @@ fi
 ok "Source ready at ${DIR}"
 
 cd "${DIR}"
-chmod +x install.sh quick-install.sh lib/exit-server-setup.sh lib/update-rules.sh 2>/dev/null || true
+chmod +x install.sh quick-install.sh lib/update-rules.sh 2>/dev/null || true
 info "Launching installer..."
 exec bash ./install.sh "$@"

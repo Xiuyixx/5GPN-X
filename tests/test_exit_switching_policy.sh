@@ -5,7 +5,6 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
 sniproxy_conf="${root}/lib/sniproxy.conf"
-exit_setup="${root}/lib/exit-server-setup.sh"
 install_body="$(cat "${install}")"
 
 fail() { echo "$1" >&2; exit 1; }
@@ -46,11 +45,7 @@ done
 # --- WireGuard configs must never hijack the global default route -----------
 [[ "${install_body}" == *'Table = off'* ]] || fail "install.sh must force 'Table = off' on imported WireGuard exit configs"
 
-# --- remote exit-server helper ----------------------------------------------
-[[ -f "${exit_setup}" ]] || fail "exit-server-setup.sh must exist"
-exit_body="$(cat "${exit_setup}")"
-[[ "${exit_body}" == *'MASQUERADE'* ]] || fail "exit-server-setup.sh must enable NAT (MASQUERADE)"
-[[ "${exit_body}" == *'net.ipv4.ip_forward=1'* ]] || fail "exit-server-setup.sh must enable IP forwarding"
-[[ "${exit_body}" == *'wg genkey'* ]] || fail "exit-server-setup.sh must generate WireGuard keys"
+# --- remote exit server setup is operator-owned ----------------------------
+[[ ! -f "${root}/lib/exit-server-setup.sh" ]] || fail "project must not bundle remote exit-server setup"
 
 echo "exit switching policy OK"
