@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-template="$(cat "${root}/dnsdist.conf.template")"
+template="$(cat "${root}/lib/dnsdist.conf.template")"
 install="$(cat "${root}/install.sh")"
 
 if [[ "${template}" != *'address="127.0.0.1:5301", pool="china", name="china_dns_race"'* ]]; then
@@ -50,7 +50,7 @@ if [[ "${install}" != *'ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l
     exit 1
 fi
 
-race_proxy="$(cat "${root}/china-dns-race-proxy.go")"
+race_proxy="$(cat "${root}/lib/china-dns-race-proxy.go")"
 if [[ "${race_proxy}" != *'net.Listen("tcp", *raceListenAddr)'* ]]; then
     echo "china-dns-race-proxy must accept TCP DNS queries from dnsdist DoT/TCP clients." >&2
     exit 1

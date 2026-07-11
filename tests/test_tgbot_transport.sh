@@ -8,7 +8,7 @@ import importlib.util
 import os
 
 spec = importlib.util.spec_from_file_location(
-    "tgbot_transport_test", os.path.join(os.environ["ROOT"], "tgbot.py")
+    "tgbot_transport_test", os.path.join(os.environ["ROOT"], "lib", "tgbot.py")
 )
 bot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bot)

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-rules="$(cat "${root}/update-rules.sh")"
+rules="$(cat "${root}/lib/update-rules.sh")"
 
 if [[ "${rules}" != *'DNSDIST_CONF_TMP=$(mktemp "${DNSDIST_CONF}.tmp.XXXXXX")'* ]]; then
     echo "update-rules.sh must generate dnsdist.conf through a temporary file." >&2

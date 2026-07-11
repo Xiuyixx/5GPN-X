@@ -13,6 +13,7 @@ set -euo pipefail
 REPO_URL="https://github.com/Xiuyixx/5GPN-X.git"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "$0")"
+LIB_DIR="${SCRIPT_DIR}/lib"
 BASE_DIR="/opt/proxy-gateway"
 CONF_DIR="${BASE_DIR}/etc"
 SRC_DIR="${BASE_DIR}/src"
@@ -42,9 +43,11 @@ DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
 
 bootstrap_from_repo_if_needed() {
     local required=(
-        install.sh renew-hook.sh sniproxy.conf quic-proxy.go china-dns-race-proxy.go
-        dnsdist.conf.template update-rules.sh ios-http.py tgbot.py wa-shim.py rules-import.py
-        mihomo-exit-config.py mihomo-router-config.py rules-default.conf
+        install.sh
+        lib/renew-hook.sh lib/sniproxy.conf lib/quic-proxy.go lib/china-dns-race-proxy.go
+        lib/dnsdist.conf.template lib/update-rules.sh lib/ios-http.py lib/tgbot.py
+        lib/wa-shim.py lib/rules-import.py lib/mihomo-exit-config.py
+        lib/mihomo-router-config.py lib/rules-default.conf
     )
     local missing=0 f tmpdir
 
@@ -1030,12 +1033,12 @@ install_cert() {
 
     # Deploy renewal hook (also handles cert copy on renewal)
     mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-    if [[ -f "${SCRIPT_DIR}/renew-hook.sh" ]]; then
-        cp "${SCRIPT_DIR}/renew-hook.sh" /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
+    if [[ -f "${LIB_DIR}/renew-hook.sh" ]]; then
+        cp "${LIB_DIR}/renew-hook.sh" /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
         chmod +x /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
         ok "证书已就绪，自动续期 Hook 已部署"
     else
-        warn "renew-hook.sh not found in ${SCRIPT_DIR}; keeping existing renewal hook"
+        warn "renew-hook.sh not found in ${LIB_DIR}; keeping existing renewal hook"
         ok "证书已就绪"
     fi
 }
@@ -1063,10 +1066,10 @@ install_sniproxy() {
         info "sniproxy already installed"
     fi
 
-    if [[ -f "${SCRIPT_DIR}/sniproxy.conf" ]]; then
+    if [[ -f "${LIB_DIR}/sniproxy.conf" ]]; then
         local sniproxy_nameservers
         sniproxy_nameservers=$(render_sniproxy_dns_nameservers "$REMOTE_DNS")
-        python3 - "${SCRIPT_DIR}/sniproxy.conf" "$sniproxy_nameservers" /etc/sniproxy.conf <<'PYEOF'
+        python3 - "${LIB_DIR}/sniproxy.conf" "$sniproxy_nameservers" /etc/sniproxy.conf <<'PYEOF'
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
     content = f.read()
@@ -1075,7 +1078,7 @@ with open(sys.argv[3], "w", encoding="utf-8") as f:
     f.write(content)
 PYEOF
     else
-        err "sniproxy.conf not found in ${SCRIPT_DIR}"
+        err "sniproxy.conf not found in ${LIB_DIR}"
         exit 1
     fi
 
@@ -1106,9 +1109,9 @@ EOF
 install_whatsapp_shim() {
     local shim_dns self_ips
     info "Installing iOS WhatsApp no-SNI shim..."
-    [[ -f "${SCRIPT_DIR}/wa-shim.py" ]] || { err "wa-shim.py not found in ${SCRIPT_DIR}"; return 1; }
+    [[ -f "${LIB_DIR}/wa-shim.py" ]] || { err "wa-shim.py not found in ${LIB_DIR}"; return 1; }
     mkdir -p "${BASE_DIR}/bin" "${CONF_DIR}"
-    install -m 0755 "${SCRIPT_DIR}/wa-shim.py" "${BASE_DIR}/bin/wa-shim.py"
+    install -m 0755 "${LIB_DIR}/wa-shim.py" "${BASE_DIR}/bin/wa-shim.py"
 
     # Keep WhatsApp DNS names in the gateway's persistent local supplement so
     # the weekly GFWList refresh cannot remove the interception.
@@ -1173,7 +1176,7 @@ install_quic_proxy() {
         info "Compiling quic-proxy (UDP/QUIC SNI proxy)..."
         mkdir -p "${BASE_DIR}/bin"
         mkdir -p "${SRC_DIR}"
-        cp "${SCRIPT_DIR}/quic-proxy.go" "${SRC_DIR}/quic-proxy.go"
+        cp "${LIB_DIR}/quic-proxy.go" "${SRC_DIR}/quic-proxy.go"
         cd "${SRC_DIR}"
 
         export PATH=$PATH:/usr/local/go/bin
@@ -1214,7 +1217,7 @@ install_china_dns_race_proxy() {
     info "Compiling china-dns-race-proxy..."
     mkdir -p "${BASE_DIR}/bin"
     mkdir -p "${SRC_DIR}"
-    cp "${SCRIPT_DIR}/china-dns-race-proxy.go" "${SRC_DIR}/china-dns-race-proxy.go"
+    cp "${LIB_DIR}/china-dns-race-proxy.go" "${SRC_DIR}/china-dns-race-proxy.go"
     cd "${SRC_DIR}"
 
     export PATH=$PATH:/usr/local/go/bin
@@ -1252,8 +1255,8 @@ install_dnsdist() {
     info "Configuring dnsdist..."
 
     mkdir -p /etc/dnsdist
-    cp "${SCRIPT_DIR}/dnsdist.conf.template" /etc/dnsdist/dnsdist.conf.template
-    cp "${SCRIPT_DIR}/update-rules.sh" /usr/local/bin/update-dnsdist-rules.sh
+    cp "${LIB_DIR}/dnsdist.conf.template" /etc/dnsdist/dnsdist.conf.template
+    cp "${LIB_DIR}/update-rules.sh" /usr/local/bin/update-dnsdist-rules.sh
     chmod +x /usr/local/bin/update-dnsdist-rules.sh
 
     # Save domain and IP for template generation
@@ -1420,8 +1423,8 @@ EOF
     # short-lived python only spawns when a phone actually fetches the profile.
     local py; py="$(command -v python3 || echo /usr/bin/python3)"
     mkdir -p "${BASE_DIR}/bin"
-    if [[ -f "${SCRIPT_DIR}/ios-http.py" ]]; then
-        install -m 0755 "${SCRIPT_DIR}/ios-http.py" "${BASE_DIR}/bin/ios-http.py"
+    if [[ -f "${LIB_DIR}/ios-http.py" ]]; then
+        install -m 0755 "${LIB_DIR}/ios-http.py" "${BASE_DIR}/bin/ios-http.py"
     fi
 
     # Drop any previous always-on unit from earlier installs.
@@ -2077,17 +2080,17 @@ setup_exit_switching() {
 
     # Install the mihomo config generators (per-exit + smart router).
     mkdir -p "${BASE_DIR}/bin"
-    [[ -f "${SCRIPT_DIR}/mihomo-exit-config.py" ]] && \
-        install -m 0755 "${SCRIPT_DIR}/mihomo-exit-config.py" "${MIHOMO_CFG_GEN}"
-    [[ -f "${SCRIPT_DIR}/mihomo-router-config.py" ]] && \
-        install -m 0755 "${SCRIPT_DIR}/mihomo-router-config.py" "${MIHOMO_ROUTER_GEN}"
-    [[ -f "${SCRIPT_DIR}/rules-import.py" ]] && \
-        install -m 0755 "${SCRIPT_DIR}/rules-import.py" "${RULES_IMPORT}"
+    [[ -f "${LIB_DIR}/mihomo-exit-config.py" ]] && \
+        install -m 0755 "${LIB_DIR}/mihomo-exit-config.py" "${MIHOMO_CFG_GEN}"
+    [[ -f "${LIB_DIR}/mihomo-router-config.py" ]] && \
+        install -m 0755 "${LIB_DIR}/mihomo-router-config.py" "${MIHOMO_ROUTER_GEN}"
+    [[ -f "${LIB_DIR}/rules-import.py" ]] && \
+        install -m 0755 "${LIB_DIR}/rules-import.py" "${RULES_IMPORT}"
 
     # Built-in default smart rules (e.g. speedtest) — merged ahead of user rules.
     mkdir -p "$(dirname "${RULES_DEFAULT}")"
-    [[ -f "${SCRIPT_DIR}/rules-default.conf" ]] && \
-        install -m 0644 "${SCRIPT_DIR}/rules-default.conf" "${RULES_DEFAULT}"
+    [[ -f "${LIB_DIR}/rules-default.conf" ]] && \
+        install -m 0644 "${LIB_DIR}/rules-default.conf" "${RULES_DEFAULT}"
 
     install_mihomo_unit
     migrate_singbox_exits
@@ -2647,11 +2650,11 @@ setup_tgbot() {
 
     info "Installing Telegram control bot..."
     mkdir -p "${BASE_DIR}/bin"
-    if [[ ! -f "${SCRIPT_DIR}/tgbot.py" ]]; then
-        err "tgbot.py not found in ${SCRIPT_DIR}"
+    if [[ ! -f "${LIB_DIR}/tgbot.py" ]]; then
+        err "tgbot.py not found in ${LIB_DIR}"
         return 1
     fi
-    install -m 0755 "${SCRIPT_DIR}/tgbot.py" "${BASE_DIR}/bin/tgbot.py"
+    install -m 0755 "${LIB_DIR}/tgbot.py" "${BASE_DIR}/bin/tgbot.py"
     # Stable management entrypoint the bot shells out to.
     install -m 0755 "${SCRIPT_PATH}" "${BASE_DIR}/bin/proxy-gateway-ctl"
 

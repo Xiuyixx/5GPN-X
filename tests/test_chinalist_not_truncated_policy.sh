@@ -3,8 +3,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-rules="$(cat "${root}/update-rules.sh")"
-chinalist_block="$(sed -n '/Downloading ChinaList/,/Template not found/p' "${root}/update-rules.sh")"
+rules="$(cat "${root}/lib/update-rules.sh")"
+chinalist_block="$(sed -n '/Downloading ChinaList/,/Template not found/p' "${root}/lib/update-rules.sh")"
 
 if [[ "${rules}" == *"max=30000"* ]]; then
     echo "ChinaList must not be capped at 30000 entries; common domains like qq.com and taobao.com appear later in the upstream list." >&2

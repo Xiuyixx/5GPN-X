@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-template="$(cat "${root}/dnsdist.conf.template")"
+template="$(cat "${root}/lib/dnsdist.conf.template")"
 
 if [[ "${template}" != *'addAction(QTypeRule(DNSQType.AAAA), RCodeAction(DNSRCode.NOERROR))'* ]]; then
     echo "dnsdist must return NOERROR/NODATA for all AAAA queries so clients only use IPv4." >&2

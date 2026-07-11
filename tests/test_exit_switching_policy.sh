@@ -4,8 +4,8 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
-sniproxy_conf="${root}/sniproxy.conf"
-exit_setup="${root}/exit-server-setup.sh"
+sniproxy_conf="${root}/lib/sniproxy.conf"
+exit_setup="${root}/lib/exit-server-setup.sh"
 install_body="$(cat "${install}")"
 
 fail() { echo "$1" >&2; exit 1; }

@@ -80,7 +80,7 @@ sudo ./install.sh --uninstall           # 卸载
 默认出口为 `local`（本机公网 IP 直出）。
 
 ```bash
-# WireGuard：先在出口 VPS 上运行 exit-server-setup.sh 生成配置
+# WireGuard：先在出口 VPS 上运行 lib/exit-server-setup.sh 生成配置
 sudo ./install.sh --add-exit us us.conf
 
 # URI 出口
@@ -155,6 +155,16 @@ sudo ./install.sh --setup-tgbot
 添加出口：`🌐 出口 -> ➕ 添加出口`，直接粘贴节点链接（`ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://`），备注会自动作为出口名。
 
 ## 配置参考
+
+### 仓库结构
+
+```text
+install.sh        # 安装/管理入口（唯一需要直接运行的脚本）
+quick-install.sh  # 一键安装引导
+lib/              # 组件源码与模板（tgbot、wa-shim、Go 代理、dnsdist 模板等）
+tests/            # 策略测试
+docs/             # 附加文档
+```
 
 ### 关键路径
 

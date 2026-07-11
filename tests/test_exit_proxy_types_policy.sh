@@ -4,7 +4,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
-gen="${root}/mihomo-exit-config.py"
+gen="${root}/lib/mihomo-exit-config.py"
 install_body="$(cat "${install}")"
 
 fail() { echo "$1" >&2; exit 1; }

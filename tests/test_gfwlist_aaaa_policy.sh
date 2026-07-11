@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-template="$(cat "${root}/dnsdist.conf.template")"
+template="$(cat "${root}/lib/dnsdist.conf.template")"
 
 if [[ "${template}" == *'SpoofAction("::1")'* ]]; then
     echo "GFWList AAAA queries must not be spoofed to ::1; clients may try local IPv6 and stall." >&2

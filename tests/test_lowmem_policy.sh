@@ -4,9 +4,9 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
-tmpl="${root}/dnsdist.conf.template"
-update="${root}/update-rules.sh"
-ioshttp="${root}/ios-http.py"
+tmpl="${root}/lib/dnsdist.conf.template"
+update="${root}/lib/update-rules.sh"
+ioshttp="${root}/lib/ios-http.py"
 install_body="$(cat "${install}")"
 
 fail() { echo "$1" >&2; exit 1; }

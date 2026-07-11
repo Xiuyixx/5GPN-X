@@ -9,7 +9,7 @@ import os
 import tempfile
 
 spec = importlib.util.spec_from_file_location(
-    "tgbot_rule_delete_test", os.path.join(os.environ["ROOT"], "tgbot.py")
+    "tgbot_rule_delete_test", os.path.join(os.environ["ROOT"], "lib", "tgbot.py")
 )
 bot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bot)

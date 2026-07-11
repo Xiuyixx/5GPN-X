@@ -4,10 +4,10 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="$(cat "${root}/install.sh")"
-sniproxy="$(cat "${root}/sniproxy.conf")"
+sniproxy="$(cat "${root}/lib/sniproxy.conf")"
 fail() { echo "$1" >&2; exit 1; }
 
-python3 -m py_compile "${root}/wa-shim.py" "${root}/tests/test_wa_shim.py"
+python3 -m py_compile "${root}/lib/wa-shim.py" "${root}/tests/test_wa_shim.py"
 python3 "${root}/tests/test_wa_shim.py" >/dev/null
 
 [[ "${sniproxy}" == *'listener 127.0.0.1:8443'* ]] || fail "sniproxy TLS backend must be loopback-only"

@@ -7,7 +7,7 @@ import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ.update(WA_SHIM_ALLOW_CIDR="172.22.0.0/16", WA_SHIM_SELF_IPS="127.0.0.1")
-spec = importlib.util.spec_from_file_location("wa_shim", os.path.join(ROOT, "wa-shim.py"))
+spec = importlib.util.spec_from_file_location("wa_shim", os.path.join(ROOT, "lib", "wa-shim.py"))
 wa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wa)
 

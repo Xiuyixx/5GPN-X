@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$templatePath = Join-Path $root "dnsdist.conf.template"
+$templatePath = Join-Path $root "lib/dnsdist.conf.template"
 $template = Get-Content -Path $templatePath -Raw -Encoding UTF8
 
 function Assert-Contains {

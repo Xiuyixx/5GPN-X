@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$rules = Get-Content -Path (Join-Path $root "update-rules.sh") -Raw -Encoding UTF8
+$rules = Get-Content -Path (Join-Path $root "lib/update-rules.sh") -Raw -Encoding UTF8
 
 function Assert-Contains {
     param(

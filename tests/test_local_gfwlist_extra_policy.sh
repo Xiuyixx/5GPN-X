@@ -3,7 +3,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-rules="$(cat "${root}/update-rules.sh")"
+rules="$(cat "${root}/lib/update-rules.sh")"
 readme="$(cat "${root}/README.md")"
 
 assert_contains() {

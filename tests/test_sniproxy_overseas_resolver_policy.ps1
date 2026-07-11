@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $install = Get-Content -Path (Join-Path $root "install.sh") -Raw -Encoding UTF8
-$sniproxy = Get-Content -Path (Join-Path $root "sniproxy.conf") -Raw -Encoding UTF8
+$sniproxy = Get-Content -Path (Join-Path $root "lib/sniproxy.conf") -Raw -Encoding UTF8
 $readme = Get-Content -Path (Join-Path $root "README.md") -Raw -Encoding UTF8
 
 function Assert-Contains {

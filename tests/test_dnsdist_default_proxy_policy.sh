@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-template="$(cat "${root}/dnsdist.conf.template")"
+template="$(cat "${root}/lib/dnsdist.conf.template")"
 
 fail() { echo "$1" >&2; exit 1; }
 
