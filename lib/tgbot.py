@@ -1288,6 +1288,8 @@ def parse_exit_names():
     try:
         for f in sorted(os.listdir("/etc/wireguard")):
             if f.startswith("pgw-") and f.endswith(".conf"):
+                if os.path.islink(os.path.join("/etc/wireguard", f)):
+                    continue  # runtime iface aliases for Unicode names
                 seen.add(f[len("pgw-") : -len(".conf")])
     except OSError:
         pass

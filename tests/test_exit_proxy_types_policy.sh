@@ -42,7 +42,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 WG_DIR="${tmpdir}/wg"
 EXITS_DIR="${tmpdir}/exits"
 mkdir -p "$WG_DIR" "$EXITS_DIR"
-eval "$(awk '/^exit_conf_path\(\)/{copy=1} copy{if ($0 ~ /^list_exit_names\(\)/) exit; print}' "${install}")"
+eval "$(awk '/^exit_conf_path\(\)/{copy=1} copy{if ($0 ~ /^ensure_mihomo\(\)/) exit; print}' "${install}")"
 printf '{"tun":{"device":"pgw-%s"}}\n' "$name" > "${EXITS_DIR}/${name}.yaml"
 ensure_mihomo_exit_iface "$name"
 python3 - "$name" "${EXITS_DIR}/${name}.yaml" <<'PY'
@@ -54,6 +54,13 @@ assert device == "pgw-" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:11]
 PY
 unit="$(exit_mihomo_unit "$name")"
 [[ "$unit" == proxy-gateway-mihomo@*.service && "$unit" != *"$name"* ]] || fail "Unicode mihomo unit must be escaped"
+
+# WireGuard runtime aliases (symlinks) must not surface as phantom exits.
+printf '[Interface]\n' > "${WG_DIR}/pgw-${name}.conf"
+ln -sf "${WG_DIR}/pgw-${name}.conf" "${WG_DIR}/$(exit_iface "$name").conf"
+listed="$(list_exit_names)"
+[[ "$listed" == "$name" ]] || fail "list_exit_names must skip runtime iface symlinks (got: $listed)"
+rm -f "${WG_DIR}/pgw-${name}.conf" "${WG_DIR}/$(exit_iface "$name").conf"
 
 # Passwords are parsed from the rightmost @ and JSON-escaped verbatim.
 out="$(python3 "${gen}" us 'socks5://myuser:p@ss:w/r#d?x %z@198.51.100.7:1080')"

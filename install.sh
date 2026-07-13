@@ -1592,7 +1592,10 @@ list_exit_names() {
     shopt -s nullglob
     local f n; local -A seen=()
     for f in "${EXITS_DIR}"/*.type; do n="$(basename "$f" .type)"; seen["$n"]=1; done
-    for f in "${WG_DIR}"/pgw-*.conf; do n="$(basename "$f" .conf)"; seen["${n#pgw-}"]=1; done
+    for f in "${WG_DIR}"/pgw-*.conf; do
+        [[ -L "$f" ]] && continue    # runtime iface aliases for Unicode names
+        n="$(basename "$f" .conf)"; seen["${n#pgw-}"]=1
+    done
     shopt -u nullglob
     if [[ ${#seen[@]} -gt 0 ]]; then
         printf '%s\n' "${!seen[@]}" | sort

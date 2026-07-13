@@ -78,9 +78,10 @@ addAction(LuaRule(function(dq) return chinaList:check(dq.qname) end), SetECSActi
 addAction(LuaRule(function(dq) return chinaList:check(dq.qname) end), PoolAction("china"))
 
 -- 3. NPN default overseas: spoof remaining A records to server IP. This mirrors
--- privdns-gateway's internal-client model: ChinaList stays direct; everything
--- else enters the gateway and is sent through the selected exit instead of
--- leaking through the client's domestic network when a domain is not in GFWList.
+-- privdns-gateway's internal-client model: ChinaList stays direct;
+-- everything else enters the gateway and is sent through the selected exit
+-- instead of leaking through the client's domestic network when a domain is
+-- not in GFWList.
 addAction(AndRule({privateClientRule, QTypeRule(DNSQType.A)}), SpoofAction(serverIP))
 
 -- 4. Fallback remote DNS: non-A queries and non-NPN clients keep normal remote DNS answers.
