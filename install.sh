@@ -2326,6 +2326,7 @@ PYNAME
 
     rollback_rename_exit() {
         local reason="$1"
+        local smart_ready=1
         (set_exit local) >/dev/null 2>&1 || true
 
         rm -f "$new_wg" "$new_yaml" "$new_type" "$new_uri"
@@ -2352,12 +2353,17 @@ PYNAME
         fi
 
         if [[ $smart_touched -eq 1 ]]; then
-            (regen_smart) >/dev/null 2>&1 || true
+            (regen_smart) >/dev/null 2>&1 || smart_ready=0
         fi
         if [[ $old_active -eq 1 ]]; then
             (set_exit "$old") >/dev/null 2>&1 || true
-        elif [[ $current_smart -eq 1 && $smart_touched -eq 1 ]]; then
-            printf '%s\n' smart > "${CONF_DIR}/current-exit"
+        elif [[ $current_smart -eq 1 ]]; then
+            if [[ $smart_ready -eq 1 ]] && (set_exit smart) >/dev/null 2>&1; then
+                :
+            else
+                printf '%s\n' local > "${CONF_DIR}/current-exit"
+                reason="${reason}; restored files but failed to reactivate smart, left on local"
+            fi
         else
             printf '%s\n' "$cur" > "${CONF_DIR}/current-exit"
         fi
