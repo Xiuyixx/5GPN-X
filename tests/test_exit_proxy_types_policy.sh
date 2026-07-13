@@ -25,6 +25,36 @@ assert c["rules"] == ["MATCH,out"]
 assert "sniffer" not in c
 PY
 
+name='澳大利亚-EXETEL-2X'
+out="$(python3 "${gen}" "$name" 'socks5://u:p@1.2.3.4:1080')"
+python3 - "$name" "$out" <<'PY'
+import hashlib, json, re, sys
+name, raw = sys.argv[1:3]
+device = json.loads(raw)["tun"]["device"]
+expected = "pgw-" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:11]
+assert device == expected
+assert len(device.encode("ascii")) <= 15
+assert re.fullmatch(r"pgw-[0-9a-f]{11}", device)
+PY
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+WG_DIR="${tmpdir}/wg"
+EXITS_DIR="${tmpdir}/exits"
+mkdir -p "$WG_DIR" "$EXITS_DIR"
+eval "$(awk '/^exit_conf_path\(\)/{copy=1} copy{if ($0 ~ /^list_exit_names\(\)/) exit; print}' "${install}")"
+printf '{"tun":{"device":"pgw-%s"}}\n' "$name" > "${EXITS_DIR}/${name}.yaml"
+ensure_mihomo_exit_iface "$name"
+python3 - "$name" "${EXITS_DIR}/${name}.yaml" <<'PY'
+import hashlib, json, sys
+name, path = sys.argv[1:3]
+with open(path, encoding="utf-8") as f:
+    device = json.load(f)["tun"]["device"]
+assert device == "pgw-" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:11]
+PY
+unit="$(exit_mihomo_unit "$name")"
+[[ "$unit" == proxy-gateway-mihomo@*.service && "$unit" != *"$name"* ]] || fail "Unicode mihomo unit must be escaped"
+
 # Passwords are parsed from the rightmost @ and JSON-escaped verbatim.
 out="$(python3 "${gen}" us 'socks5://myuser:p@ss:w/r#d?x %z@198.51.100.7:1080')"
 python3 - "$out" <<'PY'
@@ -84,7 +114,9 @@ done
 [[ "${install_body}" == *'MIHOMO_VERSION_DEFAULT="1.19.28"'* ]] || fail "mihomo version must be locked"
 [[ "${install_body}" == *'proxy-gateway-mihomo@'* ]] || fail "mihomo systemd template missing"
 [[ "${install_body}" == *'mihomo-exit-config.py'* ]] || fail "mihomo generator wiring missing"
-[[ "${install_body}" == *'systemctl start "proxy-gateway-mihomo@${current}.service"'* ]] || fail "apply-exit must start mihomo"
+[[ "${install_body}" == *'systemd-escape --template=proxy-gateway-mihomo@.service'* ]] || fail "mihomo instance names must be escaped"
+[[ "${install_body}" == *'systemctl start "$(mihomo_unit "${current}")"'* ]] || fail "apply-exit must start escaped mihomo units"
+[[ "${install_body}" == *'ExecStart=${MIHOMO_BIN} -d ${CONF_DIR}/mihomo/%I -f ${EXITS_DIR}/%I.yaml'* ]] || fail "mihomo unit must use the unescaped instance for config paths"
 [[ "${install_body}" == *'ip route replace default dev'* ]] || fail "exit must route through pgw device"
 [[ "${install_body}" != *'SINGBOX_VERSION_DEFAULT'* ]] || fail "sing-box runtime must be removed"
 [[ "${install_body}" != *'ensure_singbox()'* ]] || fail "sing-box runtime function must be removed"

@@ -1542,7 +1542,15 @@ ensure_proxy_user() {
     id -u "${EXIT_USER}" >/dev/null 2>&1 || warn "Could not create egress user ${EXIT_USER}"
 }
 exit_conf_path()    { echo "${WG_DIR}/pgw-${1}.conf"; }       # wireguard config
-exit_iface()        { echo "pgw-${1}"; }                      # device name (wg or TUN)
+exit_iface() {
+    local name="$1"
+    if [[ "$name" =~ ^[A-Za-z0-9_-]{1,11}$ ]]; then
+        echo "pgw-${name}"
+    else
+        printf 'pgw-%s\n' "$(printf '%s' "$name" | sha256sum | cut -c1-11)"
+    fi
+}
+exit_mihomo_unit() { systemd-escape --template=proxy-gateway-mihomo@.service "$1"; }
 exit_type_file()    { echo "${EXITS_DIR}/${1}.type"; }
 exit_mihomo_conf()  { echo "${EXITS_DIR}/${1}.yaml"; }
 exit_type() {
@@ -1553,6 +1561,32 @@ exit_type() {
 }
 exit_exists() {
     [[ -f "$(exit_type_file "$1")" || -f "$(exit_conf_path "$1")" ]]
+}
+ensure_mihomo_exit_iface() {
+    local name="$1" yaml iface
+    yaml="$(exit_mihomo_conf "$name")"
+    [[ -f "$yaml" ]] || return 0
+    iface="$(exit_iface "$name")"
+    python3 - "$yaml" "$iface" <<'PY'
+import json, os, sys, tempfile
+
+path, device = sys.argv[1:3]
+with open(path, encoding="utf-8") as f:
+    config = json.load(f)
+if config.setdefault("tun", {}).get("device") == device:
+    raise SystemExit(0)
+config["tun"]["device"] = device
+fd, tmp = tempfile.mkstemp(prefix=".exit-iface-", dir=os.path.dirname(path), text=True)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+PY
 }
 list_exit_names() {
     shopt -s nullglob
@@ -1598,7 +1632,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${MIHOMO_BIN} -d ${CONF_DIR}/mihomo/%i -f ${EXITS_DIR}/%i.yaml
+ExecStart=${MIHOMO_BIN} -d ${CONF_DIR}/mihomo/%I -f ${EXITS_DIR}/%I.yaml
 # Recreating the TUN drops the table-100 route; re-apply it after (re)start.
 ExecStartPost=-/usr/local/bin/proxy-gateway-apply-exit.sh
 Restart=on-failure
@@ -1647,23 +1681,33 @@ migrate_singbox_exits() {
     warn "Re-add URI exits from their original share links; smart rules can then be rebuilt with --set-rules."
 }
 exit_up() {
-    local name="$1" t; t="$(exit_type "$name")"
+    local name="$1" t iface conf runtime_conf; t="$(exit_type "$name")"
     case "$t" in
         wireguard)
             command -v wg-quick >/dev/null 2>&1 || { err "wg-quick not installed"; return 1; }
-            wg-quick up "pgw-${name}" ;;
+            iface="$(exit_iface "$name")"
+            conf="$(exit_conf_path "$name")"
+            runtime_conf="${WG_DIR}/${iface}.conf"
+            [[ "$conf" == "$runtime_conf" ]] || ln -sf "$conf" "$runtime_conf"
+            wg-quick up "$iface" ;;
         shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router)
             ensure_mihomo || return 1
+            ensure_mihomo_exit_iface "$name" || return 1
             install_mihomo_unit
-            systemctl start "proxy-gateway-mihomo@${name}.service" ;;
+            systemctl start "$(exit_mihomo_unit "$name")" ;;
         *) err "Unknown type for exit '$name'"; return 1 ;;
     esac
 }
 exit_down() {
-    local name="$1" t; t="$(exit_type "$name")"
+    local name="$1" t iface conf runtime_conf; t="$(exit_type "$name")"
     case "$t" in
-        wireguard)        wg-quick down "pgw-${name}" 2>/dev/null || true ;;
-        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl stop "proxy-gateway-mihomo@${name}.service" 2>/dev/null || true ;;
+        wireguard)
+            iface="$(exit_iface "$name")"
+            conf="$(exit_conf_path "$name")"
+            runtime_conf="${WG_DIR}/${iface}.conf"
+            wg-quick down "$iface" 2>/dev/null || true
+            [[ "$conf" == "$runtime_conf" ]] || rm -f "$runtime_conf" ;;
+        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl stop "$(exit_mihomo_unit "$name")" 2>/dev/null || true ;;
     esac
 }
 exit_server() {
@@ -1719,7 +1763,7 @@ check_exits() {
     done < <(list_exit_names)
 }
 exit_wait_device() {
-    local iface="pgw-${1}" i
+    local iface i; iface="$(exit_iface "$1")"
     for i in $(seq 1 50); do
         ip link show up "$iface" >/dev/null 2>&1 && return 0
         sleep 0.1
@@ -1743,6 +1787,16 @@ EOF
 # the main table, i.e. direct egress ("local").
 ip rule add fwmark "${MARK}" table "${TABLE}" 2>/dev/null || true
 
+exit_iface() {
+    local name="$1"
+    if [[ "$name" =~ ^[A-Za-z0-9_-]{1,11}$ ]]; then
+        echo "pgw-${name}"
+    else
+        printf 'pgw-%s\n' "$(printf '%s' "$name" | sha256sum | cut -c1-11)"
+    fi
+}
+mihomo_unit() { systemd-escape --template=proxy-gateway-mihomo@.service "$1"; }
+
 current="local"
 [[ -f "${STATE}" ]] && current="$(cat "${STATE}" 2>/dev/null || echo local)"
 
@@ -1751,14 +1805,18 @@ if [[ -z "${current}" || "${current}" == "local" ]]; then
     exit 0
 fi
 
-iface="pgw-${current}"
+iface="$(exit_iface "${current}")"
 etype="wireguard"
 [[ -f "${EXITS_DIR}/${current}.type" ]] && etype="$(cat "${EXITS_DIR}/${current}.type")"
 
 if ! ip link show "${iface}" >/dev/null 2>&1; then
     case "${etype}" in
-        wireguard)        wg-quick up "${iface}" 2>/dev/null || { echo "[!] exit '${current}' (wireguard) failed to start"; exit 1; } ;;
-        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl start "proxy-gateway-mihomo@${current}.service" 2>/dev/null || { echo "[!] exit '${current}' (${etype}) failed to start"; exit 1; } ;;
+        wireguard)
+            conf="${WG_DIR}/pgw-${current}.conf"
+            runtime_conf="${WG_DIR}/${iface}.conf"
+            [[ "${conf}" == "${runtime_conf}" ]] || ln -sf "${conf}" "${runtime_conf}"
+            wg-quick up "${iface}" 2>/dev/null || { echo "[!] exit '${current}' (wireguard) failed to start"; exit 1; } ;;
+        shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl start "$(mihomo_unit "${current}")" 2>/dev/null || { echo "[!] exit '${current}' (${etype}) failed to start"; exit 1; } ;;
     esac
 fi
 
@@ -1786,6 +1844,10 @@ setup_exit_switching() {
     mkdir -p "$(dirname "${RULES_DEFAULT}")"
     [[ -f "${LIB_DIR}/rules-default.conf" ]] && \
         install -m 0644 "${LIB_DIR}/rules-default.conf" "${RULES_DEFAULT}"
+    local existing_exit
+    while IFS= read -r existing_exit; do
+        ensure_mihomo_exit_iface "$existing_exit"
+    done < <(list_exit_names)
     install_mihomo_unit
     migrate_singbox_exits
     install_apply_exit_helper
@@ -1828,7 +1890,7 @@ list_exits() {
                 detail="rules:$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)" ;;
             *) detail="?" ;;
         esac
-        link="down"; ip link show "pgw-${n}" >/dev/null 2>&1 && link="up"
+        link="down"; ip link show "$(exit_iface "$n")" >/dev/null 2>&1 && link="up"
         printf '  %-12s %-11s %s link=%s%s\n' "$n" "${t:-?}" "${detail:-?}" "$link" "$([[ "$cur" == "$n" ]] && echo ' *')"
     done < <(list_exit_names)
     echo "=========================================="
@@ -2041,12 +2103,16 @@ PYNAME
     if [[ -f "$old_yaml" ]]; then
         python3 - "$old_yaml" "$new_yaml" "$new" <<'PYYAML' \
             || rollback_rename_exit "Failed to rewrite mihomo device for renamed exit '$old'"
-import json, os, sys, tempfile
+import hashlib, json, os, re, sys, tempfile
 
 src, dst, name = sys.argv[1:4]
 with open(src, encoding="utf-8") as f:
     config = json.load(f)
-config.setdefault("tun", {})["device"] = "pgw-" + name
+if re.fullmatch(r"[A-Za-z0-9_-]{1,11}", name):
+    device = "pgw-" + name
+else:
+    device = "pgw-" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:11]
+config.setdefault("tun", {})["device"] = device
 directory = os.path.dirname(dst)
 fd, tmp = tempfile.mkstemp(prefix=".rename-exit-", dir=directory, text=True)
 try:
@@ -2570,7 +2636,7 @@ do_uninstall() {
         wg-quick down "$(basename "$f" .conf)" 2>/dev/null || true
     done
     for f in "${EXITS_DIR}"/*.type; do
-        systemctl stop "proxy-gateway-mihomo@$(basename "$f" .type).service" 2>/dev/null || true
+        systemctl stop "$(exit_mihomo_unit "$(basename "$f" .type)")" 2>/dev/null || true
         systemctl stop "proxy-gateway-singbox@$(basename "$f" .type).service" 2>/dev/null || true
     done
     shopt -u nullglob

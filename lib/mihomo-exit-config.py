@@ -5,6 +5,7 @@ The emitted document is JSON, which is valid YAML 1.2. This keeps the helper
 stdlib-only while safely quoting credentials and other user-controlled values.
 """
 import base64
+import hashlib
 import json
 import os
 import re
@@ -249,6 +250,13 @@ def parse_proxy_uri(uri):
     die("unsupported URI scheme")
 
 
+def interface_name(name):
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,11}", name):
+        return "pgw-" + name
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:11]
+    return "pgw-" + digest
+
+
 def main():
     if len(sys.argv) != 3:
         die("usage: mihomo-exit-config.py <name> <uri>")
@@ -269,7 +277,7 @@ def main():
     config = {
         "mode": "rule", "log-level": "warning", "ipv6": False, "find-process-mode": "off",
         "tun": {"enable": True, "stack": os.environ.get("MIHOMO_STACK", "gvisor"),
-                "device": "pgw-" + name, "auto-route": False, "auto-redirect": False,
+                "device": interface_name(name), "auto-route": False, "auto-redirect": False,
                 "strict-route": False, "mtu": mtu},
         "proxies": [proxy], "rules": ["MATCH,out"],
     }
