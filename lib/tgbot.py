@@ -196,8 +196,25 @@ def send(chat_id, text, keyboard=None, mono=False):
 
 def delete_message(chat_id, message_id):
     if message_id is None:
+        print("[warn] deleteMessage failed chat_id=%s message_id=None error_code=- description=missing message_id"
+              % chat_id, file=sys.stderr)
         return False
-    return bool(tg("deleteMessage", chat_id=chat_id, message_id=message_id).get("ok"))
+    try:
+        response = tg("deleteMessage", chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        response = {"ok": False, "error": "exception:%s" % type(e).__name__}
+    if isinstance(response, dict) and response.get("ok"):
+        return True
+    if isinstance(response, dict):
+        error_code = response.get("error_code", "-")
+        description = response.get("description") or response.get("error") or "unknown error"
+    else:
+        error_code = "-"
+        description = "malformed response"
+    description = " ".join(str(description).split())[:500]
+    print("[warn] deleteMessage failed chat_id=%s message_id=%s error_code=%s description=%s"
+          % (chat_id, message_id, error_code, description), file=sys.stderr)
+    return False
 
 
 def _chunks(text, size):
@@ -285,6 +302,11 @@ def back_kb(target="menu:main", label="« 返回"):
 
 def cancel_kb(section):
     return [[{"text": "✖ 取消", "callback_data": "cancel:" + section}]]
+
+
+def add_exit_retry_kb():
+    return [[{"text": "➕ 重新添加", "callback_data": "exit_add"}],
+            [{"text": "« 返回", "callback_data": "menu:exits"}]]
 
 
 def status_kb():
@@ -732,49 +754,55 @@ def op_add_exit_batch(items):
     if not items:
         return "没有可添加的出口。"
 
-    results = []
-    with _EXIT_WRITE_LOCK:
-        reserved = set(parse_exit_names())
-        assigned = set()
-        for item in items:
-            requested = item["name"]
-            final = requested
-            if final in reserved or final in assigned:
-                base = clean_exit_name(requested)
-                final = ""
-                if base:
-                    for i in range(2, 100):
-                        suffix = "-%d" % i
-                        cand = (base[:16 - len(suffix)] + suffix).strip("-_")
-                        if cand and cand not in reserved and cand not in assigned and EXIT_ADD_NAME_RE.match(cand):
-                            final = cand
-                            break
+    try:
+        results = []
+        with _EXIT_WRITE_LOCK:
+            reserved = set(parse_exit_names())
+            assigned = set()
+            for item in items:
+                requested = item["name"]
+                final = requested
+                if final in reserved or final in assigned:
+                    base = clean_exit_name(requested)
+                    final = ""
+                    if base:
+                        for i in range(2, 100):
+                            suffix = "-%d" % i
+                            cand = (base[:16 - len(suffix)] + suffix).strip("-_")
+                            if cand and cand not in reserved and cand not in assigned and EXIT_ADD_NAME_RE.match(cand):
+                                final = cand
+                                break
+                    if not final:
+                        results.append("❌ %d. <b>%s</b>：无法生成不冲突的名称" % (item["index"], html.escape(requested)))
+                        continue
+                assigned.add(final)
+                item["final_name"] = final
+
+            for item in items:
+                final = item.get("final_name")
                 if not final:
-                    results.append("❌ %d. <b>%s</b>：无法生成不冲突的名称" % (item["index"], html.escape(requested)))
                     continue
-            assigned.add(final)
-            item["final_name"] = final
-
-        for item in items:
-            final = item.get("final_name")
-            if not final:
-                continue
-            text = op_add_exit(final, item["payload"])
-            if text.startswith("✅"):
-                if final != item["name"]:
-                    results.append("✅ %d. <b>%s</b>（由 %s 自动去重）" % (
-                        item["index"], html.escape(final), html.escape(item["name"])))
+                text = op_add_exit(final, item["payload"])
+                item["payload"] = ""
+                if text.startswith("✅"):
+                    if final != item["name"]:
+                        results.append("✅ %d. <b>%s</b>（由 %s 自动去重）" % (
+                            item["index"], html.escape(final), html.escape(item["name"])))
+                    else:
+                        results.append("✅ %d. <b>%s</b>" % (item["index"], html.escape(final)))
+                    reserved.add(final)
                 else:
-                    results.append("✅ %d. <b>%s</b>" % (item["index"], html.escape(final)))
-                reserved.add(final)
-            else:
-                results.append("❌ %d. <b>%s</b>：%s" % (
-                    item["index"], html.escape(final), html.escape(_reason(text))))
+                    results.append("❌ %d. <b>%s</b>：添加失败，请检查服务日志" % (
+                        item["index"], html.escape(final)))
 
-    ok_count = sum(1 for line in results if line.startswith("✅"))
-    fail_count = sum(1 for line in results if line.startswith("❌"))
-    head = "批量添加完成：✅ %d，❌ %d" % (ok_count, fail_count)
-    return head + "\n" + "\n".join(results)
+        ok_count = sum(1 for line in results if line.startswith("✅"))
+        fail_count = sum(1 for line in results if line.startswith("❌"))
+        head = "批量添加完成：✅ %d，❌ %d" % (ok_count, fail_count)
+        return head + "\n" + "\n".join(results)
+    finally:
+        for item in items:
+            item["payload"] = ""
+            item.pop("masked", None)
 
 
 def b64decode_text(s):
@@ -1447,6 +1475,36 @@ def authorized(uid):
     return uid in ADMIN_IDS
 
 
+def process_add_exit_message(chat_id, message_id, payload):
+    items = []
+    try:
+        deleted = delete_message(chat_id, message_id)
+        delete_warning = ("\n\n⚠️ 未能自动删除含凭据的消息，请手动删除上一条节点消息。"
+                          if not deleted else "")
+        items, err = parse_add_exit_inputs(payload)
+        payload = ""
+        if err:
+            send(chat_id, err + delete_warning, add_exit_retry_kb())
+            return
+        send(chat_id, "⏳ 正在后台添加 %d 个出口…%s" % (len(items), delete_warning))
+        result = op_add_exit_batch(items)
+        send(chat_id, result, exits_menu())
+    except Exception:
+        print("[err] add-exit background task failed chat_id=%s message_id=%s"
+              % (chat_id, message_id), file=sys.stderr)
+        try:
+            send(chat_id, "❌ 添加出口时发生内部错误，请重新进入添加流程。", add_exit_retry_kb())
+        except Exception:
+            print("[err] add-exit failure notification failed chat_id=%s message_id=%s"
+                  % (chat_id, message_id), file=sys.stderr)
+    finally:
+        payload = ""
+        for item in items:
+            item["payload"] = ""
+            item.pop("masked", None)
+        items.clear()
+
+
 def handle_message(msg):
     chat_id = msg["chat"]["id"]
     uid = msg.get("from", {}).get("id")
@@ -1486,15 +1544,11 @@ def handle_message(msg):
     state = PENDING.get(chat_id)
     if state and state.get("action") == "add_exit_link":
         payload = msg.get("text") or ""
-        deleted = delete_message(chat_id, msg.get("message_id"))
-        delete_warning = "\n\n⚠️ 未能自动删除含凭据的消息，请手动删除上一条节点消息。" if not deleted else ""
-        items, err = parse_add_exit_inputs(payload)
-        if err:
-            send(chat_id, err + delete_warning, cancel_kb("exits"))
-            return
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在后台添加 %d 个出口…%s" % (len(items), delete_warning))
-        send_async(chat_id, lambda: op_add_exit_batch(items), keyboard_fn=exits_menu)
+        background(process_add_exit_message, chat_id, msg.get("message_id"), payload)
+        msg["text"] = ""
+        payload = ""
+        text = ""
         return
     if state and state.get("action") == "rename_exit":
         old_name = state.get("old") or ""
@@ -1675,7 +1729,8 @@ def handle_callback(cb):
              "直接发送一条或多条节点链接，每行一条；我会优先使用链接里的节点名称作为出口名。\n\n"
              "支持：<code>%s</code>\n\n"
              "链接没有名称时，也可以发 <code>出口名 链接</code> 指定名称；同名会自动去重。\n\n"
-             "🔐 节点消息读取后会自动删除；删除失败时会提醒你手动删除。" % SUPPORTED_EXIT_LINKS,
+             "🔐 为避免凭据留在聊天记录中，进入此步骤后，你发送的下一条消息会在读取后尝试自动删除；"
+             "即使解析失败也会删除。删除失败时会提醒你手动处理。" % SUPPORTED_EXIT_LINKS,
              cancel_kb("exits"))
     elif data.startswith("exitren:"):
         name = data[len("exitren:"):]
