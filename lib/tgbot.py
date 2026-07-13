@@ -33,6 +33,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
 import urllib.request
@@ -1031,6 +1032,36 @@ def op_renew_cert():
     return "❌ <b>证书续期失败</b>\n<pre>%s</pre>" % html.escape(_tail_output(out))
 
 
+DOT_CERT_PATH = "/etc/dnsdist/certs/fullchain.pem"
+
+
+def _cert_expiry(path=DOT_CERT_PATH):
+    """Return (days_left, 'YYYY-MM-DD') for the DoT certificate, or (None, None)."""
+    if not os.path.exists(path):
+        return None, None
+    ok, out = run2(["openssl", "x509", "-noout", "-enddate", "-in", path], timeout=10)
+    if not ok or "notAfter=" not in out:
+        return None, None
+    raw = out.split("notAfter=", 1)[1].strip()
+    try:
+        expires = datetime.strptime(raw, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None, None
+    days = (expires - datetime.now(timezone.utc)).days
+    return days, expires.strftime("%Y-%m-%d")
+
+
+def _cert_status_line():
+    days, date = _cert_expiry()
+    if days is None:
+        return "证书剩余：<code>未知（未找到证书）</code>"
+    if days < 0:
+        return "证书剩余：⚠️ <b>已过期 %d 天</b>（到期：%s）" % (-days, date)
+    if days <= 14:
+        return "证书剩余：⚠️ <b>%d 天</b>（到期：%s，建议尽快续期）" % (days, date)
+    return "证书剩余：<code>%d 天</code>（到期：%s）" % (days, date)
+
+
 def op_dot_status():
     domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
     remote_dns = (_read_file("/etc/dnsdist/.remote_dns") or
@@ -1043,6 +1074,7 @@ def op_dot_status():
     lines.extend([
         "国际 DNS：<code>%s</code>" % html.escape(remote_dns),
         "国内 DNS：<code>%s</code>" % html.escape(local_dns),
+        _cert_status_line(),
     ])
     return "\n".join(lines)
 
