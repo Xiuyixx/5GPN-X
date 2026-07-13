@@ -407,6 +407,9 @@ Options:
                  (file/stdin/paste) OR ss/vmess/trojan/vless/hysteria2/tuic/
                  anytls/socks/http URI. URI types use the locked mihomo TUN
                  engine (auto-installed).
+  --rename-exit <old> <new>
+                 Rename a configured exit safely, including references in the
+                 active selection and smart-routing policy/rules when needed.
   --set-exit <name|local|smart>
                  Switch proxy egress to <name>, 'local' for direct egress, or
                  'smart' for rule-based per-domain routing (see --set-rules).
@@ -2155,6 +2158,7 @@ if name in ("local", "smart") or not re.match(r"^[\w\-\u4e00-\u9fff]{1,16}$", na
     raise SystemExit(1)
 PYNAME
     [[ "$name" == "local" || "$name" == "smart" ]] && { err "'$name' is a reserved exit name (smart = rule-based router; use --set-rules)"; exit 1; }
+    exit_exists "$name" && { err "Exit '$name' already exists"; exit 1; }
 
     mkdir -p "${WG_DIR}"; chmod 700 "${WG_DIR}"
     mkdir -p "${EXITS_DIR}"; chmod 700 "${EXITS_DIR}"
@@ -2255,6 +2259,184 @@ del_exit() {
         "$(exit_type_file "$name")" "${EXITS_DIR}/${name}.uri"
     rm -rf "${CONF_DIR}/mihomo/${name}"
     ok "Exit '$name' removed"
+}
+
+rename_exit() {
+    local old="${1:-}" new="${2:-}"
+    local cur="local" old_active=0 rules_ref=0 policy_ref=0 smart_touched=0 backup_dir=""
+    local old_wg old_yaml old_type old_uri old_runtime new_wg new_yaml new_type new_uri new_runtime
+    local current_smart=0
+
+    [[ -n "$old" && -n "$new" ]] || { err "Usage: $0 --rename-exit <old> <new>"; exit 1; }
+    [[ "$old" == "local" || "$old" == "smart" ]] && { err "'$old' cannot be renamed"; exit 1; }
+    [[ "$new" == "local" || "$new" == "smart" ]] && { err "'$new' is a reserved exit name"; exit 1; }
+    exit_exists "$old" || { err "Unknown exit '$old'"; exit 1; }
+    python3 - "$new" <<'PYNAME' || { err "Exit name must be 1-16 letters/digits/Chinese characters/_/-"; exit 1; }
+import re, sys
+name = sys.argv[1]
+if name in ("local", "smart") or not re.match(r"^[\w\-\u4e00-\u9fff]{1,16}$", name, re.UNICODE):
+    raise SystemExit(1)
+PYNAME
+    exit_exists "$new" && { err "Exit '$new' already exists"; exit 1; }
+
+    mkdir -p "${EXITS_DIR}" "${WG_DIR}" "${CONF_DIR}/mihomo"
+    [[ -f "${CONF_DIR}/current-exit" ]] && cur="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
+    [[ "$cur" == "$old" ]] && old_active=1
+    [[ "$cur" == "smart" ]] && current_smart=1
+
+    if [[ -f "${POLICY_MAP}" ]] && awk -F= -v c="$old" '$1==c{found=1} END{exit(found?0:1)}' "${POLICY_MAP}"; then
+        err "Cannot safely rename exit '$old': category '$old' already exists in ${POLICY_MAP}"
+        exit 1
+    fi
+    if [[ -f "${RULES_FILE}" ]] && awk -F, -v o="$old" '
+        /^[[:space:]]*(#|;|$)/ { next }
+        { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $NF); if ($NF == o) { found=1; exit } }
+        END { exit(found?0:1) }
+    ' "${RULES_FILE}"; then
+        rules_ref=1
+        smart_touched=1
+    fi
+    if [[ -f "${POLICY_MAP}" ]] && awk -F= -v o="$old" '
+        { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == o) { found=1; exit } }
+        END { exit(found?0:1) }
+    ' "${POLICY_MAP}"; then
+        policy_ref=1
+        smart_touched=1
+    fi
+
+    old_wg="$(exit_conf_path "$old")"
+    old_yaml="$(exit_mihomo_conf "$old")"
+    old_type="$(exit_type_file "$old")"
+    old_uri="${EXITS_DIR}/${old}.uri"
+    old_runtime="${CONF_DIR}/mihomo/${old}"
+    new_wg="$(exit_conf_path "$new")"
+    new_yaml="$(exit_mihomo_conf "$new")"
+    new_type="$(exit_type_file "$new")"
+    new_uri="${EXITS_DIR}/${new}.uri"
+    new_runtime="${CONF_DIR}/mihomo/${new}"
+    backup_dir="$(mktemp -d)"
+
+    [[ -f "$old_wg" ]] && cp -a "$old_wg" "${backup_dir}/old.wg"
+    [[ -f "$old_yaml" ]] && cp -a "$old_yaml" "${backup_dir}/old.yaml"
+    [[ -f "$old_type" ]] && cp -a "$old_type" "${backup_dir}/old.type"
+    [[ -f "$old_uri" ]] && cp -a "$old_uri" "${backup_dir}/old.uri"
+    [[ -d "$old_runtime" ]] && cp -a "$old_runtime" "${backup_dir}/old.runtime"
+    [[ -f "${RULES_FILE}" ]] && cp -a "${RULES_FILE}" "${backup_dir}/rules.conf"
+    [[ -f "${POLICY_MAP}" ]] && cp -a "${POLICY_MAP}" "${backup_dir}/policy-map.conf"
+
+    rollback_rename_exit() {
+        local reason="$1"
+        (set_exit local) >/dev/null 2>&1 || true
+
+        rm -f "$new_wg" "$new_yaml" "$new_type" "$new_uri"
+        rm -rf "$new_runtime"
+
+        [[ -f "${backup_dir}/old.wg" ]] && cp -a "${backup_dir}/old.wg" "$old_wg"
+        [[ -f "${backup_dir}/old.yaml" ]] && cp -a "${backup_dir}/old.yaml" "$old_yaml"
+        [[ -f "${backup_dir}/old.type" ]] && cp -a "${backup_dir}/old.type" "$old_type"
+        [[ -f "${backup_dir}/old.uri" ]] && cp -a "${backup_dir}/old.uri" "$old_uri"
+        if [[ -d "${backup_dir}/old.runtime" ]]; then
+            rm -rf "$old_runtime"
+            cp -a "${backup_dir}/old.runtime" "$old_runtime"
+        fi
+
+        if [[ -f "${backup_dir}/rules.conf" ]]; then
+            install -m 644 "${backup_dir}/rules.conf" "${RULES_FILE}"
+        elif [[ $rules_ref -eq 1 ]]; then
+            rm -f "${RULES_FILE}"
+        fi
+        if [[ -f "${backup_dir}/policy-map.conf" ]]; then
+            install -m 644 "${backup_dir}/policy-map.conf" "${POLICY_MAP}"
+        elif [[ $policy_ref -eq 1 ]]; then
+            rm -f "${POLICY_MAP}"
+        fi
+
+        if [[ $smart_touched -eq 1 ]]; then
+            (regen_smart) >/dev/null 2>&1 || true
+        fi
+        if [[ $old_active -eq 1 ]]; then
+            (set_exit "$old") >/dev/null 2>&1 || true
+        elif [[ $current_smart -eq 1 && $smart_touched -eq 1 ]]; then
+            printf '%s\n' smart > "${CONF_DIR}/current-exit"
+        else
+            printf '%s\n' "$cur" > "${CONF_DIR}/current-exit"
+        fi
+
+        rm -rf "$backup_dir"
+        err "$reason"
+        exit 1
+    }
+
+    if [[ $old_active -eq 1 ]]; then
+        if ! (set_exit local) >/dev/null 2>&1; then
+            rm -rf "$backup_dir"
+            err "Failed to switch active exit '$old' to local before rename"
+            exit 1
+        fi
+    fi
+
+    [[ -f "$old_type" ]] && mv "$old_type" "$new_type"
+    [[ -f "$old_wg" ]] && mv "$old_wg" "$new_wg"
+    if [[ -f "$old_yaml" ]]; then
+        python3 - "$old_yaml" "$new_yaml" "$new" <<'PYYAML' \
+            || rollback_rename_exit "Failed to rewrite mihomo device for renamed exit '$old'"
+import json, os, sys, tempfile
+
+src, dst, name = sys.argv[1:4]
+with open(src, encoding="utf-8") as f:
+    config = json.load(f)
+config.setdefault("tun", {})["device"] = "pgw-" + name
+directory = os.path.dirname(dst)
+fd, tmp = tempfile.mkstemp(prefix=".rename-exit-", dir=directory, text=True)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, dst)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+PYYAML
+        rm -f "$old_yaml"
+    fi
+    [[ -f "$old_uri" ]] && mv "$old_uri" "$new_uri"
+    [[ -d "$old_runtime" ]] && mv "$old_runtime" "$new_runtime"
+
+    if [[ $rules_ref -eq 1 ]]; then
+        awk -F, -v o="$old" -v n="$new" '
+            BEGIN { OFS="," }
+            /^[[:space:]]*(#|;|$)/ { print; next }
+            { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $NF); if ($NF == o) $NF = n; print }
+        ' "${RULES_FILE}" > "${RULES_FILE}.tmp" || rollback_rename_exit "Failed to rewrite rules for renamed exit '$old'"
+        install -m 644 "${RULES_FILE}.tmp" "${RULES_FILE}" \
+            || rollback_rename_exit "Failed to install rewritten rules for renamed exit '$old'"
+        rm -f "${RULES_FILE}.tmp"
+    fi
+    if [[ $policy_ref -eq 1 ]]; then
+        awk -F= -v o="$old" -v n="$new" '
+            BEGIN { OFS="=" }
+            { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == o) $2 = n; print }
+        ' "${POLICY_MAP}" > "${POLICY_MAP}.tmp" || rollback_rename_exit "Failed to rewrite policy map for renamed exit '$old'"
+        install -m 644 "${POLICY_MAP}.tmp" "${POLICY_MAP}" \
+            || rollback_rename_exit "Failed to install rewritten policy map for renamed exit '$old'"
+        rm -f "${POLICY_MAP}.tmp"
+    fi
+
+    if [[ $smart_touched -eq 1 ]]; then
+        if ! (regen_smart) >/dev/null 2>&1; then
+            rollback_rename_exit "Rename rejected; previous exit restored"
+        fi
+    fi
+
+    if [[ $old_active -eq 1 ]]; then
+        if ! (set_exit "$new") >/dev/null 2>&1; then
+            rollback_rename_exit "Renamed exit but failed to activate '$new'; previous exit restored"
+        fi
+    fi
+
+    rm -rf "$backup_dir"
+    ok "Exit '$old' renamed to '$new'"
 }
 
 set_exit() {
@@ -3240,6 +3422,7 @@ main_install() {
     echo "  $0 -ios"
     echo "  $0 --list-exits"
     echo "  $0 --add-exit <name> <wg.conf|proxy-uri>"
+    echo "  $0 --rename-exit <old> <new>"
     echo "  $0 --set-exit <name|local|smart>"
     echo "  $0 --setup-tgbot                 # 配置/启用 Telegram 控制 Bot"
     echo "  $0 --uninstall"
@@ -3285,6 +3468,10 @@ case "${1:-}" in
     --add-exit)
         check_root
         add_exit "${2:-}" "${3:-}"
+        ;;
+    --rename-exit)
+        check_root
+        rename_exit "${2:-}" "${3:-}"
         ;;
     --del-exit)
         check_root

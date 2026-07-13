@@ -26,7 +26,7 @@ cb = {
 
 forms = {
     "rules:set": "rules",
-    "rules:add": "rules",
+    "rules:add_manual": "rules",
     "rules:addset": "rules",
     "exit_add": "exits",
     "dot:domain": "dot",

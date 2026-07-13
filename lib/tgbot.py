@@ -23,6 +23,7 @@ import html
 import base64
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import re
@@ -81,6 +82,7 @@ SUPPORTED_EXIT_LINKS = "ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// a
 _TG_LOCAL = threading.local()
 _BG_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="pgw-bg")
 _CALLBACK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pgw-callback")
+_EXIT_WRITE_LOCK = threading.Lock()
 _TG_API_TIMEOUT = 12
 _TG_POLL_TIMEOUT = 35
 _TG_API_IDLE_SECONDS = 25
@@ -277,6 +279,11 @@ def back_kb(target="menu:main", label="« 返回"):
 
 def cancel_kb(section):
     return [[{"text": "✖ 取消", "callback_data": "cancel:" + section}]]
+
+
+def status_kb():
+    return [[{"text": "🔄 刷新", "callback_data": "act:status_refresh"}],
+            [{"text": "« 返回", "callback_data": "menu:main"}]]
 
 
 def send_photo(chat_id, path, caption=""):
@@ -601,6 +608,19 @@ def op_status():
     return "\n".join(lines)
 
 
+def op_rename_exit(old_name, new_name):
+    if not EXIT_ADD_NAME_RE.match(old_name) or old_name in ("local", "smart"):
+        return "原出口名无效。"
+    if not EXIT_ADD_NAME_RE.match(new_name) or new_name in ("local", "smart"):
+        return "新出口名无效（需 1-16 位字母/数字/中文/_/-，且不能为 local/smart）。"
+    if old_name == new_name:
+        return "新旧名称相同，无需重命名。"
+    ok, out = run2(["bash", MGMT, "--rename-exit", old_name, new_name], timeout=180)
+    if ok:
+        return "✅ 出口 <b>%s</b> 已重命名为 <b>%s</b>" % (html.escape(old_name), html.escape(new_name))
+    return "❌ <b>重命名失败</b>\n%s" % html.escape(_reason(out))
+
+
 def op_set_exit(name):
     if not EXIT_NAME_RE.match(name):
         return "出口名无效。"
@@ -649,6 +669,106 @@ def op_add_exit(name, payload):
         return ("✅ 出口 <b>%s</b> 已添加（%s）\n在「🌐 出口」里点它即可切换。"
                 % (html.escape(name), m.group(1) if m else "?"))
     return "❌ <b>添加失败</b>\n%s" % html.escape(_reason(out))
+
+
+def mask_uri_secret(uri):
+    text = (uri or "").strip()
+    if not text:
+        return ""
+    try:
+        if text.lower().startswith("vmess://"):
+            return "vmess://***"
+        parsed = urlparse(text)
+        if not parsed.scheme:
+            return text[:24] + ("…" if len(text) > 24 else "")
+        host = parsed.hostname or "?"
+        port = ":%s" % parsed.port if parsed.port else ""
+        label = "%s://%s%s" % (parsed.scheme, host, port)
+        if parsed.fragment:
+            label += "#" + parsed.fragment[:12]
+        return label
+    except Exception:
+        return text[:24] + ("…" if len(text) > 24 else "")
+
+
+def _normalize_batch_add_line(line):
+    raw = (line or "").strip()
+    if not raw:
+        return "", "", ""
+    parts = raw.split(None, 1)
+    if len(parts) == 2 and EXIT_ADD_NAME_RE.match(parts[0]) and parts[0] != "local" and PROXY_URI_RE.match(parts[1].strip()):
+        return parts[0], parts[1].strip(), raw
+    return "", raw, raw
+
+
+def parse_add_exit_inputs(payload):
+    lines = [(line or "").strip() for line in (payload or "").splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return [], "请直接粘贴一条或多条节点链接，每行一条。"
+    items = []
+    for index, line in enumerate(lines, 1):
+        explicit_name, config_text, raw = _normalize_batch_add_line(line)
+        if "[Interface]" in config_text and "[Peer]" in config_text:
+            return [], "第 %d 行是 WireGuard 配置。Bot 批量添加仅支持 URI；WireGuard 请改用命令行指定名称添加。" % index
+        name, config, err = parse_add_exit_input(raw)
+        if explicit_name:
+            name = explicit_name
+            config = config_text
+            err = ""
+        if err:
+            return [], "第 %d 行：%s" % (index, err)
+        items.append({"index": index, "name": name, "payload": config.strip(), "masked": mask_uri_secret(config)})
+    return items, ""
+
+
+def op_add_exit_batch(items):
+    if not items:
+        return "没有可添加的出口。"
+
+    results = []
+    with _EXIT_WRITE_LOCK:
+        reserved = set(parse_exit_names())
+        assigned = set()
+        for item in items:
+            requested = item["name"]
+            final = requested
+            if final in reserved or final in assigned:
+                base = clean_exit_name(requested)
+                final = ""
+                if base:
+                    for i in range(2, 100):
+                        suffix = "-%d" % i
+                        cand = (base[:16 - len(suffix)] + suffix).strip("-_")
+                        if cand and cand not in reserved and cand not in assigned and EXIT_ADD_NAME_RE.match(cand):
+                            final = cand
+                            break
+                if not final:
+                    results.append("❌ %d. <b>%s</b>：无法生成不冲突的名称" % (item["index"], html.escape(requested)))
+                    continue
+            assigned.add(final)
+            item["final_name"] = final
+
+        for item in items:
+            final = item.get("final_name")
+            if not final:
+                continue
+            text = op_add_exit(final, item["payload"])
+            if text.startswith("✅"):
+                if final != item["name"]:
+                    results.append("✅ %d. <b>%s</b>（由 %s 自动去重）" % (
+                        item["index"], html.escape(final), html.escape(item["name"])))
+                else:
+                    results.append("✅ %d. <b>%s</b>" % (item["index"], html.escape(final)))
+                reserved.add(final)
+            else:
+                results.append("❌ %d. <b>%s</b>：%s" % (
+                    item["index"], html.escape(final), html.escape(_reason(text))))
+
+    ok_count = sum(1 for line in results if line.startswith("✅"))
+    fail_count = sum(1 for line in results if line.startswith("❌"))
+    head = "批量添加完成：✅ %d，❌ %d" % (ok_count, fail_count)
+    return head + "\n" + "\n".join(results)
 
 
 def b64decode_text(s):
@@ -714,6 +834,75 @@ def parse_add_exit_input(payload):
     if not name:
         return "", "", "这条节点链接没有可用名称。请改用：<code>出口名 链接</code>。"
     return name, config, ""
+
+
+RULE_TYPES = [
+    "DOMAIN",
+    "DOMAIN-SUFFIX",
+    "DOMAIN-KEYWORD",
+    "GEOSITE",
+    "GEOIP",
+    "IP-CIDR",
+]
+
+
+def rule_type_menu():
+    rows = []
+    for value in RULE_TYPES:
+        rows.append([{"text": value, "callback_data": "raddt:%s" % value}])
+    rows.append([{"text": "⌨️ 手工完整规则", "callback_data": "rules:add_manual"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
+    return rows
+
+
+def _rule_target_buttons(prefix):
+    rows, row = [], []
+    for target in _targets():
+        row.append({"text": target, "callback_data": "%s:%s" % (prefix, target)})
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([{"text": "🌍 直连", "callback_data": "%s:direct" % prefix},
+                 {"text": "🚫 拒绝", "callback_data": "%s:block" % prefix}])
+    rows.append([{"text": "« 返回", "callback_data": "rules:add"}])
+    return rows
+
+
+def validate_rule_value(rule_type, value):
+    value = (value or "").strip()
+    if not value:
+        return "匹配值不能为空。"
+    if rule_type in ("DOMAIN", "DOMAIN-SUFFIX"):
+        if not DOMAIN_RE.match(value):
+            return "域名格式无效。"
+    elif rule_type == "DOMAIN-KEYWORD":
+        if any(ch in value for ch in "\r\n,"):
+            return "DOMAIN-KEYWORD 不能包含逗号或换行。"
+    elif rule_type in ("GEOSITE", "GEOIP"):
+        if not re.match(r"^[A-Za-z0-9._:-]+$", value):
+            return "%s 名称无效。" % rule_type
+    elif rule_type == "IP-CIDR":
+        try:
+            ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return "IP-CIDR 格式无效。"
+    return ""
+
+
+def rule_value_prompt(rule_type):
+    hints = {
+        "DOMAIN": "示例：<code>openai.com</code>",
+        "DOMAIN-SUFFIX": "示例：<code>google.com</code>",
+        "DOMAIN-KEYWORD": "示例：<code>netflix</code>",
+        "GEOSITE": "示例：<code>telegram</code>",
+        "GEOIP": "示例：<code>cn</code>",
+        "IP-CIDR": "示例：<code>1.2.3.0/24</code>",
+    }
+    return ("➕ <b>添加规则</b>\n\n"
+            "已选择类型：<code>%s</code>\n"
+            "请发送匹配值。\n\n%s" % (html.escape(rule_type), hints.get(rule_type, "")))
 
 
 def op_del_exit(name):
@@ -1008,14 +1197,49 @@ def _targets():
     return [n for n in parse_exit_names() if n != "local"]
 
 
+def _format_check_exit_row(name, endpoint, state):
+    mapping = {"UP": "✅", "DOWN": "❌", "N/A": "➖", "N/A?": "➖", "n/a": "➖"}
+    mark = mapping.get(state.upper() if state else "", "➖")
+    detail = "<code>%s</code>" % html.escape(endpoint) if endpoint and endpoint != "-" else "<i>n/a</i>"
+    return "%s <b>%s</b>  %s" % (mark, html.escape(name), detail)
+
+
+def parse_check_exits_output(out):
+    rows = []
+    for raw in _strip_ansi(out).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = re.split(r"\s{2,}", line)
+        if len(parts) >= 3:
+            name = parts[0].strip()
+            endpoint = parts[1].strip() or "-"
+            state = parts[2].strip()
+        else:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            name = parts[0]
+            state = parts[-1]
+            endpoint = " ".join(parts[1:-1]).strip() or "-"
+        rows.append((name, endpoint if endpoint != "?" else "-", state))
+    return rows
+
+
 def op_check_exits():
     ok, out = run2(["bash", MGMT, "--check-exits"], timeout=60)
     out = out.strip()
     if not out:
         return "（没有可检查的出口）"
-    bad = "DOWN" in out
-    head = "🩺 <b>出口节点连通性</b>%s\n" % ("　⚠️ 有节点不可达！" if bad else "")
-    return head + "<pre>" + html.escape(out) + "</pre>"
+    items = parse_check_exits_output(out)
+    if not items:
+        if ok:
+            return "（没有可检查的出口）"
+        return "❌ <b>出口检查失败</b>\n%s" % html.escape(_reason(out))
+    bad = any(state.upper() == "DOWN" for _, _, state in items)
+    lines = ["🩺 <b>出口节点连通性</b>%s" % ("　⚠️ 有节点不可达！" if bad else "")]
+    lines.extend(_format_check_exit_row(name, endpoint, state) for name, endpoint, state in items)
+    return "\n".join(lines)
 
 
 def parse_exit_names():
@@ -1163,7 +1387,8 @@ def exits_menu():
     for name in parse_exit_names():
         rows.append([{"text": "➡ " + name, "callback_data": "exit:" + name}])
     rows.append([{"text": "➕ 添加出口", "callback_data": "exit_add"},
-                 {"text": "🗑 删除出口", "callback_data": "menu:exits_del"}])
+                 {"text": "✏️ 重命名", "callback_data": "menu:exits_rename"}])
+    rows.append([{"text": "🗑 删除出口", "callback_data": "menu:exits_del"}])
     rows.append([{"text": "🩺 检查出口连通性", "callback_data": "exits:check"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
     return rows
@@ -1177,6 +1402,18 @@ def exits_del_menu():
         rows.append([{"text": "🗑 " + name, "callback_data": "exitdel:" + name}])
     if not rows:
         rows.append([{"text": "(没有可删除的出口)", "callback_data": "menu:exits"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:exits"}])
+    return rows
+
+
+def exits_rename_menu():
+    rows = []
+    for name in parse_exit_names():
+        if name in ("local", "smart"):
+            continue
+        rows.append([{"text": "✏️ " + name, "callback_data": "exitren:" + name}])
+    if not rows:
+        rows.append([{"text": "(没有可重命名的出口)", "callback_data": "menu:exits"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:exits"}])
     return rows
 
@@ -1242,19 +1479,37 @@ def handle_message(msg):
     # Conversational flows (e.g. adding an exit).
     state = PENDING.get(chat_id)
     if state and state.get("action") == "add_exit_link":
-        name, config, err = parse_add_exit_input(msg.get("text") or "")
+        items, err = parse_add_exit_inputs(msg.get("text") or "")
         if err:
             send(chat_id, err, cancel_kb("exits"))
             return
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在添加出口 <b>%s</b>…" % html.escape(name))
-        send_async(chat_id, lambda: op_add_exit(name, config), keyboard_fn=exits_menu)
+        send(chat_id, "⏳ 正在后台添加 %d 个出口…" % len(items))
+        send_async(chat_id, lambda: op_add_exit_batch(items), keyboard_fn=exits_menu)
+        return
+    if state and state.get("action") == "rename_exit":
+        old_name = state.get("old") or ""
+        new_name = text
+        PENDING.pop(chat_id, None)
+        send(chat_id, "⏳ 正在重命名出口 <b>%s</b>…" % html.escape(old_name))
+        send_async(chat_id, lambda: op_rename_exit(old_name, new_name), keyboard_fn=exits_menu)
         return
     if state and state.get("action") == "rules_set":
         PENDING.pop(chat_id, None)
         send(chat_id, "⏳ 正在校验并应用规则…")
         rules_text = msg.get("text") or ""
         send_async(chat_id, lambda: op_set_rules(rules_text), rules_menu())
+        return
+    if state and state.get("action") == "rules_add_value":
+        rule_type = state.get("rule_type") or ""
+        err = validate_rule_value(rule_type, text)
+        if err:
+            send(chat_id, err, cancel_kb("rules"))
+            return
+        PENDING[chat_id] = {"action": "rules_add_target", "rule_type": rule_type, "rule_value": text.strip()}
+        send(chat_id,
+             "请选择目标：<code>%s,%s,?</code>" % (html.escape(rule_type), html.escape(text.strip())),
+             _rule_target_buttons("raddo"))
         return
     if state and state.get("action") == "rules_add":
         PENDING.pop(chat_id, None)
@@ -1333,6 +1588,8 @@ def handle_callback(cb):
     elif data == "menu:exits":
         edit(cb, "⏳ 正在获取当前出口信息…")
         edit_async(cb, exits_overview_text, keyboard=exits_menu())
+    elif data == "menu:exits_rename":
+        edit(cb, "选择要重命名的出口：", exits_rename_menu())
     elif data == "menu:exits_del":
         edit(cb, "选择要删除的出口：", exits_del_menu())
     elif data == "menu:dot":
@@ -1355,6 +1612,11 @@ def handle_callback(cb):
              "FINAL,us</pre>",
              cancel_kb("rules"))
     elif data == "rules:add":
+        edit(cb,
+             "➕ <b>添加规则</b>\n\n"
+             "选择一种快捷类型，或继续使用手工完整规则入口。",
+             rule_type_menu())
+    elif data == "rules:add_manual":
         PENDING[chat_id] = {"action": "rules_add"}
         edit(cb,
              "➕ <b>添加规则</b>\n\n"
@@ -1363,6 +1625,29 @@ def handle_callback(cb):
              "示例：<code>DOMAIN-SUFFIX,youtube.com,us</code>\n\n"
              "常用类型：DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR",
              cancel_kb("rules"))
+    elif data.startswith("raddt:"):
+        rule_type = data.split(":", 1)[1]
+        if rule_type not in RULE_TYPES:
+            edit(cb, "规则类型无效，请重新选择。", rule_type_menu())
+        else:
+            PENDING[chat_id] = {"action": "rules_add_value", "rule_type": rule_type}
+            edit(cb, rule_value_prompt(rule_type), cancel_kb("rules"))
+    elif data.startswith("raddo:"):
+        state = PENDING.get(chat_id) or {}
+        parts = data.split(":", 1)
+        target = parts[1] if len(parts) == 2 else ""
+        rule_type = state.get("rule_type") or ""
+        value = state.get("rule_value") or ""
+        valid_targets = set(_targets()) | {"direct", "block"}
+        if state.get("action") != "rules_add_target" or not rule_type or not value:
+            edit(cb, "规则输入已过期，请重新开始。", rule_type_menu())
+        elif target not in valid_targets:
+            edit(cb, "目标已变化，请重新选择。", _rule_target_buttons("raddo"))
+        else:
+            PENDING.pop(chat_id, None)
+            line = "%s,%s,%s" % (rule_type, value, target)
+            edit(cb, "⏳ 正在添加规则 <code>%s</code>…" % html.escape(line))
+            edit_async(cb, lambda: op_add_rule(line), back_kb("menu:rules"))
     elif data == "rules:addset":
         PENDING[chat_id] = {"action": "rules_addset"}
         edit(cb,
@@ -1378,10 +1663,21 @@ def handle_callback(cb):
         PENDING[chat_id] = {"action": "add_exit_link"}
         edit(cb,
              "➕ <b>添加出口</b>\n\n"
-             "直接发送一条节点链接，我会使用链接里的节点名称作为出口名。\n\n"
+             "直接发送一条或多条节点链接，每行一条；我会优先使用链接里的节点名称作为出口名。\n\n"
              "支持：<code>%s</code>\n\n"
-             "链接没有名称时，也可以发 <code>出口名 链接</code> 指定名称。" % SUPPORTED_EXIT_LINKS,
+             "链接没有名称时，也可以发 <code>出口名 链接</code> 指定名称；同名会自动去重。" % SUPPORTED_EXIT_LINKS,
              cancel_kb("exits"))
+    elif data.startswith("exitren:"):
+        name = data[len("exitren:"):]
+        if name in ("local", "smart") or not EXIT_ADD_NAME_RE.match(name):
+            edit(cb, "出口已变化，请重新打开。", exits_rename_menu())
+        else:
+            PENDING[chat_id] = {"action": "rename_exit", "old": name}
+            edit(cb,
+                 "✏️ <b>重命名出口</b>\n\n"
+                 "当前出口：<b>%s</b>\n"
+                 "请发送新的名称。" % html.escape(name),
+                 cancel_kb("exits"))
     elif data == "dot:domain":
         PENDING[chat_id] = {"action": "dot_domain"}
         edit(cb,
@@ -1425,7 +1721,10 @@ def handle_callback(cb):
         edit(cb, op_show_rulesets(), back_kb("menu:rules"))
     elif data == "act:status":
         edit(cb, "⏳ 正在获取运行状态…")
-        edit_async(cb, op_status, back_kb("menu:main"))
+        edit_async(cb, op_status, status_kb())
+    elif data == "act:status_refresh":
+        edit(cb, "⏳ 正在刷新状态…")
+        edit_async(cb, op_status, status_kb())
     elif data.startswith("logs:"):
         svc = data[len("logs:"):]
         edit(cb, "📜 正在取 <b>%s</b> 日志…" % html.escape(svc))
