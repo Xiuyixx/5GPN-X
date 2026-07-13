@@ -71,6 +71,9 @@ WWW_DIR = "/opt/proxy-gateway/www"
 # Per-chat conversational state for multi-step flows (e.g. add-exit).
 PENDING = {}
 BUSY = set()
+# Per-chat "console" message: menus, progress and results are edited into this
+# single bubble instead of sending a new message every time.
+CONSOLE = {}
 LAST_FAILED_DOT_DOMAIN = {}
 PROXY_URI_RE = re.compile(r"^(ss|vmess|trojan|vless|hysteria2|hy2|tuic|anytls|socks5h|socks5|socks|http|https)://", re.I)
 SUPPORTED_EXIT_LINKS = "ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://"
@@ -175,6 +178,7 @@ def answer_callback_async(cb_id):
 def send(chat_id, text, keyboard=None, mono=False):
     # mono=True: paginate raw command output across one or more monospace
     # messages (escaped + wrapped per chunk, so HTML never splits mid-tag).
+    # Returns the message_id of the last message sent (None if unavailable).
     if mono:
         text = (text or "").strip() or "(no output)"
         chunks = [text[i : i + 3500] for i in range(0, len(text), 3500)] or [""]
@@ -182,6 +186,7 @@ def send(chat_id, text, keyboard=None, mono=False):
     else:
         wrapped = list(_chunks(text, 3900))
     last = len(wrapped) - 1
+    last_mid = None
     for i, chunk in enumerate(wrapped):
         params = {
             "chat_id": chat_id,
@@ -191,7 +196,12 @@ def send(chat_id, text, keyboard=None, mono=False):
         }
         if keyboard is not None and i == last:
             params["reply_markup"] = {"inline_keyboard": keyboard}
-        tg("sendMessage", **params)
+        r = tg("sendMessage", **params)
+        if isinstance(r, dict) and r.get("ok"):
+            mid = (r.get("result") or {}).get("message_id")
+            if mid is not None:
+                last_mid = mid
+    return last_mid
 
 
 def delete_message(chat_id, message_id):
@@ -225,6 +235,58 @@ def _chunks(text, size):
         yield text[i : i + size]
 
 
+def edit_message(chat_id, message_id, text, keyboard=None, mono=False):
+    """editMessageText without a callback_query. Returns True when the message
+    now shows the requested content ("message is not modified" counts as
+    success and is ignored quietly)."""
+    if chat_id is None or message_id is None:
+        return False
+    if mono:
+        text = "<pre>" + html.escape(((text or "").strip() or "(no output)")[:3800]) + "</pre>"
+    params = {
+        "chat_id": chat_id, "message_id": message_id, "text": (text or "")[:4096],
+        "parse_mode": "HTML", "disable_web_page_preview": True,
+    }
+    if keyboard is not None:
+        params["reply_markup"] = {"inline_keyboard": keyboard}
+    try:
+        r = tg("editMessageText", **params)
+    except Exception as e:
+        print("[warn] editMessageText failed chat_id=%s message_id=%s error=%s"
+              % (chat_id, message_id, type(e).__name__), file=sys.stderr)
+        return False
+    if isinstance(r, dict) and r.get("ok"):
+        return True
+    return "not modified" in str(r)
+
+
+def upsert_console(chat_id, text, keyboard=None, mono=False, message_id=None):
+    """Update the per-chat console message in place; fall back to a new
+    message only when editing is impossible (deleted / too old / media).
+    Returns the message_id that now shows the content."""
+    mid = message_id if message_id is not None else CONSOLE.get(chat_id)
+    if mid is not None and edit_message(chat_id, mid, text, keyboard, mono):
+        CONSOLE[chat_id] = mid
+        return mid
+    new_mid = send(chat_id, text, keyboard, mono)
+    if new_mid is not None:
+        CONSOLE[chat_id] = new_mid
+    return new_mid
+
+
+def console_async(chat_id, text_fn, keyboard=None, mono=False, keyboard_fn=None, message_id=None):
+    """Run text_fn in the background, then edit the result into the console
+    message (no extra "processing"/"result" message pair)."""
+    mid = message_id if message_id is not None else CONSOLE.get(chat_id)
+
+    def go():
+        text = text_fn()
+        kb = keyboard_fn() if keyboard_fn else keyboard
+        upsert_console(chat_id, text, kb, mono, message_id=mid)
+
+    background(go)
+
+
 def edit(cb, text, keyboard=None, mono=False):
     """Edit the message the button belongs to (keeps everything in one bubble).
     Falls back to a new message if the edit can't be applied."""
@@ -240,14 +302,18 @@ def edit(cb, text, keyboard=None, mono=False):
     if keyboard is not None:
         params["reply_markup"] = {"inline_keyboard": keyboard}
     r = tg("editMessageText", **params)
-    if not r.get("ok"):
-        desc = str(r)
-        if "not modified" in desc:
-            return  # nothing to do
-        # original may be a photo / too old / gone -> post a fresh message
-        # text is already HTML-formatted when mono=True; pass mono=False so send()
-        # does not double-escape it.
-        send(chat_id, text, keyboard if keyboard else None, mono=False)
+    if r.get("ok"):
+        CONSOLE[chat_id] = mid
+        return
+    if "not modified" in str(r):
+        CONSOLE[chat_id] = mid
+        return  # nothing to do
+    # original may be a photo / too old / gone -> post a fresh message
+    # text is already HTML-formatted when mono=True; pass mono=False so send()
+    # does not double-escape it.
+    new_mid = send(chat_id, text, keyboard if keyboard else None, mono=False)
+    if new_mid is not None:
+        CONSOLE[chat_id] = new_mid
 
 
 def _busy_key_from_cb(cb):
@@ -284,15 +350,6 @@ def edit_ios_async(cb, chat_id):
             BUSY.discard(key)
 
     BUSY.add(key)
-    background(go)
-
-
-def send_async(chat_id, text_fn, keyboard=None, mono=False, keyboard_fn=None):
-    def go():
-        text = text_fn()
-        kb = keyboard_fn() if keyboard_fn else keyboard
-        send(chat_id, text, kb, mono)
-
     background(go)
 
 
@@ -1477,7 +1534,7 @@ def authorized(uid):
     return uid in ADMIN_IDS
 
 
-def process_add_exit_message(chat_id, message_id, payload):
+def process_add_exit_message(chat_id, message_id, payload, prompt_mid=None):
     items = []
     try:
         deleted = delete_message(chat_id, message_id)
@@ -1486,16 +1543,20 @@ def process_add_exit_message(chat_id, message_id, payload):
         items, err = parse_add_exit_inputs(payload)
         payload = ""
         if err:
-            send(chat_id, err + delete_warning, add_exit_retry_kb())
+            upsert_console(chat_id, err + delete_warning, add_exit_retry_kb(),
+                           message_id=prompt_mid)
             return
-        send(chat_id, "⏳ 正在后台添加 %d 个出口…%s" % (len(items), delete_warning))
+        prompt_mid = upsert_console(
+            chat_id, "⏳ 正在后台添加 %d 个出口…%s" % (len(items), delete_warning),
+            message_id=prompt_mid)
         result = op_add_exit_batch(items)
-        send(chat_id, result, exits_menu())
+        upsert_console(chat_id, result, exits_menu(), message_id=prompt_mid)
     except Exception:
         print("[err] add-exit background task failed chat_id=%s message_id=%s"
               % (chat_id, message_id), file=sys.stderr)
         try:
-            send(chat_id, "❌ 添加出口时发生内部错误，请重新进入添加流程。", add_exit_retry_kb())
+            upsert_console(chat_id, "❌ 添加出口时发生内部错误，请重新进入添加流程。",
+                           add_exit_retry_kb(), message_id=prompt_mid)
         except Exception:
             print("[err] add-exit failure notification failed chat_id=%s message_id=%s"
                   % (chat_id, message_id), file=sys.stderr)
@@ -1523,21 +1584,24 @@ def handle_message(msg):
         return
 
     if text == "/cancel":
-        PENDING.pop(chat_id, None)
-        send(chat_id, "已取消。", main_menu())
+        state = PENDING.pop(chat_id, None) or {}
+        upsert_console(chat_id, "已取消。选择一个操作：", main_menu(),
+                       message_id=state.get("prompt_mid"))
         return
 
     # A slash command always aborts any in-progress flow.
     if text.startswith("/"):
         PENDING.pop(chat_id, None)
         if text.startswith(("/start", "/menu")):
-            send(chat_id, "<b>proxy-gateway 控制台</b>\n选择一个操作：", main_menu())
+            upsert_console(chat_id, "<b>proxy-gateway 控制台</b>\n选择一个操作：", main_menu())
         elif text.startswith("/status"):
-            send(chat_id, op_status())
+            upsert_console(chat_id, "⏳ 正在获取运行状态…")
+            console_async(chat_id, op_status, keyboard_fn=status_kb)
         elif text.startswith("/exits"):
-            send_async(chat_id, exits_overview_text, keyboard_fn=exits_menu)
+            upsert_console(chat_id, "⏳ 正在获取当前出口信息…")
+            console_async(chat_id, exits_overview_text, keyboard_fn=exits_menu)
         elif text.startswith("/rules"):
-            send(chat_id, "📑 <b>分流管理</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
+            upsert_console(chat_id, "📑 <b>分流管理</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
         else:
             send(chat_id, "未知命令。发送 /menu 打开操作面板。")
         return
@@ -1546,8 +1610,9 @@ def handle_message(msg):
     state = PENDING.get(chat_id)
     if state and state.get("action") == "add_exit_link":
         payload = msg.get("text") or ""
+        prompt_mid = state.get("prompt_mid")
         PENDING.pop(chat_id, None)
-        background(process_add_exit_message, chat_id, msg.get("message_id"), payload)
+        background(process_add_exit_message, chat_id, msg.get("message_id"), payload, prompt_mid)
         msg["text"] = ""
         payload = ""
         text = ""
@@ -1555,58 +1620,81 @@ def handle_message(msg):
     if state and state.get("action") == "rename_exit":
         old_name = state.get("old") or ""
         new_name = text
+        prompt_mid = state.get("prompt_mid")
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在重命名出口 <b>%s</b>…" % html.escape(old_name))
-        send_async(chat_id, lambda: op_rename_exit(old_name, new_name), keyboard_fn=exits_menu)
+        background(delete_message, chat_id, msg.get("message_id"))
+        mid = upsert_console(chat_id, "⏳ 正在重命名出口 <b>%s</b>…" % html.escape(old_name),
+                             message_id=prompt_mid)
+        console_async(chat_id, lambda: op_rename_exit(old_name, new_name),
+                      keyboard_fn=exits_menu, message_id=mid)
         return
     if state and state.get("action") == "rules_set":
+        prompt_mid = state.get("prompt_mid")
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在校验并应用规则…")
         rules_text = msg.get("text") or ""
-        send_async(chat_id, lambda: op_set_rules(rules_text), rules_menu())
+        background(delete_message, chat_id, msg.get("message_id"))
+        mid = upsert_console(chat_id, "⏳ 正在校验并应用规则…", message_id=prompt_mid)
+        console_async(chat_id, lambda: op_set_rules(rules_text), rules_menu(), message_id=mid)
         return
     if state and state.get("action") == "rules_add_value":
         rule_type = state.get("rule_type") or ""
+        prompt_mid = state.get("prompt_mid")
+        background(delete_message, chat_id, msg.get("message_id"))
         err = validate_rule_value(rule_type, text)
         if err:
-            send(chat_id, err, cancel_kb("rules"))
+            state["prompt_mid"] = upsert_console(chat_id, err, cancel_kb("rules"),
+                                                 message_id=prompt_mid)
             return
-        PENDING[chat_id] = {"action": "rules_add_target", "rule_type": rule_type, "rule_value": text.strip()}
-        send(chat_id,
-             "请选择目标：<code>%s,%s,?</code>" % (html.escape(rule_type), html.escape(text.strip())),
-             _rule_target_buttons("raddo"))
+        mid = upsert_console(
+            chat_id,
+            "请选择目标：<code>%s,%s,?</code>" % (html.escape(rule_type), html.escape(text.strip())),
+            _rule_target_buttons("raddo"), message_id=prompt_mid)
+        PENDING[chat_id] = {"action": "rules_add_target", "rule_type": rule_type,
+                            "rule_value": text.strip(), "prompt_mid": mid}
         return
     if state and state.get("action") == "rules_add":
+        prompt_mid = state.get("prompt_mid")
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在添加规则…")
-        send(chat_id, op_add_rule(text), rules_menu())
+        rule_line = text
+        background(delete_message, chat_id, msg.get("message_id"))
+        mid = upsert_console(chat_id, "⏳ 正在添加规则…", message_id=prompt_mid)
+        console_async(chat_id, lambda: op_add_rule(rule_line), rules_menu(), message_id=mid)
         return
     if state and state.get("action") == "rules_addset":
+        prompt_mid = state.get("prompt_mid")
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在校验并添加规则集…")
-        send_async(chat_id, lambda: op_add_ruleset(text), rules_menu())
+        ruleset_text = text
+        background(delete_message, chat_id, msg.get("message_id"))
+        mid = upsert_console(chat_id, "⏳ 正在校验并添加规则集…", message_id=prompt_mid)
+        console_async(chat_id, lambda: op_add_ruleset(ruleset_text), rules_menu(), message_id=mid)
         return
     if state and state.get("action") == "dot_domain":
+        prompt_mid = state.get("prompt_mid")
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在校验域名 A 记录并签发证书，可能需要 1-2 分钟…")
         domain_text = text
+        background(delete_message, chat_id, msg.get("message_id"))
+        mid = upsert_console(chat_id, "⏳ 正在校验域名 A 记录并签发证书，可能需要 1-2 分钟…",
+                             message_id=prompt_mid)
         def do_set_dot_domain():
             result, failed_domain = op_set_dot_domain(domain_text)
             if failed_domain:
                 LAST_FAILED_DOT_DOMAIN[chat_id] = failed_domain
-                send(chat_id, result, force_dot_domain_kb())
+                upsert_console(chat_id, result, force_dot_domain_kb(), message_id=mid)
             else:
                 LAST_FAILED_DOT_DOMAIN.pop(chat_id, None)
-                send(chat_id, result, dot_menu())
+                upsert_console(chat_id, result, dot_menu(), message_id=mid)
 
         background(do_set_dot_domain)
         return
     if state and state.get("action") in ("dot_dns_remote", "dot_dns_local"):
+        prompt_mid = state.get("prompt_mid")
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在更新 DNS 上游并重载 dnsdist/sniproxy…")
         dns_text = text
         kind = "remote" if state.get("action") == "dot_dns_remote" else "local"
-        send_async(chat_id, lambda: op_set_dns(kind, dns_text), dot_menu())
+        background(delete_message, chat_id, msg.get("message_id"))
+        mid = upsert_console(chat_id, "⏳ 正在更新 DNS 上游并重载 dnsdist/sniproxy…",
+                             message_id=prompt_mid)
+        console_async(chat_id, lambda: op_set_dns(kind, dns_text), dot_menu(), message_id=mid)
         return
 
     send(chat_id, "未知命令。发送 /menu 打开操作面板。")
@@ -1617,6 +1705,7 @@ def handle_callback(cb):
     chat_id = cb["message"]["chat"]["id"]
     data = cb.get("data", "")
     cb_id = cb["id"]
+    cb_mid = cb.get("message", {}).get("message_id")
 
     if not authorized(uid):
         tg("answerCallbackQuery", callback_query_id=cb_id, text="⛔ 未授权", show_alert=True)
@@ -1664,7 +1753,7 @@ def handle_callback(cb):
 
     # ---- conversational starts (edit prompt into the same bubble) ----
     elif data == "rules:set":
-        PENDING[chat_id] = {"action": "rules_set"}
+        PENDING[chat_id] = {"action": "rules_set", "prompt_mid": cb_mid}
         edit(cb,
              "✏️ <b>规则设置</b>\n\n"
              "粘贴完整的分流规则（将替换当前所有规则，首行优先匹配）。\n\n"
@@ -1682,7 +1771,7 @@ def handle_callback(cb):
              "选择一种快捷类型，或继续使用手工完整规则入口。",
              rule_type_menu())
     elif data == "rules:add_manual":
-        PENDING[chat_id] = {"action": "rules_add"}
+        PENDING[chat_id] = {"action": "rules_add", "prompt_mid": cb_mid}
         edit(cb,
              "➕ <b>添加规则</b>\n\n"
              "发送一条规则，将追加到现有规则末尾。\n\n"
@@ -1695,7 +1784,8 @@ def handle_callback(cb):
         if rule_type not in RULE_TYPES:
             edit(cb, "规则类型无效，请重新选择。", rule_type_menu())
         else:
-            PENDING[chat_id] = {"action": "rules_add_value", "rule_type": rule_type}
+            PENDING[chat_id] = {"action": "rules_add_value", "rule_type": rule_type,
+                                "prompt_mid": cb_mid}
             edit(cb, rule_value_prompt(rule_type), cancel_kb("rules"))
     elif data.startswith("raddo:"):
         state = PENDING.get(chat_id) or {}
@@ -1714,7 +1804,7 @@ def handle_callback(cb):
             edit(cb, "⏳ 正在添加规则 <code>%s</code>…" % html.escape(line))
             edit_async(cb, lambda: op_add_rule(line), back_kb("menu:rules"))
     elif data == "rules:addset":
-        PENDING[chat_id] = {"action": "rules_addset"}
+        PENDING[chat_id] = {"action": "rules_addset", "prompt_mid": cb_mid}
         edit(cb,
              "➕ <b>添加规则集</b>\n\n"
              "发送规则集 URL 和目标出口，用空格分隔。\n\n"
@@ -1725,7 +1815,7 @@ def handle_callback(cb):
              "添加后点「🔄 更新规则」可立即拉取生效。",
              cancel_kb("rules"))
     elif data == "exit_add":
-        PENDING[chat_id] = {"action": "add_exit_link"}
+        PENDING[chat_id] = {"action": "add_exit_link", "prompt_mid": cb_mid}
         edit(cb,
              "➕ <b>添加出口</b>\n\n"
              "直接发送一条或多条节点链接，每行一条；我会优先使用链接里的节点名称作为出口名。\n\n"
@@ -1739,14 +1829,14 @@ def handle_callback(cb):
         if name in ("local", "smart") or not EXIT_ADD_NAME_RE.match(name):
             edit(cb, "出口已变化，请重新打开。", exits_rename_menu())
         else:
-            PENDING[chat_id] = {"action": "rename_exit", "old": name}
+            PENDING[chat_id] = {"action": "rename_exit", "old": name, "prompt_mid": cb_mid}
             edit(cb,
                  "✏️ <b>重命名出口</b>\n\n"
                  "当前出口：<b>%s</b>\n"
                  "请发送新的名称。" % html.escape(name),
                  cancel_kb("exits"))
     elif data == "dot:domain":
-        PENDING[chat_id] = {"action": "dot_domain"}
+        PENDING[chat_id] = {"action": "dot_domain", "prompt_mid": cb_mid}
         edit(cb,
              "🌐 <b>更改 DoT 域名</b>\n\n"
              "发送新的完整域名。\n"
@@ -1754,14 +1844,14 @@ def handle_callback(cb):
              "域名 A 记录必须已经指向本机公网 IP，否则不会修改当前配置。",
              cancel_kb("dot"))
     elif data == "dot:dns_remote":
-        PENDING[chat_id] = {"action": "dot_dns_remote"}
+        PENDING[chat_id] = {"action": "dot_dns_remote", "prompt_mid": cb_mid}
         edit(cb,
              "🌍 <b>更改国际 DNS</b>\n\n"
              "发送新的 DNS 地址，多个地址用空格或逗号分隔。\n\n"
              "示例：<pre>1.1.1.1 8.8.8.8</pre>",
              cancel_kb("dot"))
     elif data == "dot:dns_local":
-        PENDING[chat_id] = {"action": "dot_dns_local"}
+        PENDING[chat_id] = {"action": "dot_dns_local", "prompt_mid": cb_mid}
         edit(cb,
              "🇨🇳 <b>更改国内 DNS</b>\n\n"
              "发送新的 DNS 地址，多个地址用空格或逗号分隔。\n\n"
