@@ -33,5 +33,32 @@ assert calls[1][0] == "TagA"
 assert calls[2][0] == "TagB"
 assert "1.2.3.4" not in text and "5.6.7.8" not in text and "9.9.9.9" not in text
 
+bot.authorized = lambda uid: True
+bot.send_async = lambda *args, **kwargs: None
+sent = []
+bot.send = lambda chat_id, text, keyboard=None, mono=False: sent.append(text)
+deleted = []
+bot.delete_message = lambda chat_id, message_id: deleted.append((chat_id, message_id)) or True
+bot.PENDING[10] = {"action": "add_exit_link"}
+bot.handle_message({
+    "chat": {"id": 10, "type": "private"},
+    "from": {"id": 1},
+    "message_id": 20,
+    "text": "ss://YWVzLTI1Ni1nY206cGFzc0AxLjIuMy40OjgzODg=#TagA",
+})
+assert deleted == [(10, 20)]
+assert not any("手动删除" in message for message in sent)
+
+sent.clear()
+bot.delete_message = lambda chat_id, message_id: False
+bot.PENDING[10] = {"action": "add_exit_link"}
+bot.handle_message({
+    "chat": {"id": 10, "type": "private"},
+    "from": {"id": 1},
+    "message_id": 21,
+    "text": "not-a-node-link",
+})
+assert any("未能自动删除含凭据的消息，请手动删除上一条节点消息" in message for message in sent)
+
 print("tgbot batch add OK")
 PY

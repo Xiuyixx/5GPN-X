@@ -194,6 +194,12 @@ def send(chat_id, text, keyboard=None, mono=False):
         tg("sendMessage", **params)
 
 
+def delete_message(chat_id, message_id):
+    if message_id is None:
+        return False
+    return bool(tg("deleteMessage", chat_id=chat_id, message_id=message_id).get("ok"))
+
+
 def _chunks(text, size):
     if not text:
         yield ""
@@ -1479,12 +1485,15 @@ def handle_message(msg):
     # Conversational flows (e.g. adding an exit).
     state = PENDING.get(chat_id)
     if state and state.get("action") == "add_exit_link":
-        items, err = parse_add_exit_inputs(msg.get("text") or "")
+        payload = msg.get("text") or ""
+        deleted = delete_message(chat_id, msg.get("message_id"))
+        delete_warning = "\n\n⚠️ 未能自动删除含凭据的消息，请手动删除上一条节点消息。" if not deleted else ""
+        items, err = parse_add_exit_inputs(payload)
         if err:
-            send(chat_id, err, cancel_kb("exits"))
+            send(chat_id, err + delete_warning, cancel_kb("exits"))
             return
         PENDING.pop(chat_id, None)
-        send(chat_id, "⏳ 正在后台添加 %d 个出口…" % len(items))
+        send(chat_id, "⏳ 正在后台添加 %d 个出口…%s" % (len(items), delete_warning))
         send_async(chat_id, lambda: op_add_exit_batch(items), keyboard_fn=exits_menu)
         return
     if state and state.get("action") == "rename_exit":
@@ -1665,7 +1674,8 @@ def handle_callback(cb):
              "➕ <b>添加出口</b>\n\n"
              "直接发送一条或多条节点链接，每行一条；我会优先使用链接里的节点名称作为出口名。\n\n"
              "支持：<code>%s</code>\n\n"
-             "链接没有名称时，也可以发 <code>出口名 链接</code> 指定名称；同名会自动去重。" % SUPPORTED_EXIT_LINKS,
+             "链接没有名称时，也可以发 <code>出口名 链接</code> 指定名称；同名会自动去重。\n\n"
+             "🔐 节点消息读取后会自动删除；删除失败时会提醒你手动删除。" % SUPPORTED_EXIT_LINKS,
              cancel_kb("exits"))
     elif data.startswith("exitren:"):
         name = data[len("exitren:"):]
