@@ -1,15 +1,5 @@
 #!/usr/bin/env bash
-#
-# install.sh - High-performance transparent proxy + Smart DNS (DoT) one-click installer
-# Supports: Ubuntu 20.04/22.04/24.04, Debian 11/12, CentOS 7/8/9 Stream,
-#           Rocky Linux 8/9, AlmaLinux 8/9, RHEL 8/9, Fedora 39+
-#
-
 set -euo pipefail
-
-# =============================================================================
-# Configurable defaults
-# =============================================================================
 REPO_URL="https://github.com/Xiuyixx/5GPN-X.git"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "$0")"
@@ -19,13 +9,10 @@ CONF_DIR="${BASE_DIR}/etc"
 SRC_DIR="${BASE_DIR}/src"
 WWW_DIR="${BASE_DIR}/www"
 IOS_PROFILE_PORT=8111
-# Switchable egress ("exit") routing. Proxy outbound traffic runs as EXIT_USER
-# and is marked, then policy-routed into the selected WireGuard tunnel.
 EXIT_USER="pxout"
 EXIT_MARK="0x1"
 EXIT_TABLE="100"
 WG_DIR="/etc/wireguard"
-# Exit types: wireguard (wg-quick) | mihomo proxy types (TUN egress).
 EXITS_DIR="/etc/proxy-gateway/exits"
 RULES_FILE="/etc/proxy-gateway/rules.conf"
 POLICY_MAP="/etc/proxy-gateway/policy-map.conf"
@@ -40,7 +27,6 @@ RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
 MIHOMO_VERSION_DEFAULT="1.19.28"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
 DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
-
 bootstrap_from_repo_if_needed() {
     local required=(
         install.sh
@@ -50,59 +36,45 @@ bootstrap_from_repo_if_needed() {
         lib/mihomo-router-config.py lib/rules-default.conf
     )
     local missing=0 f tmpdir
-
     for f in "${required[@]}"; do
         [[ -f "${SCRIPT_DIR}/${f}" ]] || { missing=1; break; }
     done
-
     if [[ $missing -eq 0 ]]; then
         return 0
     fi
-
     if [[ -n "${G5PNX_BOOTSTRAPPED:-}" ]]; then
         return 0
     fi
-
     tmpdir="$(mktemp -d /tmp/5gpnx-src.XXXXXX)"
     if git clone --depth=1 --branch main "$REPO_URL" "$tmpdir" >/dev/null 2>&1; then
         export G5PNX_BOOTSTRAPPED=1
         exec bash "$tmpdir/install.sh" "$@"
     fi
-
     echo "[ERR]  无法自动获取完整源码树。请用 git clone 后再运行 install.sh。" >&2
     exit 1
 }
-
 bootstrap_from_repo_if_needed "$@"
-
-# =============================================================================
-# Colors
-# =============================================================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
-
 info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()   { echo -e "${RED}[ERR]${NC}  $*" >&2; }
-
 render_remote_dns_servers() {
     local input="${1:-}"
     local pool="${2:-overseas}"
     local prefix="${3:-overseas}"
     local dns_list=()
     local item order=1 name
-
     if [[ -z "$input" ]]; then
         dns_list=("${DEFAULT_REMOTE_DNS[@]}")
     else
         input="${input//,/ }"
         read -r -a dns_list <<< "$input"
     fi
-
     for item in "${dns_list[@]}"; do
         [[ -z "$item" ]] && continue
         if [[ ! "$item" =~ ^[0-9A-Fa-f:.]+$ ]]; then
@@ -114,7 +86,6 @@ render_remote_dns_servers() {
         order=$((order + 1))
     done
 }
-
 dnsdist_upstream_address() {
     local item="${1:-}" host port
     if [[ "$item" == *:* ]]; then
@@ -141,19 +112,16 @@ PYEOF
         printf '%s:53' "$item"
     fi
 }
-
 render_sniproxy_dns_nameservers() {
     local input="${1:-}"
     local dns_list=()
     local item
-
     if [[ -z "$input" ]]; then
         dns_list=("${DEFAULT_REMOTE_DNS[@]}")
     else
         input="${input//,/ }"
         read -r -a dns_list <<< "$input"
     fi
-
     for item in "${dns_list[@]}"; do
         [[ -z "$item" ]] && continue
         if [[ ! "$item" =~ ^[0-9A-Fa-f:.]+$ ]]; then
@@ -163,11 +131,9 @@ render_sniproxy_dns_nameservers() {
         printf '    nameserver %s\n' "$item"
     done
 }
-
 normalize_dns_list() {
     local input="${1:-}"
     local dns_list=() out=() item
-
     input="${input//,/ }"
     read -r -a dns_list <<< "$input"
     for item in "${dns_list[@]}"; do
@@ -186,11 +152,9 @@ PYEOF
     [[ ${#out[@]} -gt 0 ]] || { err "DNS list cannot be empty"; exit 1; }
     printf '%s' "${out[*]}"
 }
-
 normalize_dns_upstreams() {
     local input="${1:-}"
     local dns_list=() out=() item host port
-
     input="${input//,/ }"
     read -r -a dns_list <<< "$input"
     for item in "${dns_list[@]}"; do
@@ -230,7 +194,6 @@ PYEOF
     [[ ${#out[@]} -gt 0 ]] || { err "DNS upstream list cannot be empty"; exit 1; }
     printf '%s' "${out[*]}"
 }
-
 dns_upstreams_with_ports() {
     local input="${1:-}" item out=()
     read -r -a out <<< "$input"
@@ -255,7 +218,6 @@ PYEOF
     local IFS=,
     printf '%s' "${out[*]}"
 }
-
 rewrite_sniproxy_dns() {
     local sniproxy_dns="${1:-}" nameservers
     [[ -f /etc/sniproxy.conf ]] || return 0
@@ -287,11 +249,7 @@ with open(path, "w", encoding="utf-8") as f:
     f.write("\n".join(new_lines) + "\n")
 PYEOF
 }
-
 restore_or_remove_file() {
-    # Safely restore <file> to <old_value> if non-empty, otherwise remove it.
-    # Written as if/else so a failed write does NOT cascade into an rm (which
-    # the shell-idiom `A && B || C` would happily do on a partial failure).
     local old_value="${1-}" target="${2-}"
     [[ -n "$target" ]] || return 0
     if [[ -n "$old_value" ]]; then
@@ -303,12 +261,10 @@ restore_or_remove_file() {
         rm -f "$target"
     fi
 }
-
 resolve_domain_a_records() {
     local domain="${1:-}" resolver="" line=""
     local records=()
     local public_resolvers=(1.1.1.1 8.8.8.8 9.9.9.9 223.5.5.5 114.114.114.114)
-
     if command -v dig >/dev/null 2>&1; then
         for resolver in "${public_resolvers[@]}"; do
             while IFS= read -r line; do
@@ -316,18 +272,15 @@ resolve_domain_a_records() {
             done < <(dig +time=2 +tries=1 +short A "$domain" @"$resolver" 2>/dev/null || true)
         done
     fi
-
     if command -v getent >/dev/null 2>&1; then
         while IFS= read -r line; do
             [[ "$line" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && records+=("$line")
         done < <(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' || true)
     fi
-
     if [[ ${#records[@]} -gt 0 ]]; then
         printf '%s\n' "${records[@]}" | awk '!seen[$0]++'
     fi
 }
-
 domain_resolves_to_public_ip() {
     local domain="${1:-}" expected_ip="${2:-}" ip=""
     [[ -n "$domain" && -n "$expected_ip" ]] || return 1
@@ -336,7 +289,6 @@ domain_resolves_to_public_ip() {
     done < <(resolve_domain_a_records "$domain")
     return 1
 }
-
 certbot_diagnostics() {
     local domain="${1:-}" resolved=""
     resolved=$(resolve_domain_a_records "$domain" | paste -sd',' - || true)
@@ -348,11 +300,9 @@ certbot_diagnostics() {
         echo "诊断: tcp80_listen=$(ss -H -ltnp 'sport = :80' 2>/dev/null | head -n 3 | sed 's/[[:space:]]\+/ /g' | paste -sd ';' - || true)"
     fi
 }
-
 configure_dns_upstreams() {
     local remote_selected="${REMOTE_DNS:-${DNS_UPSTREAMS:-${OVERSEAS_DNS:-${PRIVATE_OVERSEAS_DNS:-${SNIPROXY_DNS:-}}}}}"
     local local_selected="${LOCAL_DNS:-}"
-
     if [[ -z "$remote_selected" && -t 0 ]]; then
         echo ""
         read -r -p "国际 DNS remote [1.1.1.1,8.8.8.8]: " remote_selected
@@ -360,29 +310,20 @@ configure_dns_upstreams() {
     if [[ -z "$local_selected" && -t 0 ]]; then
         read -r -p "国内 DNS local [223.5.5.5,119.29.29.29]: " local_selected
     fi
-
     [[ -n "$remote_selected" ]] || remote_selected="${DEFAULT_REMOTE_DNS[*]}"
     [[ -n "$local_selected" ]] || local_selected="${DEFAULT_LOCAL_DNS[*]}"
-
     REMOTE_DNS=$(normalize_dns_upstreams "$remote_selected")
     LOCAL_DNS=$(normalize_dns_upstreams "$local_selected")
-
     mkdir -p "$CONF_DIR"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.remote_dns"
     echo "$LOCAL_DNS" > "${CONF_DIR}/.local_dns"
-    # Backward-compatible files for older helper scripts and existing installs.
     echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_dns"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_private_dns"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_public_dns"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.sniproxy_dns"
     info "DNS 设置: remote=$REMOTE_DNS local=$LOCAL_DNS"
 }
-
 configure_overseas_dns() { configure_dns_upstreams; }
-
-# =============================================================================
-# Command-line dispatch
-# =============================================================================
 usage() {
     cat <<EOF
 Usage: $0 [OPTION]
@@ -456,17 +397,12 @@ Environment variables (for non-interactive use):
   MIHOMO_VERSION Override the locked mihomo version (default: ${MIHOMO_VERSION_DEFAULT})
 EOF
 }
-
-# =============================================================================
-# Basic checks
-# =============================================================================
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         err "This script must be run as root (use sudo)"
         exit 1
     fi
 }
-
 detect_os() {
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
@@ -476,7 +412,6 @@ detect_os() {
         err "Cannot detect OS. /etc/os-release not found."
         exit 1
     fi
-
     case "$OS" in
         ubuntu|debian)
             PKG_MGR="apt-get"
@@ -493,16 +428,10 @@ detect_os() {
             exit 1
             ;;
     esac
-
     info "Detected OS: $OS $VER (package manager: $PKG_MGR)"
 }
-
-# Detect the available RAM and decide whether to use the low-memory profile.
-# Sets globals: MEM_TOTAL_MB, LOWMEM (0/1), MAKE_JOBS, PACKET_CACHE_SIZE.
-# Honors an explicit override: LOWMEM=1 / LOWMEM=0 in the environment.
 detect_memory_profile() {
     MEM_TOTAL_MB=$(awk '/MemTotal/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null || echo 0)
-
     if [[ -n "${LOWMEM:-}" ]]; then
         case "${LOWMEM}" in
             1|yes|true|on)  LOWMEM=1 ;;
@@ -513,7 +442,6 @@ detect_memory_profile() {
     else
         LOWMEM=0
     fi
-
     if [[ "$LOWMEM" == "1" ]]; then
         MAKE_JOBS=1
         PACKET_CACHE_SIZE=20000
@@ -524,12 +452,9 @@ detect_memory_profile() {
         info "Standard memory mode (RAM: ${MEM_TOTAL_MB}MB)."
     fi
 }
-
-# On low-memory hosts, make sure some swap exists before we compile / run.
 swap_size_to_bytes() {
     python3 -c 'import re, sys; raw = sys.argv[1].strip().upper(); raw = raw if raw.endswith("G") else (raw + "G" if raw else raw); m = re.fullmatch(r"([0-9]+(?:\\.[0-9]+)?)G", raw); print(0 if not m else int(float(m.group(1)) * 1024 * 1024 * 1024))' "$1"
 }
-
 confirm_swap_creation() {
     local input="${SWAP_ENABLE:-}"
     if [[ -z "$input" && -t 0 ]]; then
@@ -541,7 +466,6 @@ confirm_swap_creation() {
         *)     return 1 ;;
     esac
 }
-
 prompt_swap_size() {
     local input="${SWAP_SIZE:-}"
     if [[ -z "$input" && -t 0 ]]; then
@@ -564,16 +488,13 @@ prompt_swap_size() {
     fi
     printf '%s' "$input"
 }
-
 ensure_swap() {
     [[ "${LOWMEM:-0}" == "1" ]] || return 0
-    # /proc/swaps has a header line; >1 line means swap is already active.
     if [[ "$(wc -l < /proc/swaps 2>/dev/null || echo 1)" -gt 1 ]]; then
         info "Swap already present, skipping swapfile creation."
         return 0
     fi
     [[ -e /swapfile ]] && return 0
-
     local swap_size swap_bytes swap_mib required_mb avail_mb
     if ! confirm_swap_creation; then
         info "Skipping swap creation by user request."
@@ -592,13 +513,11 @@ ensure_swap() {
     fi
     swap_mib=$(( (swap_bytes + 1024 * 1024 - 1) / 1024 / 1024 ))
     required_mb=$(( (swap_mib * 3 + 1) / 2 ))
-
     avail_mb=$(df -Pm / | awk 'NR==2 {print $4}')
     if [[ -z "$avail_mb" || "$avail_mb" -lt "$required_mb" ]]; then
         warn "Not enough free disk for a ${swap_size} swapfile (${avail_mb:-?}MB free, need ~${required_mb}MB); skipping."
         return 0
     fi
-
     info "Creating ${swap_size} swapfile to avoid OOM on this low-memory host..."
     if ! fallocate -l "$swap_bytes" /swapfile 2>/dev/null; then
         dd if=/dev/zero of=/swapfile bs=1M count="$swap_mib" status=none 2>/dev/null || {
@@ -612,7 +531,6 @@ ensure_swap() {
     fi
     ok "${swap_size} swapfile active."
 }
-
 get_public_ip() {
     PUBLIC_IP=$(curl -4 -s --max-time 10 https://api.ipify.org 2>/dev/null || \
                 curl -4 -s --max-time 10 https://ifconfig.me 2>/dev/null || \
@@ -626,11 +544,9 @@ get_public_ip() {
     fi
     info "Public IP detected: $PUBLIC_IP"
 }
-
 port53_pids() {
     ss -H -lnptu 2>/dev/null | awk '$5 ~ /(^|\[|:)53$/ {print}' | grep -oP 'pid=\K[0-9]+' | sort -u || true
 }
-
 port53_owner_summary() {
     local pids pid proc unit summaries=()
     pids=$(port53_pids)
@@ -645,29 +561,24 @@ port53_owner_summary() {
     done
     (IFS=', '; echo "${summaries[*]}")
 }
-
 check_port_53() {
     info "Checking port 53 availability..."
     local pid pids proc remaining
     pids=$(port53_pids)
-
     if [[ -n "$pids" ]]; then
         pid=$(printf '%s\n' "$pids" | head -n1)
         proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
         warn "Port 53 is already in use by: $(port53_owner_summary)"
-
         read -r -p "Stop and disable '$proc' to free port 53? [Y/n]: " confirm
         if [[ "$confirm" =~ ^[Nn]$ ]]; then
             err "Port 53 must be free for dnsdist to start. Aborting."
             exit 1
         fi
-
         for pid in $pids; do
             proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
             stop_port53_owner "$pid" "$proc"
         done
         wait_for_port53_free 10
-
         remaining=$(port53_pids)
         if [[ -n "$remaining" ]]; then
             warn "Port 53 is still in use by: $(port53_owner_summary)"
@@ -677,7 +588,6 @@ check_port_53() {
             done
             wait_for_port53_free 5
         fi
-
         remaining=$(port53_pids)
         if [[ -n "$remaining" ]]; then
             for pid in $remaining; do
@@ -685,7 +595,6 @@ check_port_53() {
             done
             wait_for_port53_free 3
         fi
-
         remaining=$(port53_pids)
         if [[ -n "$remaining" ]]; then
             err "Failed to free port 53. Still in use by: $(port53_owner_summary)"
@@ -697,7 +606,6 @@ check_port_53() {
         ok "Port 53 is available"
     fi
 }
-
 wait_for_port53_free() {
     local timeout="${1:-10}" i
     for ((i=0; i<timeout; i++)); do
@@ -706,28 +614,22 @@ wait_for_port53_free() {
     done
     [[ -z "$(port53_pids)" ]]
 }
-
 systemd_unit_for_pid() {
     local pid="${1:-}"
     [[ -z "$pid" || ! -r "/proc/$pid/cgroup" ]] && return 0
     grep -aoE '[^/]+\.service' "/proc/$pid/cgroup" | head -n1 || true
 }
-
 stop_port53_owner() {
     local pid="${1:-}"
     local proc="${2:-unknown}"
     local unit
     unit=$(systemd_unit_for_pid "$pid")
-
     if [[ -n "$unit" ]]; then
         stop_systemd_unit_and_socket "$unit"
     fi
-
     case "$proc" in
         systemd-resolve|systemd-resolved)
             info "Stopping systemd-resolved service to release DNS stub port 53"
-            # Preserve DNS after disabling the local stub resolver; otherwise
-            # apt/curl/certbot may lose name resolution on Debian 13.
             if [[ -L /etc/resolv.conf || -f /etc/resolv.conf ]]; then
                 if ! grep -q '1.1.1.1' /etc/resolv.conf 2>/dev/null; then
                     cp -a /etc/resolv.conf /etc/resolv.conf.pgw.bak 2>/dev/null || true
@@ -753,29 +655,21 @@ EOF
             ;;
     esac
 }
-
 stop_systemd_unit_and_socket() {
     local unit="${1:-}"
     [[ -z "$unit" ]] && return 0
     local socket="${unit%.service}.socket"
-
     info "Stopping systemd unit owning port 53: $unit"
     systemctl stop "$socket" 2>/dev/null || true
     systemctl stop "$unit" 2>/dev/null || true
     systemctl disable "$unit" "$socket" 2>/dev/null || true
 }
-
-# =============================================================================
-# Dependencies
-# =============================================================================
 install_deps() {
     info "Installing system dependencies..."
-
     local pcre_dev_pkg="libpcre3-dev"
     if [[ "${OS:-}" == "debian" && "${VER%%.*}" -ge 13 ]]; then
         pcre_dev_pkg="libpcre2-dev"
     fi
-
     case "$PKG_MGR" in
         apt-get)
             export DEBIAN_FRONTEND=noninteractive
@@ -807,8 +701,6 @@ install_deps() {
                 nftables qrencode wireguard-tools || true
             ;;
     esac
-
-    # Ensure Go is installed (for quic-proxy compilation)
     if ! command -v go >/dev/null 2>&1; then
         info "Installing Go compiler..."
         GO_VER="1.22.4"
@@ -826,10 +718,7 @@ install_deps() {
         # shellcheck disable=SC2016 # Write a literal profile snippet for future shells.
         printf '%s\n' 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
     fi
-
     ok "Go version: $(go version)"
-
-    # Fix certbot compatibility on newer Python versions (e.g. 3.12+)
     if command -v certbot >/dev/null 2>&1; then
         if ! certbot --version >/dev/null 2>&1; then
             warn "Certbot has compatibility issues with the current Python version. Attempting to fix..."
@@ -837,8 +726,6 @@ install_deps() {
                 pip3 install --upgrade certbot josepy cryptography 2>/dev/null || true
         fi
     fi
-
-    # Verify critical binaries
     for bin in dnsdist certbot; do
         if ! command -v "$bin" >/dev/null 2>&1; then
             err "Required package '$bin' was not installed successfully."
@@ -847,18 +734,11 @@ install_deps() {
         fi
     done
 }
-
-# =============================================================================
-# Domain configuration (operator-supplied domain)
-# =============================================================================
-# Validate a domain name (FQDN). Returns 0 if valid.
 is_valid_domain() {
     local d="${1:-}"
     [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?)+$ ]]
 }
-
 generate_domain() {
-    # Domain may be supplied non-interactively via the DOMAIN env var.
     if [[ -n "${DOMAIN:-}" ]]; then
         if ! is_valid_domain "$DOMAIN"; then
             err "Invalid DOMAIN: '$DOMAIN'. Provide a fully-qualified domain like dns.example.com"
@@ -869,13 +749,10 @@ generate_domain() {
         echo "$DOMAIN" > "${CONF_DIR}/.domain"
         return
     fi
-
-    # Interactive: prompt the operator for their own domain.
     if [[ ! -t 0 ]]; then
         err "No domain provided. Set the DOMAIN environment variable (e.g. DOMAIN=dns.example.com) for non-interactive installs."
         exit 1
     fi
-
     echo ""
     echo "=================================================="
     echo "  请输入你自己的域名"
@@ -884,7 +761,6 @@ generate_domain() {
     echo "  该域名需要你能管理其 DNS（添加一条 A 记录指向本机）"
     echo "=================================================="
     echo ""
-
     local input=""
     while true; do
         read -r -p "请输入域名: " input
@@ -897,13 +773,10 @@ generate_domain() {
         fi
         warn "无效域名，请输入形如 dns.example.com 的完整域名"
     done
-
     info "Using domain: $DOMAIN"
-
     mkdir -p "$CONF_DIR"
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
 }
-
 verify_domain_dns() {
     info "DNS 解析检查"
     info "=================================================="
@@ -917,8 +790,6 @@ verify_domain_dns() {
     info "   Value: $PUBLIC_IP"
     info "   TTL:   尽量低 (如 60-300)，便于快速生效"
     info ""
-
-    # Interactive confirm (only when attached to a TTY).
     if [[ -t 0 ]]; then
         local confirm=""
         read -r -p "完成配置后按 Enter 继续（或输入 'skip' 跳过解析验证）: " confirm
@@ -929,7 +800,6 @@ verify_domain_dns() {
             return
         fi
     fi
-
     info "等待 DNS 解析生效（最多 120 秒）..."
     local waited=0 resolved=""
     while [[ $waited -lt 120 ]]; do
@@ -947,30 +817,21 @@ verify_domain_dns() {
     echo ""
     warn "DNS 解析未在 120 秒内生效（当前解析: ${resolved:-无}）。"
     warn "将继续安装；如后续 Let's Encrypt 证书申请失败，请确认 $DOMAIN 的 A 记录已指向 $PUBLIC_IP。"
-
     mkdir -p "$CONF_DIR"
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
 }
-
-# =============================================================================
-# Let's Encrypt Certificate
-# =============================================================================
 install_cert() {
     local certbot_cmd certbot_cmd_force
     CERTBOT_LAST_OUTPUT=""
     install_certbot_firewall_hooks
-
-    # Normal issuance (first time) - no force-renewal to avoid rate limits
     certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" \
         --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
         --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
         --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
-    # Reinstall / explicit renew - force renewal
     certbot_cmd_force=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
         --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
         --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
         --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
-
     local cb_cmd=()
     if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
         info "Let's Encrypt certificate already exists for $DOMAIN, forcing renewal..."
@@ -979,13 +840,9 @@ install_cert() {
         info "申请 Let's Encrypt 证书 for $DOMAIN..."
         cb_cmd=("${certbot_cmd[@]}")
     fi
-
     run_certbot() {
         prepare_certbot_standalone
         trap cleanup_certbot_standalone RETURN
-        # Run certbot ONCE and capture output, so we never re-issue just to probe
-        # the error (that wastes Let's Encrypt rate-limit attempts). The `if`
-        # keeps the failing run from tripping `set -e` before we can handle it.
         local out retry_out rc
         if out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
         CERTBOT_LAST_OUTPUT="$out"
@@ -993,7 +850,6 @@ install_cert() {
         if [[ $rc -eq 0 ]]; then
             return 0
         fi
-        # Retry once only on the known Python (3.12+) compatibility error.
         if grep -q "AttributeError" <<<"$out"; then
             warn "Certbot compatibility error detected. Attempting to fix Python dependencies..."
             pip3 install --upgrade --break-system-packages certbot josepy cryptography 2>/dev/null || \
@@ -1006,7 +862,6 @@ install_cert() {
         fi
         return 1
     }
-
     if ! run_certbot; then
         err "证书申请失败。请检查:"
         err "  1. 域名 $DOMAIN 是否正确解析到本机 ($PUBLIC_IP)"
@@ -1019,8 +874,6 @@ install_cert() {
         fi
         exit 1
     fi
-
-    # Copy certificates to dnsdist-readable location
     info "Copying certificates to /etc/dnsdist/certs/ ..."
     local cert_live_dir="/etc/letsencrypt/live/${DOMAIN}"
     if [[ -d "$cert_live_dir" ]]; then
@@ -1033,8 +886,6 @@ install_cert() {
     else
         warn "Could not find certificate live directory: $cert_live_dir"
     fi
-
-    # Deploy renewal hook (also handles cert copy on renewal)
     mkdir -p /etc/letsencrypt/renewal-hooks/deploy
     if [[ -f "${LIB_DIR}/renew-hook.sh" ]]; then
         cp "${LIB_DIR}/renew-hook.sh" /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
@@ -1045,22 +896,16 @@ install_cert() {
         ok "证书已就绪"
     fi
 }
-
-# =============================================================================
-# sniproxy (TCP)
-# =============================================================================
 install_sniproxy() {
     ensure_proxy_user
     if ! command -v sniproxy >/dev/null 2>&1; then
         info "Compiling sniproxy (TCP SNI proxy)..."
         mkdir -p "$SRC_DIR"
         cd "$SRC_DIR"
-
         if [[ ! -d sniproxy ]]; then
             git clone --depth=1 https://github.com/dlundquist/sniproxy.git
         fi
         cd sniproxy
-
         DEBEMAIL="root@localhost" DEBFULLNAME="root" ./autogen.sh >/dev/null
         ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns >/dev/null
         make -j"${MAKE_JOBS:-$(nproc)}" >/dev/null
@@ -1068,7 +913,6 @@ install_sniproxy() {
     else
         info "sniproxy already installed"
     fi
-
     if [[ -f "${LIB_DIR}/sniproxy.conf" ]]; then
         local sniproxy_nameservers
         sniproxy_nameservers=$(render_sniproxy_dns_nameservers "$REMOTE_DNS")
@@ -1084,8 +928,6 @@ PYEOF
         err "sniproxy.conf not found in ${LIB_DIR}"
         exit 1
     fi
-
-    # systemd service
     cat > /etc/systemd/system/sniproxy.service <<'EOF'
 [Unit]
 Description=sniproxy (TCP SNI transparent proxy)
@@ -1103,31 +945,23 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
-
     systemctl daemon-reload
     systemctl enable sniproxy
     ok "sniproxy installed"
 }
-
 install_whatsapp_shim() {
     local shim_dns self_ips
     info "Installing iOS WhatsApp no-SNI shim..."
     [[ -f "${LIB_DIR}/wa-shim.py" ]] || { err "wa-shim.py not found in ${LIB_DIR}"; return 1; }
     mkdir -p "${BASE_DIR}/bin" "${CONF_DIR}"
     install -m 0755 "${LIB_DIR}/wa-shim.py" "${BASE_DIR}/bin/wa-shim.py"
-
-    # Keep WhatsApp DNS names in the gateway's persistent local supplement so
-    # the weekly GFWList refresh cannot remove the interception.
     mkdir -p /etc/dnsdist
     touch /etc/dnsdist/gfwlist-extra-local.txt
     for domain in whatsapp.net whatsapp.com; do
         grep -qxF "$domain" /etc/dnsdist/gfwlist-extra-local.txt || echo "$domain" >> /etc/dnsdist/gfwlist-extra-local.txt
     done
-
     shim_dns="${REMOTE_DNS:-$(cat "${CONF_DIR}/.remote_dns" 2>/dev/null || echo '1.1.1.1 8.8.8.8')}"
     self_ips="${PUBLIC_IP:-},127.0.0.1,::1,"
-    # Include every current local address in the shim loop guard. Whitespace is
-    # converted to commas because the systemd EnvironmentFile value is CSV.
     self_ips+="$(hostname -I 2>/dev/null | tr ' ' ',' | tr -d '\n')"
     cat > "${CONF_DIR}/wa-shim.env" <<EOF
 WA_SHIM_LISTEN=0.0.0.0
@@ -1139,7 +973,6 @@ WA_SHIM_SELF_IPS=${self_ips}
 WA_SHIM_ALLOW_CIDR=172.22.0.0/16,127.0.0.0/8
 EOF
     chmod 600 "${CONF_DIR}/wa-shim.env"
-
     cat > /etc/systemd/system/wa-shim.service <<EOF
 [Unit]
 Description=5GPN-X iOS WhatsApp no-SNI shim
@@ -1169,10 +1002,6 @@ EOF
     systemctl enable wa-shim.service 2>/dev/null || true
     ok "WhatsApp no-SNI shim installed (public :443 -> sniproxy 127.0.0.1:8443)"
 }
-
-# =============================================================================
-# quic-proxy (UDP / QUIC SNI proxy)
-# =============================================================================
 install_quic_proxy() {
     ensure_proxy_user
     if [[ ! -x "${BASE_DIR}/bin/quic-proxy" ]]; then
@@ -1181,14 +1010,11 @@ install_quic_proxy() {
         mkdir -p "${SRC_DIR}"
         cp "${LIB_DIR}/quic-proxy.go" "${SRC_DIR}/quic-proxy.go"
         cd "${SRC_DIR}"
-
         export PATH=$PATH:/usr/local/go/bin
         go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" quic-proxy.go
     else
         info "quic-proxy already compiled"
     fi
-
-    # systemd service
     cat > /etc/systemd/system/quic-proxy.service <<'EOF'
 [Unit]
 Description=quic-proxy (UDP/QUIC SNI transparent proxy)
@@ -1207,25 +1033,18 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 [Install]
 WantedBy=multi-user.target
 EOF
-
     systemctl daemon-reload
     systemctl enable quic-proxy
     ok "quic-proxy installed"
 }
-
-# =============================================================================
-# China DNS race proxy (UDP DNS upstream racing for ChinaList)
-# =============================================================================
 install_china_dns_race_proxy() {
     info "Compiling china-dns-race-proxy..."
     mkdir -p "${BASE_DIR}/bin"
     mkdir -p "${SRC_DIR}"
     cp "${LIB_DIR}/china-dns-race-proxy.go" "${SRC_DIR}/china-dns-race-proxy.go"
     cd "${SRC_DIR}"
-
     export PATH=$PATH:/usr/local/go/bin
     go build -ldflags="-s -w" -o "${BASE_DIR}/bin/china-dns-race-proxy" china-dns-race-proxy.go
-
     local local_dns_with_ports
     local_dns_with_ports=$(dns_upstreams_with_ports "$LOCAL_DNS")
     cat > /etc/systemd/system/china-dns-race-proxy.service <<EOF
@@ -1245,24 +1064,16 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
-
     systemctl daemon-reload
     systemctl enable china-dns-race-proxy
     ok "china-dns-race-proxy installed"
 }
-
-# =============================================================================
-# dnsdist (DoT + Smart DNS)
-# =============================================================================
 install_dnsdist() {
     info "Configuring dnsdist..."
-
     mkdir -p /etc/dnsdist
     cp "${LIB_DIR}/dnsdist.conf.template" /etc/dnsdist/dnsdist.conf.template
     cp "${LIB_DIR}/update-rules.sh" /usr/local/bin/update-dnsdist-rules.sh
     chmod +x /usr/local/bin/update-dnsdist-rules.sh
-
-    # Save domain and IP for template generation
     echo "$DOMAIN" > /etc/dnsdist/.domain
     echo "$PUBLIC_IP" > /etc/dnsdist/.public_ip
     echo "$REMOTE_DNS" > /etc/dnsdist/.remote_dns
@@ -1271,18 +1082,13 @@ install_dnsdist() {
     echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_private_dns
     echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_public_dns
     echo "$REMOTE_DNS" > /etc/dnsdist/.sniproxy_dns
-    # Persist the packet-cache size so weekly rule updates keep the same value.
     echo "${PACKET_CACHE_SIZE:-500000}" > /etc/dnsdist/.cache_size
     local remote_servers
     remote_servers=$(render_remote_dns_servers "$REMOTE_DNS" "remote" "remote")
-
-    # Determine actual certificate directory name
     local cert_basename="${DOMAIN}"
     if [[ -f "${CONF_DIR}/.cert_basename" ]]; then
         cert_basename=$(cat "${CONF_DIR}/.cert_basename")
     fi
-
-    # Generate initial config (empty rules, will be populated by update-rules.sh)
     python3 - /etc/dnsdist/dnsdist.conf.template "${PUBLIC_IP}" "${cert_basename}" "$remote_servers" "${PACKET_CACHE_SIZE:-500000}" /etc/dnsdist/dnsdist.conf <<'PYEOF'
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
@@ -1296,8 +1102,6 @@ content = content.replace("__PACKET_CACHE_SIZE__", sys.argv[5])
 with open(sys.argv[6], "w", encoding="utf-8") as f:
     f.write(content)
 PYEOF
-
-    # systemd override for dnsdist (ensure it reads our config + supports reload)
     mkdir -p /etc/systemd/system/dnsdist.service.d
     cat > /etc/systemd/system/dnsdist.service.d/override.conf <<'EOF'
 [Service]
@@ -1311,30 +1115,19 @@ Restart=always
 RestartSec=3
 LimitNOFILE=65535
 EOF
-
     systemctl daemon-reload
     systemctl enable dnsdist
     ok "dnsdist configured"
 }
-
-# =============================================================================
-# Rules initialization
-# =============================================================================
 init_rules() {
     info "Initializing GFWList and ChinaList..."
     /usr/local/bin/update-dnsdist-rules.sh || warn "Rule update failed, will retry later"
 }
-
-# =============================================================================
-# iOS DoT profile
-# =============================================================================
 generate_ios_profile() {
     info "Generating iOS DoT configuration profile..."
-
     mkdir -p "$WWW_DIR"
     local profile_path="${WWW_DIR}/ios-dot.mobileconfig"
     local profile_url="http://${DOMAIN}:${IOS_PROFILE_PORT}/ios-dot.mobileconfig"
-
     cat > "$profile_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1406,7 +1199,6 @@ generate_ios_profile() {
 </dict>
 </plist>
 EOF
-
     cat > "${WWW_DIR}/index.html" <<EOF
 <!doctype html>
 <html lang="zh-CN">
@@ -1421,21 +1213,15 @@ EOF
 </body>
 </html>
 EOF
-
-    # Socket-activated (inetd-style) static responder: zero idle processes, a
-    # short-lived python only spawns when a phone actually fetches the profile.
     local py; py="$(command -v python3 || echo /usr/bin/python3)"
     mkdir -p "${BASE_DIR}/bin"
     if [[ -f "${LIB_DIR}/ios-http.py" ]]; then
         install -m 0755 "${LIB_DIR}/ios-http.py" "${BASE_DIR}/bin/ios-http.py"
     fi
-
-    # Drop any previous always-on unit from earlier installs.
     if systemctl list-unit-files 2>/dev/null | grep -q '^proxy-gateway-ios-profile\.service'; then
         systemctl disable --now proxy-gateway-ios-profile.service 2>/dev/null || true
     fi
     rm -f /etc/systemd/system/proxy-gateway-ios-profile.service
-
     cat > /etc/systemd/system/proxy-gateway-ios-profile.socket <<EOF
 [Unit]
 Description=Proxy Gateway iOS profile HTTP socket
@@ -1447,7 +1233,6 @@ Accept=yes
 [Install]
 WantedBy=sockets.target
 EOF
-
     cat > /etc/systemd/system/proxy-gateway-ios-profile@.service <<EOF
 [Unit]
 Description=Proxy Gateway iOS profile responder (per-connection)
@@ -1461,32 +1246,21 @@ StandardOutput=socket
 StandardError=journal
 User=root
 EOF
-
     systemctl daemon-reload
     systemctl enable --now proxy-gateway-ios-profile.socket
-
     echo "$profile_url" > "${WWW_DIR}/ios-profile-url.txt"
     if command -v qrencode >/dev/null 2>&1; then
         qrencode -t ANSIUTF8 "$profile_url" | tee "${WWW_DIR}/ios-dot.qr.txt"
     else
         warn "qrencode is not installed; QR code skipped. Profile URL: $profile_url"
     fi
-
     ok "iOS profile ready: $profile_url"
 }
-
-# =============================================================================
-# System tuning
-# =============================================================================
 system_tuning() {
     info "Applying kernel and system tuning..."
-
     modprobe nf_conntrack >/dev/null 2>&1 || true
     mkdir -p /etc/modules-load.d
     echo nf_conntrack > /etc/modules-load.d/proxy-gateway-net.conf
-
-    # Scale the heavy limits to the host. The huge defaults size large kernel
-    # hash tables and are wasteful (even risky) on small VPSes.
     local sy_file_max sy_nr_open sy_netdev sy_somaxconn sy_conntrack_max
     local sy_tcp_syn sy_tcp_orphans sy_buf_max sy_swappiness
     if [[ "${LOWMEM:-0}" == "1" ]]; then
@@ -1500,7 +1274,6 @@ system_tuning() {
         sy_tcp_syn=65536;     sy_tcp_orphans=10240
         sy_buf_max=134217728; sy_swappiness=0
     fi
-
     cat > /etc/sysctl.d/99-proxy-gateway.conf <<EOF
 # Proxy Gateway Optimizations (profile: $([[ "${LOWMEM:-0}" == "1" ]] && echo low-memory || echo standard))
 fs.file-max=${sy_file_max}
@@ -1557,7 +1330,6 @@ net.netfilter.nf_conntrack_udp_timeout=2
 net.netfilter.nf_conntrack_udp_timeout_stream=30
 vm.swappiness=${sy_swappiness}
 EOF
-
     local mem_pages
     mem_pages=$(awk '/MemTotal/ { printf "%d", ($2 * 1024) / 4096 }' /proc/meminfo 2>/dev/null || echo "")
     if [[ -n "$mem_pages" && "$mem_pages" -gt 0 ]]; then
@@ -1565,17 +1337,10 @@ EOF
             echo "net.ipv4.tcp_mem=$((mem_pages * 12 / 100)) $((mem_pages * 50 / 100)) $((mem_pages * 70 / 100))"
         } >> /etc/sysctl.d/99-proxy-gateway.conf
     fi
-
-    # /etc/sysctl.conf is applied AFTER /etc/sysctl.d/* on Debian/systemd, so a
-    # stray vm.swappiness there (common in VPS images) would silently override
-    # our drop-in. Neutralize it so our value actually takes effect.
     if grep -qE '^[[:space:]]*vm\.swappiness[[:space:]]*=' /etc/sysctl.conf 2>/dev/null; then
         sed -i -E 's/^([[:space:]]*vm\.swappiness[[:space:]]*=)/# disabled by proxy-gateway (see 99-proxy-gateway.conf): \1/' /etc/sysctl.conf
     fi
-
     sysctl --system >/dev/null
-
-    # PAM limits (avoid duplicate entries)
     if ! grep -q "proxy-gateway-limits" /etc/security/limits.conf 2>/dev/null; then
         cat >> /etc/security/limits.conf <<'EOF'
 # proxy-gateway-limits
@@ -1585,7 +1350,6 @@ root soft nofile 1048576
 root hard nofile 1048576
 EOF
     fi
-
     mkdir -p /etc/systemd/system
     cat > /etc/systemd/system/disable-transparent-huge-pages.service <<'EOF'
 [Unit]
@@ -1601,7 +1365,6 @@ ExecStart=/bin/sh -c 'test -w /sys/kernel/mm/transparent_hugepage/defrag && echo
 [Install]
 WantedBy=basic.target
 EOF
-
     mkdir -p /etc/systemd/journald.conf.d
     cat > /etc/systemd/journald.conf.d/99-proxy-gateway.conf <<'EOF'
 [Journal]
@@ -1609,27 +1372,16 @@ SystemMaxUse=384M
 SystemMaxFileSize=128M
 ForwardToSyslog=no
 EOF
-
     systemctl daemon-reload
     systemctl enable --now disable-transparent-huge-pages.service 2>/dev/null || true
     systemctl restart systemd-journald 2>/dev/null || true
-
     ok "System tuning applied"
 }
-
-# =============================================================================
-# Firewall (nftables preferred, fallback to iptables)
-# =============================================================================
 setup_firewall() {
     info "Configuring firewall..."
-    # The nft ruleset matches "skuid pxout"; the user must exist or the whole
-    # ruleset fails to load. (No-op if already created.)
     ensure_proxy_user
-
     local tcp_ports="22, 53, 853, 8111" tcp_ports_ipt="22,53,853,8111"
-
     if command -v nft >/dev/null 2>&1; then
-        # nftables
         cat > /etc/nftables.conf <<'EOF'
 #!/usr/sbin/nft -f
 flush ruleset
@@ -1678,7 +1430,6 @@ EOF
         nft -f /etc/nftables.conf 2>/dev/null || true
         systemctl enable nftables 2>/dev/null || true
     else
-        # iptables fallback
         iptables -F INPUT
         iptables -P INPUT DROP
         iptables -A INPUT -i lo -j ACCEPT
@@ -1690,10 +1441,6 @@ EOF
         iptables -A INPUT -p icmp -j ACCEPT
         iptables -P FORWARD ACCEPT
         iptables -P OUTPUT ACCEPT
-
-        # Switchable egress: mark proxy ("pxout") outbound for policy routing.
-        # Rebuild our rules in a fixed order: private/client destinations RETURN
-        # (stay on the normal route) before the catch-all MARK.
         if id -u "${EXIT_USER}" >/dev/null 2>&1; then
             local pn
             while iptables -t mangle -D OUTPUT -m owner --uid-owner "${EXIT_USER}" -j MARK --set-mark "${EXIT_MARK}" 2>/dev/null; do :; done
@@ -1701,8 +1448,6 @@ EOF
                 while iptables -t mangle -D OUTPUT -m owner --uid-owner "${EXIT_USER}" -d "$pn" -j RETURN 2>/dev/null; do :; done
                 iptables -t mangle -A OUTPUT -m owner --uid-owner "${EXIT_USER}" -d "$pn" -j RETURN 2>/dev/null || true
             done
-            # DNS (port 53) resolves directly, never through the exit (many SOCKS
-            # exits don't relay UDP, which would otherwise break name resolution).
             local pp
             for pp in udp tcp; do
                 while iptables -t mangle -D OUTPUT -m owner --uid-owner "${EXIT_USER}" -p "$pp" --dport 53 -j RETURN 2>/dev/null; do :; done
@@ -1712,31 +1457,24 @@ EOF
             iptables -t mangle -C POSTROUTING -o "pgw+" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
                 iptables -t mangle -A POSTROUTING -o "pgw+" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
         fi
-
-        # Save rules
         if command -v iptables-save >/dev/null 2>&1; then
             iptables-save > /etc/iptables.rules 2>/dev/null || true
         fi
     fi
-
     ok "Firewall configured (reverse proxy whitelist: 172.22.0.0/16)"
 }
-
 open_cert_http_port() {
     info "Temporarily opening TCP/80 for Let's Encrypt HTTP-01..."
-
     if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
         nft insert rule inet filter input tcp dport 80 accept 2>/dev/null || true
     elif command -v iptables >/dev/null 2>&1; then
         iptables -I INPUT 1 -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null || true
     fi
 }
-
 restore_reverse_proxy_firewall() {
     info "Restoring reverse proxy firewall whitelist..."
     setup_firewall >/dev/null 2>&1 || true
 }
-
 prepare_certbot_standalone() {
     CERT_STOPPED_SNIPROXY=0
     CERT_STOPPED_WA_SHIM=0
@@ -1752,7 +1490,6 @@ prepare_certbot_standalone() {
     fi
     open_cert_http_port
 }
-
 cleanup_certbot_standalone() {
     local rc=$?
     restore_reverse_proxy_firewall
@@ -1765,10 +1502,8 @@ cleanup_certbot_standalone() {
     fi
     return $rc
 }
-
 install_certbot_firewall_hooks() {
     mkdir -p /etc/letsencrypt/renewal-hooks/pre /etc/letsencrypt/renewal-hooks/post
-
     cat > /usr/local/bin/proxy-gateway-open-cert-http.sh <<'EOF'
 #!/bin/bash
 set -e
@@ -1797,10 +1532,6 @@ EOF
     chmod +x /etc/letsencrypt/renewal-hooks/pre/10-proxy-gateway-open-http.sh \
         /etc/letsencrypt/renewal-hooks/post/90-proxy-gateway-restore-firewall.sh
 }
-
-# =============================================================================
-# Switchable egress ("exit") management
-# =============================================================================
 ensure_proxy_user() {
     if id -u "${EXIT_USER}" >/dev/null 2>&1; then
         return 0
@@ -1810,39 +1541,30 @@ ensure_proxy_user() {
         || true
     id -u "${EXIT_USER}" >/dev/null 2>&1 || warn "Could not create egress user ${EXIT_USER}"
 }
-
 exit_conf_path()    { echo "${WG_DIR}/pgw-${1}.conf"; }       # wireguard config
 exit_iface()        { echo "pgw-${1}"; }                      # device name (wg or TUN)
 exit_type_file()    { echo "${EXITS_DIR}/${1}.type"; }
 exit_mihomo_conf()  { echo "${EXITS_DIR}/${1}.yaml"; }
-
-# An exit's type: explicit .type file wins; else inferred from a wg config.
 exit_type() {
     local name="$1" tf; tf="$(exit_type_file "$name")"
     if [[ -f "$tf" ]]; then cat "$tf"; return; fi
     [[ -f "$(exit_conf_path "$name")" ]] && { echo wireguard; return; }
     echo ""
 }
-
 exit_exists() {
     [[ -f "$(exit_type_file "$1")" || -f "$(exit_conf_path "$1")" ]]
 }
-
-# All configured exit names (excluding 'local'), one per line, sorted unique.
 list_exit_names() {
     shopt -s nullglob
     local f n; local -A seen=()
     for f in "${EXITS_DIR}"/*.type; do n="$(basename "$f" .type)"; seen["$n"]=1; done
     for f in "${WG_DIR}"/pgw-*.conf; do n="$(basename "$f" .conf)"; seen["${n#pgw-}"]=1; done
     shopt -u nullglob
-    # Must return 0 even when empty (callers use it under set -e / pipefail).
     if [[ ${#seen[@]} -gt 0 ]]; then
         printf '%s\n' "${!seen[@]}" | sort
     fi
     return 0
 }
-
-# Download the locked mihomo build on first need for URI exits.
 ensure_mihomo() {
     [[ -x "${MIHOMO_BIN}" ]] && return 0
     info "Installing locked mihomo ${MIHOMO_VERSION_DEFAULT} (TUN engine for URI exits)..."
@@ -1867,8 +1589,6 @@ ensure_mihomo() {
     rm -rf "$tmp"
     ok "mihomo ${ver} installed: ${MIHOMO_BIN}"
 }
-
-# systemd template that runs mihomo for one URI or smart-routing exit.
 install_mihomo_unit() {
     cat > /etc/systemd/system/proxy-gateway-mihomo@.service <<EOF
 [Unit]
@@ -1893,18 +1613,12 @@ Environment=GOMEMLIMIT=128MiB
 WantedBy=multi-user.target
 EOF
     mkdir -p "${CONF_DIR}/mihomo"
-    # Complete replacement: disable and remove the obsolete sing-box template.
     systemctl stop 'proxy-gateway-singbox@*.service' 2>/dev/null || true
     rm -f /etc/systemd/system/proxy-gateway-singbox@.service
     rm -f "${BASE_DIR}/bin/sing-box" "${BASE_DIR}/bin/singbox-exit-config.py" \
         "${BASE_DIR}/bin/singbox-router-config.py"
     systemctl daemon-reload
 }
-
-# sing-box JSON does not retain the original share URI, and several protocols
-# cannot be translated back to mihomo losslessly. Preserve the old files for
-# recovery, invalidate those exits, and make the routing state safe. The smart
-# exit is rebuilt separately from rules.conf, which remains untouched.
 migrate_singbox_exits() {
     shopt -s nullglob
     local old=0 current_removed=0 f name backup="${EXITS_DIR}/singbox-backup"
@@ -1923,7 +1637,6 @@ migrate_singbox_exits() {
     done
     shopt -u nullglob
     [[ $old -eq 1 ]] || return 0
-
     systemctl stop 'proxy-gateway-singbox@*.service' 2>/dev/null || true
     if [[ $current_removed -eq 1 ]]; then
         echo local > "${CONF_DIR}/current-exit"
@@ -1933,8 +1646,6 @@ migrate_singbox_exits() {
     warn "Legacy sing-box exits were backed up to ${backup}."
     warn "Re-add URI exits from their original share links; smart rules can then be rebuilt with --set-rules."
 }
-
-# Bring an exit's device up / down by type.
 exit_up() {
     local name="$1" t; t="$(exit_type "$name")"
     case "$t" in
@@ -1948,7 +1659,6 @@ exit_up() {
         *) err "Unknown type for exit '$name'"; return 1 ;;
     esac
 }
-
 exit_down() {
     local name="$1" t; t="$(exit_type "$name")"
     case "$t" in
@@ -1956,8 +1666,6 @@ exit_down() {
         shadowsocks|vmess|trojan|vless|hysteria|hysteria2|tuic|anytls|shadowtls|socks|http|router) systemctl stop "proxy-gateway-mihomo@${name}.service" 2>/dev/null || true ;;
     esac
 }
-
-# "host port" of a URI exit's upstream server (empty for wireguard/router).
 exit_server() {
     local jf; jf="$(exit_mihomo_conf "$1")"
     [[ -f "$jf" ]] || return 0
@@ -1971,16 +1679,11 @@ except Exception:
     pass
 PY
 }
-
-# TCP-reachability of a host:port (0 = reachable). Unknown host = assume ok.
 exit_reachable() {
     local host="$1" port="$2"
     [[ -z "$host" || -z "$port" ]] && return 0
     timeout 4 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null
 }
-
-# Warn (don't block) when an exit's upstream node is unreachable. For the smart
-# router, check every exit referenced in the policy map.
 preflight_exit() {
     local name="$1" t hp host port tgt
     t="$(exit_type "$name")"
@@ -1999,8 +1702,6 @@ preflight_exit() {
         done < <(awk -F= 'NF==2{print $2}' "${POLICY_MAP}" 2>/dev/null | sort -u)
     fi
 }
-
-# Report reachability of every configured exit's upstream node.
 check_exits() {
     local n hp host port state
     while IFS= read -r n; do
@@ -2017,8 +1718,6 @@ check_exits() {
         printf '  %-12s %-22s %s\n' "$n" "${host:+${host}:${port}}" "$state"
     done < <(list_exit_names)
 }
-
-# Wait (≤5s) for the pgw-<name> device to appear and become UP (mihomo TUN creation is async).
 exit_wait_device() {
     local iface="pgw-${1}" i
     for i in $(seq 1 50); do
@@ -2027,8 +1726,6 @@ exit_wait_device() {
     done
     return 1
 }
-
-# Boot-time / on-change re-application of the currently selected exit.
 install_apply_exit_helper() {
     cat > /usr/local/bin/proxy-gateway-apply-exit.sh <<EOF
 #!/bin/bash
@@ -2072,7 +1769,6 @@ echo "[OK] egress exit active: ${current} (${etype}, dev ${iface})"
 EOF
     chmod +x /usr/local/bin/proxy-gateway-apply-exit.sh
 }
-
 setup_exit_switching() {
     info "Setting up switchable egress (exit) routing..."
     ensure_proxy_user
@@ -2080,8 +1776,6 @@ setup_exit_switching() {
     mkdir -p "${EXITS_DIR}"; chmod 700 "${EXITS_DIR}"
     mkdir -p "${CONF_DIR}"
     [[ -f "${CONF_DIR}/current-exit" ]] || echo "local" > "${CONF_DIR}/current-exit"
-
-    # Install the mihomo config generators (per-exit + smart router).
     mkdir -p "${BASE_DIR}/bin"
     [[ -f "${LIB_DIR}/mihomo-exit-config.py" ]] && \
         install -m 0755 "${LIB_DIR}/mihomo-exit-config.py" "${MIHOMO_CFG_GEN}"
@@ -2089,17 +1783,12 @@ setup_exit_switching() {
         install -m 0755 "${LIB_DIR}/mihomo-router-config.py" "${MIHOMO_ROUTER_GEN}"
     [[ -f "${LIB_DIR}/rules-import.py" ]] && \
         install -m 0755 "${LIB_DIR}/rules-import.py" "${RULES_IMPORT}"
-
-    # Built-in default smart rules (e.g. speedtest) — merged ahead of user rules.
     mkdir -p "$(dirname "${RULES_DEFAULT}")"
     [[ -f "${LIB_DIR}/rules-default.conf" ]] && \
         install -m 0644 "${LIB_DIR}/rules-default.conf" "${RULES_DEFAULT}"
-
     install_mihomo_unit
     migrate_singbox_exits
-
     install_apply_exit_helper
-
     cat > /etc/systemd/system/proxy-gateway-exit.service <<'EOF'
 [Unit]
 Description=Proxy Gateway egress exit selector
@@ -2114,13 +1803,11 @@ ExecStart=/usr/local/bin/proxy-gateway-apply-exit.sh
 [Install]
 WantedBy=multi-user.target
 EOF
-
     systemctl daemon-reload
     systemctl enable proxy-gateway-exit.service 2>/dev/null || true
     /usr/local/bin/proxy-gateway-apply-exit.sh >/dev/null 2>&1 || true
     ok "Egress exit routing ready (default: local / direct)"
 }
-
 list_exits() {
     local cur="local"
     [[ -f "${CONF_DIR}/current-exit" ]] && cur="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
@@ -2147,7 +1834,6 @@ list_exits() {
     echo "=========================================="
     echo "  ( * = active )  switch with: $0 --set-exit <name|local>"
 }
-
 add_exit() {
     local name="${1:-}" src="${2:-}"
     [[ -z "$name" ]] && { err "Usage: $0 --add-exit <name> [wg.conf | proxy URI]"; exit 1; }
@@ -2159,11 +1845,8 @@ if name in ("local", "smart") or not re.match(r"^[\w\-\u4e00-\u9fff]{1,16}$", na
 PYNAME
     [[ "$name" == "local" || "$name" == "smart" ]] && { err "'$name' is a reserved exit name (smart = rule-based router; use --set-rules)"; exit 1; }
     exit_exists "$name" && { err "Exit '$name' already exists"; exit 1; }
-
     mkdir -p "${WG_DIR}"; chmod 700 "${WG_DIR}"
     mkdir -p "${EXITS_DIR}"; chmod 700 "${EXITS_DIR}"
-
-    # Read payload: file arg, a URI passed as the arg, stdin pipe, or paste.
     local tmp; tmp="$(mktemp)"
     if [[ -n "$src" && -f "$src" ]]; then
         cat "$src" > "$tmp"
@@ -2175,15 +1858,9 @@ PYNAME
         echo "Paste a WireGuard config OR a supported proxy URI for '$name', end with Ctrl-D:"
         cat > "$tmp"
     fi
-
-    # A proxy URI -> multi-protocol URI exit via mihomo. Grab the WHOLE first
-    # scheme line (not just a non-space token) so a single-line password can
-    # contain spaces and other special chars; only CR / surrounding space trimmed.
     local uri type px_user px_pass px_rdns
     uri="$(grep -iE '^[[:space:]]*(ss|vmess|trojan|vless|hysteria2|hy2|tuic|anytls|socks5h|socks5|socks|http|https)://' "$tmp" | head -n1 | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     if [[ -n "$uri" ]]; then
-        # Classify by a lowercased copy (scheme may be upper/mixed case); the
-        # original "$uri" is passed through unchanged so the password keeps its case.
         local uri_lc; uri_lc="$(printf '%s' "$uri" | tr '[:upper:]' '[:lower:]')"
         case "$uri_lc" in
             ss://*)                 type=shadowsocks ;;
@@ -2196,11 +1873,8 @@ PYNAME
             socks5h://*|socks5://*|socks://*) type=socks ;;
             http://*|https://*)     type=http ;;
         esac
-        # Optional out-of-band SOCKS5 credentials on their own lines, so passwords
-        # with special characters need no URL-encoding:  user: X  /  pass: Y
         px_user="$(grep -iE '^[[:space:]]*(user|username)[[:space:]]*[:=]' "$tmp" | head -n1 | sed -E 's/^[[:space:]]*[^:=]+[:=][[:space:]]*//' | tr -d '\r' || true)"
         px_pass="$(grep -iE '^[[:space:]]*(pass|password)[[:space:]]*[:=]' "$tmp" | head -n1 | sed -E 's/^[[:space:]]*[^:=]+[:=][[:space:]]*//' | tr -d '\r' || true)"
-        # Optional explicit remote-DNS toggle (socks5h:// already implies it).
         px_rdns="$(grep -iE '^[[:space:]]*remote-?dns[[:space:]]*[:=]' "$tmp" | head -n1 | sed -E 's/^[[:space:]]*[^:=]+[:=][[:space:]]*//' | tr -d '\r' || true)"
         rm -f "$tmp"
         [[ -f "${MIHOMO_CFG_GEN}" ]] || { err "Config generator missing: ${MIHOMO_CFG_GEN}"; exit 1; }
@@ -2224,13 +1898,9 @@ PYNAME
         info "Activate it with: $0 --set-exit $name"
         return
     fi
-
-    # Otherwise: a WireGuard config.
     grep -qi '^\[Interface\]' "$tmp" || { err "Not a URI and not a WireGuard config (no proxy URI or [Interface])"; rm -f "$tmp"; exit 1; }
     grep -qi '^\[Peer\]'      "$tmp" || { err "Invalid WireGuard config (missing [Peer])"; rm -f "$tmp"; exit 1; }
     command -v wg-quick >/dev/null 2>&1 || { err "wireguard-tools (wg-quick) is not installed"; rm -f "$tmp"; exit 1; }
-
-    # Force "Table = off" so wg-quick never installs a global default route.
     if grep -qi '^[[:space:]]*Table[[:space:]]*=' "$tmp"; then
         sed -i 's/^[[:space:]]*[Tt]able[[:space:]]*=.*/Table = off/' "$tmp"
     else
@@ -2242,7 +1912,6 @@ PYNAME
     ok "Exit '$name' added (type: wireguard)"
     info "Activate it with: $0 --set-exit $name"
 }
-
 del_exit() {
     local name="${1:-}"
     [[ -z "$name" ]] && { err "Usage: $0 --del-exit <name>"; exit 1; }
@@ -2260,13 +1929,11 @@ del_exit() {
     rm -rf "${CONF_DIR}/mihomo/${name}"
     ok "Exit '$name' removed"
 }
-
 rename_exit() {
     local old="${1:-}" new="${2:-}"
     local cur="local" old_active=0 rules_ref=0 policy_ref=0 smart_touched=0 backup_dir=""
     local old_wg old_yaml old_type old_uri old_runtime new_wg new_yaml new_type new_uri new_runtime
     local current_smart=0
-
     [[ -n "$old" && -n "$new" ]] || { err "Usage: $0 --rename-exit <old> <new>"; exit 1; }
     [[ "$old" == "local" || "$old" == "smart" ]] && { err "'$old' cannot be renamed"; exit 1; }
     [[ "$new" == "local" || "$new" == "smart" ]] && { err "'$new' is a reserved exit name"; exit 1; }
@@ -2278,12 +1945,10 @@ if name in ("local", "smart") or not re.match(r"^[\w\-\u4e00-\u9fff]{1,16}$", na
     raise SystemExit(1)
 PYNAME
     exit_exists "$new" && { err "Exit '$new' already exists"; exit 1; }
-
     mkdir -p "${EXITS_DIR}" "${WG_DIR}" "${CONF_DIR}/mihomo"
     [[ -f "${CONF_DIR}/current-exit" ]] && cur="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
     [[ "$cur" == "$old" ]] && old_active=1
     [[ "$cur" == "smart" ]] && current_smart=1
-
     if [[ -f "${POLICY_MAP}" ]] && awk -F= -v c="$old" '$1==c{found=1} END{exit(found?0:1)}' "${POLICY_MAP}"; then
         err "Cannot safely rename exit '$old': category '$old' already exists in ${POLICY_MAP}"
         exit 1
@@ -2303,7 +1968,6 @@ PYNAME
         policy_ref=1
         smart_touched=1
     fi
-
     old_wg="$(exit_conf_path "$old")"
     old_yaml="$(exit_mihomo_conf "$old")"
     old_type="$(exit_type_file "$old")"
@@ -2315,7 +1979,6 @@ PYNAME
     new_uri="${EXITS_DIR}/${new}.uri"
     new_runtime="${CONF_DIR}/mihomo/${new}"
     backup_dir="$(mktemp -d)"
-
     [[ -f "$old_wg" ]] && cp -a "$old_wg" "${backup_dir}/old.wg"
     [[ -f "$old_yaml" ]] && cp -a "$old_yaml" "${backup_dir}/old.yaml"
     [[ -f "$old_type" ]] && cp -a "$old_type" "${backup_dir}/old.type"
@@ -2323,15 +1986,12 @@ PYNAME
     [[ -d "$old_runtime" ]] && cp -a "$old_runtime" "${backup_dir}/old.runtime"
     [[ -f "${RULES_FILE}" ]] && cp -a "${RULES_FILE}" "${backup_dir}/rules.conf"
     [[ -f "${POLICY_MAP}" ]] && cp -a "${POLICY_MAP}" "${backup_dir}/policy-map.conf"
-
     rollback_rename_exit() {
         local reason="$1"
         local smart_ready=1
         (set_exit local) >/dev/null 2>&1 || true
-
         rm -f "$new_wg" "$new_yaml" "$new_type" "$new_uri"
         rm -rf "$new_runtime"
-
         [[ -f "${backup_dir}/old.wg" ]] && cp -a "${backup_dir}/old.wg" "$old_wg"
         [[ -f "${backup_dir}/old.yaml" ]] && cp -a "${backup_dir}/old.yaml" "$old_yaml"
         [[ -f "${backup_dir}/old.type" ]] && cp -a "${backup_dir}/old.type" "$old_type"
@@ -2340,7 +2000,6 @@ PYNAME
             rm -rf "$old_runtime"
             cp -a "${backup_dir}/old.runtime" "$old_runtime"
         fi
-
         if [[ -f "${backup_dir}/rules.conf" ]]; then
             install -m 644 "${backup_dir}/rules.conf" "${RULES_FILE}"
         elif [[ $rules_ref -eq 1 ]]; then
@@ -2351,7 +2010,6 @@ PYNAME
         elif [[ $policy_ref -eq 1 ]]; then
             rm -f "${POLICY_MAP}"
         fi
-
         if [[ $smart_touched -eq 1 ]]; then
             (regen_smart) >/dev/null 2>&1 || smart_ready=0
         fi
@@ -2367,12 +2025,10 @@ PYNAME
         else
             printf '%s\n' "$cur" > "${CONF_DIR}/current-exit"
         fi
-
         rm -rf "$backup_dir"
         err "$reason"
         exit 1
     }
-
     if [[ $old_active -eq 1 ]]; then
         if ! (set_exit local) >/dev/null 2>&1; then
             rm -rf "$backup_dir"
@@ -2380,7 +2036,6 @@ PYNAME
             exit 1
         fi
     fi
-
     [[ -f "$old_type" ]] && mv "$old_type" "$new_type"
     [[ -f "$old_wg" ]] && mv "$old_wg" "$new_wg"
     if [[ -f "$old_yaml" ]]; then
@@ -2408,7 +2063,6 @@ PYYAML
     fi
     [[ -f "$old_uri" ]] && mv "$old_uri" "$new_uri"
     [[ -d "$old_runtime" ]] && mv "$old_runtime" "$new_runtime"
-
     if [[ $rules_ref -eq 1 ]]; then
         awk -F, -v o="$old" -v n="$new" '
             BEGIN { OFS="," }
@@ -2428,33 +2082,27 @@ PYYAML
             || rollback_rename_exit "Failed to install rewritten policy map for renamed exit '$old'"
         rm -f "${POLICY_MAP}.tmp"
     fi
-
     if [[ $smart_touched -eq 1 ]]; then
         if ! (regen_smart) >/dev/null 2>&1; then
             rollback_rename_exit "Rename rejected; previous exit restored"
         fi
     fi
-
     if [[ $old_active -eq 1 ]]; then
         if ! (set_exit "$new") >/dev/null 2>&1; then
             rollback_rename_exit "Renamed exit but failed to activate '$new'; previous exit restored"
         fi
     fi
-
     rm -rf "$backup_dir"
     ok "Exit '$old' renamed to '$new'"
 }
-
 set_exit() {
     local name="${1:-}"
     [[ -z "$name" ]] && { err "Usage: $0 --set-exit <name|local>"; exit 1; }
     ensure_proxy_user
     [[ -x /usr/local/bin/proxy-gateway-apply-exit.sh ]] || setup_exit_switching >/dev/null
     ip rule add fwmark "${EXIT_MARK}" table "${EXIT_TABLE}" 2>/dev/null || true
-
     local prev="local"
     [[ -f "${CONF_DIR}/current-exit" ]] && prev="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
-
     if [[ "$name" == "local" ]]; then
         ip route flush table "${EXIT_TABLE}" 2>/dev/null || true
         echo "local" > "${CONF_DIR}/current-exit"
@@ -2462,9 +2110,7 @@ set_exit() {
         ok "Egress switched to: local (direct from this server)"
         return
     fi
-
     exit_exists "$name" || { err "Unknown exit '$name'. Add it first: $0 --add-exit $name <conf|uri>"; exit 1; }
-
     local iface; iface="$(exit_iface "$name")"
     if ! ip link show "$iface" >/dev/null 2>&1; then
         exit_up "$name" || { err "Failed to bring up exit '$name'"; exit 1; }
@@ -2472,16 +2118,12 @@ set_exit() {
     exit_wait_device "$name" || { err "Device $iface did not appear; check the exit's service/logs"; exit 1; }
     ip route replace default dev "$iface" table "${EXIT_TABLE}"
     echo "$name" > "${CONF_DIR}/current-exit"
-    # Free the previously-active exit's resources (saves memory on small hosts).
     [[ "$prev" != "local" && "$prev" != "$name" ]] && exit_down "$prev"
     ok "Egress switched to: $name ($(exit_type "$name"), dev $iface)"
     preflight_exit "$name"
     info "Verify the public exit IP with:"
     info "  curl --interface ${iface} -4 -s https://api.ipify.org; echo"
 }
-
-# Regenerate the 'smart' router config from RULES_FILE + POLICY_MAP, validate it
-# with mihomo, and install it (reloading if smart is the active exit).
 regen_smart() {
     [[ -f "${RULES_FILE}" ]] || { err "No rules yet. Use --set-rules or --import-rules first."; exit 1; }
     [[ -f "${MIHOMO_ROUTER_GEN}" ]] || { err "Router generator missing: ${MIHOMO_ROUTER_GEN}"; exit 1; }
@@ -2490,9 +2132,7 @@ regen_smart() {
     [[ -x /usr/local/bin/proxy-gateway-apply-exit.sh ]] || setup_exit_switching >/dev/null
     ensure_mihomo || exit 1
     install_mihomo_unit
-
     info "Building smart mihomo config and rule providers..."
-    # Effective rules = built-in defaults (e.g. speedtest) first, then user rules.
     local eff; eff="$(mktemp)"
     [[ -f "${RULES_DEFAULT}" ]] && cat "${RULES_DEFAULT}" >> "$eff"
     cat "${RULES_FILE}" >> "$eff"
@@ -2511,7 +2151,6 @@ regen_smart() {
     fi
     install -m 600 "${yaml}.tmp" "${yaml}"; rm -f "${yaml}.tmp"
     echo router > "$(exit_type_file smart)"
-
     local n; n="$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)"
     ok "Smart router rebuilt (${n} rules)."
     local cur="local"
@@ -2524,13 +2163,10 @@ regen_smart() {
         info "Activate smart routing with: $0 --set-exit smart"
     fi
 }
-
-# Install/refresh hand-written rules for the 'smart' exit.
 set_rules() {
     local src="${1:-}"
     ensure_proxy_user
     mkdir -p "${EXITS_DIR}" "${RULESET_CACHE}"
-
     local tmp; tmp="$(mktemp)"
     if [[ -n "$src" && -f "$src" ]]; then
         cat "$src" > "$tmp"
@@ -2565,9 +2201,6 @@ set_rules() {
     fi
     rm -f "$old" "$old_policy"
 }
-
-# Add a single highest-priority rule without replacing the existing file. The
-# full config is generated and validated before the new rules file is committed.
 add_rule() {
     local rule="${1:-}" old tmp
     [[ -n "$rule" ]] || { err "Usage: $0 --add-rule <TYPE,value,policy>"; exit 1; }
@@ -2591,7 +2224,6 @@ add_rule() {
     fi
     rm -f "$old" "$tmp"
 }
-
 add_ruleset() {
     local source="${1:-}" policy="${2:-}"
     [[ -n "$source" && -n "$policy" ]] || { err "Usage: $0 --add-ruleset <url|path> <exit|category|direct|block>"; exit 1; }
@@ -2602,33 +2234,24 @@ add_ruleset() {
     esac
     add_rule "RULE-SET,${source},${policy}"
 }
-
-# Import a full rule list: convert -> rules.conf, seed the policy map,
-# then rebuild the smart router.
 import_rules() {
     local src="${1:-}"
     [[ -n "$src" && -f "$src" ]] || { err "Usage: $0 --import-rules <rule-list-file>"; exit 1; }
     [[ -f "${RULES_IMPORT}" ]] || { err "rule converter missing: ${RULES_IMPORT}"; exit 1; }
     ensure_proxy_user
     mkdir -p "${EXITS_DIR}" "${RULESET_CACHE}"
-
-    # Optional simplification: PGW_KEEP_CATEGORIES (e.g. "AI") keeps only those
-    # categories distinct and collapses the rest into Proxy/direct/block. The
-    # choice is remembered so future imports stay consistent.
     local keep="${PGW_KEEP_CATEGORIES:-}"
     [[ -z "$keep" && -f "${KEEP_FILE}" ]] && keep="$(cat "${KEEP_FILE}" 2>/dev/null)"
     if [[ -n "$keep" ]]; then
         mkdir -p "$(dirname "${KEEP_FILE}")"; printf '%s' "$keep" > "${KEEP_FILE}"
         info "Simplifying categories — keeping: ${keep} (others -> Proxy/direct/block)"
     fi
-    # Categories forced to direct (e.g. 小红书,bilibili,iqiyi). Remembered too.
     local direct="${PGW_DIRECT_CATEGORIES:-}"
     [[ -z "$direct" && -f "${DIRECT_FILE}" ]] && direct="$(cat "${DIRECT_FILE}" 2>/dev/null)"
     if [[ -n "$direct" ]]; then
         mkdir -p "$(dirname "${DIRECT_FILE}")"; printf '%s' "$direct" > "${DIRECT_FILE}"
         info "Forcing to direct: ${direct}"
     fi
-
     local old_rules old_policy
     old_rules="$(mktemp)"; old_policy="$(mktemp)"
     if [[ -f "${RULES_FILE}" ]]; then
@@ -2649,7 +2272,6 @@ import_rules() {
     fi
     install -m 644 "${RULES_FILE}.tmp" "${RULES_FILE}"; rm -f "${RULES_FILE}.tmp"
     grep -E '^(converted|CATEGORIES)' /tmp/pgw-import.err | sed 's/^/[INFO] /'
-
     init_policy_map
     info "Categories were seeded in ${POLICY_MAP} (edit on the bot or with --set-policy)."
     if ! (regen_smart); then
@@ -2662,10 +2284,6 @@ import_rules() {
     fi
     rm -f "$old_rules" "$old_policy"
 }
-
-# Rebuild POLICY_MAP to match the current rules: keep existing mappings for
-# surviving categories, seed new ones, drop stale ones. 'direct'/'block'
-# literals are NOT categories (no mapping needed).
 init_policy_map() {
     mkdir -p "$(dirname "${POLICY_MAP}")"
     touch "${POLICY_MAP}"
@@ -2688,18 +2306,15 @@ init_policy_map() {
     done < <(cat "${RULES_DEFAULT}" "${RULES_FILE}" 2>/dev/null | grep -vE '^[[:space:]]*(#|;|$)' | awk -F, '{print $NF}' | sort -u)
     sort -u "$tmp" > "${POLICY_MAP}"; rm -f "$tmp"
 }
-
 set_policy() {
     local cat="${1:-}" target="${2:-}" old
     [[ -z "$cat" || -z "$target" ]] && { err "Usage: $0 --set-policy <category> <exit|direct|block>"; exit 1; }
-    # Validate target.
     case "$target" in
         direct|block) ;;
         *) exit_exists "$target" || { err "Unknown target '$target' (use an exit name, direct, or block)"; exit 1; } ;;
     esac
     mkdir -p "$(dirname "${POLICY_MAP}")"; touch "${POLICY_MAP}"
     old="$(mktemp)"; cp -a "${POLICY_MAP}" "$old"
-    # Remove existing mapping for this category, then add the new one.
     grep -vF "${cat}=" "${POLICY_MAP}" > "${POLICY_MAP}.tmp" 2>/dev/null || true
     mv "${POLICY_MAP}.tmp" "${POLICY_MAP}"
     printf '%s=%s\n' "$cat" "$target" >> "${POLICY_MAP}"
@@ -2713,7 +2328,6 @@ set_policy() {
     rm -f "$old"
     ok "Mapped category '$cat' -> $target"
 }
-
 show_policy() {
     if [[ -s "${POLICY_MAP}" ]]; then
         sort "${POLICY_MAP}"
@@ -2721,9 +2335,6 @@ show_policy() {
         info "No policy map yet. Import rules first: $0 --import-rules <file>"
     fi
 }
-
-# Remove a category (rule group) from the policy map. Rules still targeting it
-# fall back to the router's default (direct) until re-mapped or edited.
 del_policy() {
     local cat="${1:-}"
     [[ -z "$cat" ]] && { err "Usage: $0 --del-policy <category>"; exit 1; }
@@ -2732,9 +2343,6 @@ del_policy() {
     ok "Removed rule group '$cat'"
     regen_smart
 }
-
-# Rename a category (rule group): update the policy map key AND every rule whose
-# target is that category, then rebuild — all in one pass.
 rename_policy() {
     local old="${1:-}" new="${2:-}" old_rules old_map
     [[ -z "$old" || -z "$new" ]] && { err "Usage: $0 --rename-policy <old> <new>"; exit 1; }
@@ -2771,9 +2379,6 @@ rename_policy() {
     rm -f "$old_rules" "$old_map"
     ok "Renamed rule group '$old' -> '$new'"
 }
-
-# One-click: route a single domain to a target, handling BOTH layers —
-# hijack it into the gateway (GFWList) AND add a top-priority smart rule.
 proxy_domain() {
     local domain="${1:-}" target="${2:-}"
     [[ -z "$domain" || -z "$target" ]] && { err "Usage: $0 --proxy-domain <domain> <exit|direct|block>"; exit 1; }
@@ -2784,10 +2389,8 @@ proxy_domain() {
     esac
     mkdir -p "${EXITS_DIR}"; touch "${RULES_FILE}"
     local esc="${domain//./\\.}" rule="DOMAIN-SUFFIX,${domain},${target}"
-    # 1) smart rule, top priority (replace any prior rule for the same domain)
     grep -vE "^DOMAIN-SUFFIX,${esc}," "${RULES_FILE}" > "${RULES_FILE}.tmp" 2>/dev/null || true
     { echo "$rule"; cat "${RULES_FILE}.tmp"; } > "${RULES_FILE}"; rm -f "${RULES_FILE}.tmp"
-    # 2) hijack layer
     local extra="/etc/dnsdist/gfwlist-extra-local.txt" lua="/etc/dnsdist/gfwlist.lua"
     mkdir -p /etc/dnsdist; touch "$extra"
     if [[ "$target" == "direct" ]]; then
@@ -2803,7 +2406,6 @@ proxy_domain() {
     ok "Domain '${domain}' -> ${target}  (hijack: $([[ "$target" == direct ]] && echo off || echo on))"
     regen_smart
 }
-
 show_rules() {
     if [[ -f "${RULES_FILE}" ]]; then
         cat "${RULES_FILE}"
@@ -2811,14 +2413,9 @@ show_rules() {
         info "No routing rules set. Add them with: $0 --set-rules <file>"
     fi
 }
-
-# =============================================================================
-# Telegram control bot (optional)
-# =============================================================================
 setup_tgbot() {
     local token="${TG_BOT_TOKEN:-}"
     local ids="${TG_ADMIN_IDS:-}"
-
     if [[ -z "$token" && -t 0 ]]; then
         echo ""
         info "可选：配置 Telegram 控制 Bot（直接在 Telegram 上运维）"
@@ -2831,11 +2428,8 @@ setup_tgbot() {
     if [[ -z "$ids" && -t 0 ]]; then
         read -r -p "授权的 Telegram 数字 ID（逗号分隔，可留空，稍后用 /id 获取再填）: " ids
     fi
-    # Keep only digits and separators, then normalise to comma-separated.
     ids="$(printf '%s' "$ids" | tr ', ' '\n' | grep -E '^[0-9]+$' | paste -sd ',' - 2>/dev/null || true)"
-
     local py; py="$(command -v python3 || echo /usr/bin/python3)"
-
     info "Installing Telegram control bot..."
     mkdir -p "${BASE_DIR}/bin"
     if [[ ! -f "${LIB_DIR}/tgbot.py" ]]; then
@@ -2843,9 +2437,7 @@ setup_tgbot() {
         return 1
     fi
     install -m 0755 "${LIB_DIR}/tgbot.py" "${BASE_DIR}/bin/tgbot.py"
-    # Stable management entrypoint the bot shells out to.
     install -m 0755 "${SCRIPT_PATH}" "${BASE_DIR}/bin/proxy-gateway-ctl"
-
     mkdir -p "${CONF_DIR}"
     cat > "${CONF_DIR}/tgbot.env" <<EOF
 TG_BOT_TOKEN=${token}
@@ -2853,7 +2445,6 @@ TG_ADMIN_IDS=${ids}
 MGMT=${BASE_DIR}/bin/proxy-gateway-ctl
 EOF
     chmod 600 "${CONF_DIR}/tgbot.env"
-
     cat > /etc/systemd/system/proxy-gateway-tgbot.service <<EOF
 [Unit]
 Description=Proxy Gateway Telegram control bot
@@ -2871,20 +2462,14 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
-
     systemctl daemon-reload
     systemctl enable --now proxy-gateway-tgbot.service
-
     if [[ -z "$ids" ]]; then
         warn "尚未设置授权 ID。给 Bot 发送 /id 获取数字 ID，填入 ${CONF_DIR}/tgbot.env 的 TG_ADMIN_IDS，然后:"
         warn "  systemctl restart proxy-gateway-tgbot"
     fi
     ok "Telegram bot 已安装。在 Telegram 给你的 Bot 发送 /start 开始操作。"
 }
-
-# =============================================================================
-# Low-memory Go runtime caps (drop-ins for the two Go proxies)
-# =============================================================================
 apply_lowmem_go_limits() {
     local d
     for svc in quic-proxy china-dns-race-proxy; do
@@ -2901,10 +2486,6 @@ EOF
     done
     systemctl daemon-reload
 }
-
-# =============================================================================
-# Start services
-# =============================================================================
 start_services() {
     info "Starting services..."
     systemctl restart china-dns-race-proxy || { err "china-dns-race-proxy failed to start"; journalctl -u china-dns-race-proxy --no-pager -n 20; exit 1; }
@@ -2914,14 +2495,8 @@ start_services() {
     systemctl restart quic-proxy || { err "quic-proxy failed to start"; journalctl -u quic-proxy --no-pager -n 20; exit 1; }
     ok "All services started"
 }
-
-# =============================================================================
-# Cron / Systemd timers
-# =============================================================================
 setup_schedules() {
     info "Setting up automatic updates..."
-
-    # Weekly rule update (Sunday 03:00)
     cat > /etc/systemd/system/update-dnsdist-rules.timer <<'EOF'
 [Unit]
 Description=Weekly dnsdist rules update
@@ -2933,7 +2508,6 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
-
     cat > /etc/systemd/system/update-dnsdist-rules.service <<'EOF'
 [Unit]
 Description=Update dnsdist GFWList/ChinaList rules
@@ -2942,21 +2516,12 @@ Description=Update dnsdist GFWList/ChinaList rules
 Type=oneshot
 ExecStart=/usr/local/bin/update-dnsdist-rules.sh
 EOF
-
     systemctl daemon-reload
     systemctl enable --now update-dnsdist-rules.timer
-
     install_certbot_firewall_hooks
-
-    # Ensure certbot timer is enabled
     systemctl enable --now certbot.timer 2>/dev/null || true
-
     ok "Schedules configured (rules: weekly, cert: auto)"
 }
-
-# =============================================================================
-# Status / Uninstall / Helpers
-# =============================================================================
 show_status() {
     echo "=========================================="
     echo "      Proxy Gateway Status"
@@ -2969,14 +2534,12 @@ show_status() {
             echo -e "$svc: ${RED}$status${NC}"
         fi
     done
-    # iOS profile is socket-activated: report the listening socket, not a daemon.
     ios_status=$(systemctl is-active proxy-gateway-ios-profile.socket 2>/dev/null || echo "unknown")
     if [[ "$ios_status" == "active" ]]; then
         echo -e "proxy-gateway-ios-profile.socket: ${GREEN}listening${NC}"
     else
         echo -e "proxy-gateway-ios-profile.socket: ${RED}$ios_status${NC}"
     fi
-    # Telegram bot (optional)
     if systemctl list-unit-files 2>/dev/null | grep -q '^proxy-gateway-tgbot\.service'; then
         tg_status=$(systemctl is-active proxy-gateway-tgbot 2>/dev/null || echo "unknown")
         echo -e "proxy-gateway-tgbot: $([[ "$tg_status" == active ]] && echo "${GREEN}running${NC}" || echo "${RED}$tg_status${NC}")"
@@ -2995,13 +2558,10 @@ show_status() {
     fi
     echo "=========================================="
 }
-
 do_uninstall() {
     warn "This will remove sniproxy, quic-proxy, china-dns-race-proxy, dnsdist configs, and rules."
     read -r -p "Are you sure? [y/N]: " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || { info "Uninstall cancelled"; exit 0; }
-
-    # Tear down egress exit routing before removing config.
     set_exit local 2>/dev/null || true
     ip rule del fwmark "${EXIT_MARK}" table "${EXIT_TABLE}" 2>/dev/null || true
     ip route flush table "${EXIT_TABLE}" 2>/dev/null || true
@@ -3014,7 +2574,6 @@ do_uninstall() {
         systemctl stop "proxy-gateway-singbox@$(basename "$f" .type).service" 2>/dev/null || true
     done
     shopt -u nullglob
-
     systemctl stop dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
     systemctl disable dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
     rm -f /etc/systemd/system/{sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-dnsdist-rules,proxy-gateway-exit,proxy-gateway-tgbot}.*
@@ -3023,7 +2582,6 @@ do_uninstall() {
         /etc/systemd/system/proxy-gateway-singbox@.service
     rm -rf /etc/systemd/system/quic-proxy.service.d /etc/systemd/system/china-dns-race-proxy.service.d
     systemctl daemon-reload
-
     rm -rf "$BASE_DIR" /etc/sniproxy.conf /etc/dnsdist /usr/local/bin/update-dnsdist-rules.sh
     rm -f /usr/local/sbin/sniproxy
     rm -f /usr/local/bin/proxy-gateway-apply-exit.sh
@@ -3033,16 +2591,12 @@ do_uninstall() {
     rm -f /etc/sysctl.d/99-proxy-gateway.conf
     rm -f /etc/profile.d/go.sh
     userdel "${EXIT_USER}" 2>/dev/null || true
-
-    # Optionally remove certbot certs
     warn "SSL certificates in /etc/letsencrypt/live/ are kept. Remove manually if needed."
     if [[ -e /swapfile ]]; then
         warn "Swapfile /swapfile is kept. To remove: swapoff /swapfile && rm -f /swapfile && sed -i '/^\\/swapfile /d' /etc/fstab"
     fi
-
     ok "Uninstall completed"
 }
-
 force_renew_cert() {
     if [[ -f "${CONF_DIR}/.domain" ]]; then
         DOMAIN=$(cat "${CONF_DIR}/.domain")
@@ -3051,14 +2605,12 @@ force_renew_cert() {
         err "No domain found. Cannot renew."
         exit 1
     fi
-
     get_public_ip
     certbot_diagnostics "$DOMAIN"
     if ! command -v certbot >/dev/null 2>&1; then
         err "certbot 不存在，无法签发/续期证书。请重新运行安装脚本安装依赖。"
         exit 1
     fi
-
     local certbot_cmd=()
     if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
         certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
@@ -3071,13 +2623,8 @@ force_renew_cert() {
             --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
             --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
     fi
-
     prepare_certbot_standalone
     trap cleanup_certbot_standalone RETURN
-
-    # Run once and capture output; only retry on the known Python error so we
-    # don't burn Let's Encrypt rate-limit attempts probing for it. The `if`
-    # prevents the failing run from tripping `set -e`.
     local out retry_out rc
     if out="$("${certbot_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
     printf '%s\n' "$out"
@@ -3108,8 +2655,6 @@ force_renew_cert() {
             exit 1
         fi
     fi
-
-    # Re-copy certificates to dnsdist-readable location
     local cert_live_dir="/etc/letsencrypt/live/${DOMAIN}"
     if [[ -d "$cert_live_dir" ]]; then
         mkdir -p /etc/dnsdist/certs
@@ -3118,35 +2663,29 @@ force_renew_cert() {
         chown -R _dnsdist:_dnsdist /etc/dnsdist/certs/
         chmod 640 /etc/dnsdist/certs/*.pem
     fi
-
     if systemctl is-active --quiet dnsdist; then
         systemctl restart dnsdist && ok "Certificate renewed and dnsdist reloaded"
     else
         systemctl start dnsdist && ok "Certificate renewed and dnsdist started"
     fi
 }
-
 regenerate_ios_profile() {
     if [[ -f "${CONF_DIR}/.domain" ]]; then
         DOMAIN=$(cat "${CONF_DIR}/.domain")
     elif [[ -f /etc/dnsdist/.domain ]]; then
         DOMAIN=$(cat /etc/dnsdist/.domain)
     fi
-
     if [[ -f /etc/dnsdist/.public_ip ]]; then
         PUBLIC_IP=$(cat /etc/dnsdist/.public_ip)
     else
         get_public_ip
     fi
-
     if [[ -z "${DOMAIN:-}" ]]; then
         err "No domain found. Cannot generate iOS profile."
         exit 1
     fi
-
     generate_ios_profile
 }
-
 set_dot_domain() {
     local new_domain="${1:-}" resolved="" old_conf_domain="" old_dnsdist_domain="" old_cert_basename=""
     [[ -n "$new_domain" ]] || { err "Usage: $0 --set-dot-domain <domain>"; exit 1; }
@@ -3154,7 +2693,6 @@ set_dot_domain() {
         err "Invalid domain: '$new_domain'. Provide a fully-qualified domain like dns.example.com"
         exit 1
     fi
-
     get_public_ip
     info "DNS 解析检查"
     info "域名: $new_domain"
@@ -3165,18 +2703,15 @@ set_dot_domain() {
         err "请先把 A 记录指向本机公网 IP 后重试。"
         exit 1
     fi
-
     old_conf_domain=$(cat "${CONF_DIR}/.domain" 2>/dev/null || true)
     old_dnsdist_domain=$(cat /etc/dnsdist/.domain 2>/dev/null || true)
     old_cert_basename=$(cat "${CONF_DIR}/.cert_basename" 2>/dev/null || true)
     DOMAIN="$new_domain"
     install_cert
-
     mkdir -p "$CONF_DIR" /etc/dnsdist
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
     echo "$DOMAIN" > /etc/dnsdist/.domain
     rm -f "${CONF_DIR}/.cert_basename"
-
     if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
         if ! /usr/local/bin/update-dnsdist-rules.sh; then
             restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
@@ -3196,7 +2731,6 @@ set_dot_domain() {
     regenerate_ios_profile || warn "iOS profile regeneration failed"
     ok "DoT domain updated: $DOMAIN"
 }
-
 force_set_dot_domain() {
     local new_domain="${1:-}" resolved="" old_conf_domain="" old_dnsdist_domain="" old_cert_basename=""
     [[ -n "$new_domain" ]] || { err "Usage: $0 --set-dot-domain-force <domain>"; exit 1; }
@@ -3204,23 +2738,19 @@ force_set_dot_domain() {
         err "Invalid domain: '$new_domain'. Provide a fully-qualified domain like dns.example.com"
         exit 1
     fi
-
     get_public_ip
     resolved=$(resolve_domain_a_records "$new_domain" | paste -sd',' - || true)
     if ! domain_resolves_to_public_ip "$new_domain" "$PUBLIC_IP"; then
         warn "$new_domain 当前解析到 ${resolved:-无}，不是本机 $PUBLIC_IP；按强制模式继续。"
     fi
-
     old_conf_domain=$(cat "${CONF_DIR}/.domain" 2>/dev/null || true)
     old_dnsdist_domain=$(cat /etc/dnsdist/.domain 2>/dev/null || true)
     old_cert_basename=$(cat "${CONF_DIR}/.cert_basename" 2>/dev/null || true)
-
     DOMAIN="$new_domain"
     mkdir -p "$CONF_DIR" /etc/dnsdist
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
     echo "$DOMAIN" > /etc/dnsdist/.domain
     rm -f "${CONF_DIR}/.cert_basename"
-
     if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
         if ! /usr/local/bin/update-dnsdist-rules.sh; then
             restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
@@ -3237,18 +2767,15 @@ force_set_dot_domain() {
         err "dnsdist restart failed; DoT domain rolled back"
         exit 1
     fi
-
     regenerate_ios_profile || warn "iOS profile regeneration failed"
     warn "DoT domain forcibly updated without issuing a new certificate. Run --renew-cert after fixing certbot/port 80 issues."
     ok "DoT domain forcibly updated: $DOMAIN"
 }
-
 set_custom_dns() {
     local remote_dns local_dns backup_dir sniproxy_backup="" china_service_backup=""
     [[ -n "${1:-}" ]] || { err "Usage: $0 --set-dns <remote-dns> [local-dns]"; exit 1; }
     remote_dns=$(normalize_dns_upstreams "$1")
     local_dns=$(normalize_dns_upstreams "${2:-$(cat /etc/dnsdist/.local_dns 2>/dev/null || printf '%s' "${DEFAULT_LOCAL_DNS[*]}")}")
-
     mkdir -p "$CONF_DIR" /etc/dnsdist
     backup_dir=$(mktemp -d)
     for f in \
@@ -3275,7 +2802,6 @@ set_custom_dns() {
         china_service_backup="${backup_dir}/china-dns-race-proxy.service"
         cp -a /etc/systemd/system/china-dns-race-proxy.service "$china_service_backup"
     fi
-
     restore_dns_backup() {
         local f b
         for f in \
@@ -3307,7 +2833,6 @@ set_custom_dns() {
             systemctl daemon-reload 2>/dev/null || true
         fi
     }
-
     echo "$remote_dns" > "${CONF_DIR}/.remote_dns"
     echo "$local_dns" > "${CONF_DIR}/.local_dns"
     echo "$remote_dns" > "${CONF_DIR}/.overseas_dns"
@@ -3320,25 +2845,21 @@ set_custom_dns() {
     echo "$remote_dns" > /etc/dnsdist/.overseas_private_dns
     echo "$remote_dns" > /etc/dnsdist/.overseas_public_dns
     echo "$remote_dns" > /etc/dnsdist/.sniproxy_dns
-
     if [[ -f "${CONF_DIR}/wa-shim.env" ]]; then
         sed -i -E "s#^WA_SHIM_RESOLVER=.*#WA_SHIM_RESOLVER=${remote_dns%% *},8.8.8.8#" "${CONF_DIR}/wa-shim.env"
     fi
-
     if ! rewrite_sniproxy_dns "$remote_dns"; then
         restore_dns_backup
         rm -rf "$backup_dir"
         err "sniproxy config update failed; DNS upstreams rolled back"
         exit 1
     fi
-
     if [[ -f /etc/systemd/system/china-dns-race-proxy.service ]]; then
         local local_dns_with_ports
         local_dns_with_ports=$(dns_upstreams_with_ports "$local_dns")
         sed -i -E "s#^ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127\\.0\\.0\\.1:5301( -upstreams [^[:space:]]+)?#ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}#" /etc/systemd/system/china-dns-race-proxy.service
         systemctl daemon-reload
     fi
-
     if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
         if ! /usr/local/bin/update-dnsdist-rules.sh; then
             restore_dns_backup
@@ -3363,23 +2884,17 @@ set_custom_dns() {
     echo "Remote DNS: $remote_dns"
     echo "Local DNS: $local_dns"
 }
-
-# =============================================================================
-# Main installation flow
-# =============================================================================
 main_install() {
     check_root
     detect_os
     detect_memory_profile
     ensure_swap
     get_public_ip
-
     echo ""
     echo "=========================================="
     echo "  高性能反代系统一键部署"
     echo "=========================================="
     echo ""
-
     install_deps
     check_port_53
     generate_domain
@@ -3400,7 +2915,6 @@ main_install() {
     start_services
     setup_schedules
     setup_tgbot
-
     echo ""
     echo "=========================================="
     echo "         部署完成！"
@@ -3434,10 +2948,6 @@ main_install() {
     echo "  $0 --uninstall"
     echo "=========================================="
 }
-
-# =============================================================================
-# Entrypoint
-# =============================================================================
 case "${1:-}" in
     --status)
         get_public_ip 2>/dev/null || true

@@ -6,6 +6,19 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
 install_body="$(cat "${install}")"
 
+if [[ ! -x "${install}" ]]; then
+    echo "install.sh must be executable after cloning the repository." >&2
+    exit 1
+fi
+
+# `bash -c "$(curl .../install.sh)"` passes the complete script as one Linux
+# argument. Linux limits one argument to 128 KiB (MAX_ARG_STRLEN).
+install_size="$(wc -c < "${install}")"
+if (( install_size >= 131072 )); then
+    echo "install.sh must stay below 128 KiB for the documented bash -c installer (${install_size} bytes)." >&2
+    exit 1
+fi
+
 first_three="$(head -c 3 "${install}" | od -An -tx1 | tr -d ' \n')"
 if [[ "${first_three}" == "efbbbf" ]]; then
     echo "install.sh must not start with a UTF-8 BOM; it breaks the shebang when executed directly." >&2
