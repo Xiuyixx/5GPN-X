@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034 # Variables are consumed by the eval-loaded regen_smart function.
+# shellcheck disable=SC2016 # The fake mihomo binary intentionally expands at run time.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

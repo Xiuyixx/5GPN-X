@@ -205,14 +205,14 @@ ipaddress.ip_address(sys.argv[1])
 PYEOF
         then
             if [[ "${item%:*}" == *:* ]]; then
-                out[$i]="[${item%:*}]:${item##*:}"
+                out[i]="[${item%:*}]:${item##*:}"
             fi
             continue
         fi
         if [[ "$item" == *:*:* ]]; then
-            out[$i]="[${item}]:53"
+            out[i]="[${item}]:53"
         else
-            out[$i]="${item}:53"
+            out[i]="${item}:53"
         fi
     done
     local IFS=,
@@ -2905,7 +2905,7 @@ set_custom_dns() {
         /etc/dnsdist/.overseas_private_dns \
         /etc/dnsdist/.overseas_public_dns \
         /etc/dnsdist/.sniproxy_dns; do
-        [[ -f "$f" ]] && cp -a "$f" "${backup_dir}/$(echo "$f" | sed 's#/#__#g')"
+        [[ -f "$f" ]] && cp -a "$f" "${backup_dir}/${f//\//__}"
     done
     if [[ -f /etc/sniproxy.conf ]]; then
         sniproxy_backup="${backup_dir}/sniproxy.conf"
@@ -2931,7 +2931,7 @@ set_custom_dns() {
             /etc/dnsdist/.overseas_private_dns \
             /etc/dnsdist/.overseas_public_dns \
             /etc/dnsdist/.sniproxy_dns; do
-            b="${backup_dir}/$(echo "$f" | sed 's#/#__#g')"
+            b="${backup_dir}/${f//\//__}"
             if [[ -f "$b" ]]; then
                 cp -a "$b" "$f"
             else

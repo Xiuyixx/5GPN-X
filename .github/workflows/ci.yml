@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        run: |
+          shellcheck -x install.sh quick-install.sh lib/update-rules.sh lib/renew-hook.sh
+          shellcheck -x tests/*.sh
+      - name: Python compile + ruff
+        run: |
+          python3 -m py_compile lib/*.py
+          pipx run ruff check lib/ tests/
+
+  shell-python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shell test suite
+        run: |
+          for t in tests/*.sh; do
+            echo "RUN $t"
+            bash "$t"
+          done
+      - name: Run python test suite
+        run: |
+          for t in tests/*.py; do
+            echo "RUN $t"
+            python3 "$t"
+          done
+
+  powershell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run PowerShell policy tests
+        shell: pwsh
+        run: |
+          $failed = 0
+          Get-ChildItem tests/*.ps1 | ForEach-Object {
+            Write-Host "RUN $($_.Name)"
+            & $_.FullName
+            if ($LASTEXITCODE -ne 0) { $failed = 1 }
+          }
+          exit $failed
+
+  go-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - name: Test quic-proxy and china-dns-race-proxy
+        run: |
+          set -euo pipefail
+          for prog in quic-proxy china-dns-race-proxy; do
+            dir="$(mktemp -d)"
+            cp "lib/${prog}.go" "lib/${prog}_test.go" "$dir/"
+            (cd "$dir" && go mod init "$prog" >/dev/null && go vet ./... && go test ./...)
+          done
