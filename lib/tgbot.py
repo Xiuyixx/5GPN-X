@@ -323,9 +323,12 @@ def edit(cb, text, keyboard=None, mono=False):
     if "not modified" in str(r):
         CONSOLE[chat_id] = mid
         return  # nothing to do
-    # original may be a photo / too old / gone -> post a fresh message
+    # original may be a photo / too old / gone -> delete it and post a fresh
+    # message so the user doesn't see an orphaned media bubble above the menu.
     # text is already HTML-formatted when mono=True; pass mono=False so send()
     # does not double-escape it.
+    if mid is not None:
+        delete_message(chat_id, mid)
     new_mid = send(chat_id, text, keyboard if keyboard else None, mono=False)
     if new_mid is not None:
         CONSOLE[chat_id] = new_mid
@@ -356,11 +359,9 @@ def edit_ios_async(cb, chat_id):
 
     def go():
         try:
-            res = op_ios_send(chat_id)
+            res = op_ios_send_inline(cb)
             if res:
                 edit(cb, res, back_kb("menu:main"))
-            else:
-                edit(cb, "📱 iOS 描述文件二维码已发送 ↓\n\n选择一个操作：", main_menu())
         finally:
             BUSY.discard(key)
 
@@ -417,6 +418,52 @@ def send_photo(chat_id, path, caption=""):
         # log we'd have zero forensic trail for "why did the QR disappear?".
         print("[warn] send_photo failed: %s" % e, file=sys.stderr)
         return False
+
+
+def edit_message_media(cb, photo_path, caption="", keyboard=None):
+    """Replace the callback message content with a photo in-place using
+    editMessageMedia (multipart upload). Keeps the QR inside the same bubble
+    instead of sending a separate photo message."""
+    msg = cb.get("message", {})
+    chat_id = msg.get("chat", {}).get("id")
+    mid = msg.get("message_id")
+    if chat_id is None or mid is None:
+        return False
+    try:
+        with open(photo_path, "rb") as f:
+            photo_data = f.read()
+    except OSError:
+        return False
+    boundary = "----pgwEditMedia9c4e7d"
+
+    def _field(name, val):
+        return ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
+                % (boundary, name, val)).encode("utf-8")
+
+    media_obj = {"type": "photo", "media": "attach://photo"}
+    if caption:
+        media_obj["caption"] = caption
+        media_obj["parse_mode"] = "HTML"
+    body = _field("chat_id", str(chat_id))
+    body += _field("message_id", str(mid))
+    body += _field("media", json.dumps(media_obj))
+    if keyboard is not None:
+        body += _field("reply_markup", json.dumps({"inline_keyboard": keyboard}))
+    body += ("--%s\r\nContent-Disposition: form-data; name=\"photo\"; "
+             "filename=\"qr.png\"\r\nContent-Type: image/png\r\n\r\n" % boundary).encode("utf-8")
+    body += photo_data + b"\r\n" + ("--%s--\r\n" % boundary).encode("utf-8")
+    req = urllib.request.Request(
+        API + "editMessageMedia", data=body,
+        headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            r = json.loads(resp.read().decode("utf-8"))
+            if r.get("ok"):
+                CONSOLE[chat_id] = mid
+                return True
+    except Exception as e:
+        print("[warn] editMessageMedia failed: %s" % e, file=sys.stderr)
+    return False
 
 
 def pre(text):
@@ -1432,6 +1479,32 @@ def op_ios_send(chat_id):
         except OSError:
             pass
     # fallback: just the URL (text)
+    return cap
+
+
+def op_ios_send_inline(cb):
+    """Edit the callback message in-place to show the iOS QR code.
+    Returns an error string on failure, or None on success."""
+    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    if domain:
+        url = "http://%s:8111/ios-dot.mobileconfig" % domain
+    else:
+        url = _read_file(os.path.join(WWW_DIR, "ios-profile-url.txt"))
+    if not url:
+        return "未找到 iOS 描述文件地址,先在服务器上 `--ios` 生成。"
+    cap = ("📱 <b>iOS DoT 描述文件</b>\n扫码安装(仅蜂窝网启用):\n<code>%s</code>" % html.escape(url))
+    fd, png = tempfile.mkstemp(prefix="pgw-ios-qr-", suffix=".png")
+    os.close(fd)
+    try:
+        ok, _ = run2(["qrencode", "-o", png, "-s", "8", "-m", "2", url], timeout=15)
+        if ok and edit_message_media(cb, png, cap, back_kb("menu:main")):
+            return None  # success: edited in-place
+    finally:
+        try:
+            os.unlink(png)
+        except OSError:
+            pass
+    # fallback: just the URL as text
     return cap
 
 
