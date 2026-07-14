@@ -279,27 +279,32 @@ firewall_preserve_hints() {
     info "Make sure these inbound ports are open (SSH detected on: ${ssh_ports}):"
     info "  TCP ${ssh_ports} (SSH), 53 (DNS), 853 (DoT), 8111 (iOS profile)"
     info "  UDP 53 (DNS)"
-    info "  From 172.22.0.0/16 only: TCP 80/443 and UDP 443 (reverse proxy)"
+    info "  From 172.22.0.0/16 and 10.100.0.0/16 only: TCP 80/443 and UDP 443 (reverse proxy)"
     info "  TCP 80 must be reachable while Let's Encrypt issues/renews the cert."
 }
 firewall_auto_allow() {
-    local ssh_ports="$1" p
+    local ssh_ports="$1" p net
     local tcp_list="${ssh_ports},53,853,8111"
+    local client_nets="172.22.0.0/16 10.100.0.0/16"
     if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
         info "FIREWALL_MODE=auto: adding allow rules to the active UFW profile..."
         for p in ${tcp_list//,/ }; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
         ufw allow 53/udp >/dev/null 2>&1 || true
-        ufw allow from 172.22.0.0/16 to any port 80,443 proto tcp >/dev/null 2>&1 || true
-        ufw allow from 172.22.0.0/16 to any port 443 proto udp >/dev/null 2>&1 || true
+        for net in ${client_nets}; do
+            ufw allow from "${net}" to any port 80,443 proto tcp >/dev/null 2>&1 || true
+            ufw allow from "${net}" to any port 443 proto udp >/dev/null 2>&1 || true
+        done
         return 0
     fi
     if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
         info "FIREWALL_MODE=auto: adding ports to the running firewalld zone..."
         for p in ${tcp_list//,/ }; do firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true; done
         firewall-cmd --permanent --add-port=53/udp >/dev/null 2>&1 || true
-        firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="172.22.0.0/16" port port="80" protocol="tcp" accept' >/dev/null 2>&1 || true
-        firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="172.22.0.0/16" port port="443" protocol="tcp" accept' >/dev/null 2>&1 || true
-        firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="172.22.0.0/16" port port="443" protocol="udp" accept' >/dev/null 2>&1 || true
+        for net in ${client_nets}; do
+            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="80" protocol="tcp" accept' >/dev/null 2>&1 || true
+            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="443" protocol="tcp" accept' >/dev/null 2>&1 || true
+            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="443" protocol="udp" accept' >/dev/null 2>&1 || true
+        done
         firewall-cmd --reload >/dev/null 2>&1 || true
         return 0
     fi
@@ -312,10 +317,12 @@ firewall_auto_allow() {
         done
         printf '%s' "$have" | grep -qE 'udp dport 53 .*accept' || \
             nft insert rule inet filter input udp dport 53 accept 2>/dev/null || true
-        printf '%s' "$have" | grep -q '172.22.0.0/16 tcp' || \
-            nft insert rule inet filter input ip saddr 172.22.0.0/16 tcp dport '{ 80, 443 }' accept 2>/dev/null || true
-        printf '%s' "$have" | grep -q '172.22.0.0/16 udp' || \
-            nft insert rule inet filter input ip saddr 172.22.0.0/16 udp dport 443 accept 2>/dev/null || true
+        for net in ${client_nets}; do
+            printf '%s' "$have" | grep -q "${net} tcp" || \
+                nft insert rule inet filter input ip saddr "${net}" tcp dport '{ 80, 443 }' accept 2>/dev/null || true
+            printf '%s' "$have" | grep -q "${net} udp" || \
+                nft insert rule inet filter input ip saddr "${net}" udp dport 443 accept 2>/dev/null || true
+        done
         return 0
     fi
     if command -v iptables >/dev/null 2>&1; then
@@ -326,10 +333,12 @@ firewall_auto_allow() {
         done
         iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || \
             iptables -I INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true
-        iptables -C INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
-        iptables -C INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT 2>/dev/null || true
+        for net in ${client_nets}; do
+            iptables -C INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
+            iptables -C INPUT -s "${net}" -p udp --dport 443 -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -s "${net}" -p udp --dport 443 -j ACCEPT 2>/dev/null || true
+        done
         return 0
     fi
     warn "FIREWALL_MODE=auto: no known firewall found; nothing to change."
@@ -358,6 +367,8 @@ table inet filter {
         udp dport 53 accept
         ip saddr 172.22.0.0/16 tcp dport { 80, 443 } accept
         ip saddr 172.22.0.0/16 udp dport 443 accept
+        ip saddr 10.100.0.0/16 tcp dport { 80, 443 } accept
+        ip saddr 10.100.0.0/16 udp dport 443 accept
         # ICMP for basic network health
         ip protocol icmp accept
         ip6 nexthdr icmpv6 accept
@@ -393,6 +404,8 @@ EOF
         iptables -A INPUT -p udp --dport 53 -j ACCEPT
         iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT
         iptables -A INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT
+        iptables -A INPUT -s 10.100.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT
+        iptables -A INPUT -s 10.100.0.0/16 -p udp --dport 443 -j ACCEPT
         iptables -A INPUT -p icmp -j ACCEPT
         iptables -P FORWARD ACCEPT
         iptables -P OUTPUT ACCEPT
@@ -416,7 +429,7 @@ setup_firewall() {
         auto)     firewall_auto_allow "$ssh_ports" ;;
         managed)  firewall_managed_apply "$tcp_ports" "$tcp_ports_ipt" || true ;;
     esac
-    ok "Firewall configured (reverse proxy whitelist: 172.22.0.0/16)"
+    ok "Firewall configured (reverse proxy whitelist: 172.22.0.0/16, 10.100.0.0/16)"
 }
 open_cert_http_port() {
     info "Temporarily opening TCP/80 for Let's Encrypt HTTP-01..."

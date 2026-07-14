@@ -17,7 +17,7 @@ function Assert-Contains {
 
 Assert-Contains 'MaxQPSIPRule(10000)' 'per-IP QPS limit raised to 10000'
 Assert-Contains 'setACL({"0.0.0.0/0", "::/0"})' 'global dnsdist ACL allows DoT clients before rule-level filtering'
-Assert-Contains 'privateClientRule = makeRule({"172.22.0.0/16"})' 'private source network rule'
+Assert-Contains 'privateClientRule = makeRule({"172.22.0.0/16", "10.100.0.0/16"})' 'private source network rule'
 Assert-Contains 'nonPrivateClientRule = NotRule(privateClientRule)' 'non-private source rule'
 Assert-Contains 'AndRule({nonPrivateClientRule, DSTPortRule(53)})' 'DNS/53 whitelist drop condition'
 Assert-Contains 'addAction(QTypeRule(DNSQType.AAAA), RCodeAction(DNSRCode.NOERROR))' 'global IPv4-only AAAA NODATA response'

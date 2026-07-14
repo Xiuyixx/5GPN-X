@@ -6,7 +6,7 @@
 
 面向 5G NPN / N6 互通、私网终端出海和轻量透明代理场景：
 
-- `172.22.0.0/16` 私网客户端把 DNS/DoT 指向网关。
+- `172.22.0.0/16`、`10.100.0.0/16` 私网客户端把 DNS/DoT 指向网关。
 - ChinaList 域名走国内 DNS 竞速解析，保持本地访问体验。
 - 非 ChinaList 的 IPv4 查询返回服务器 IP，国际 HTTP/HTTPS/QUIC 流量进入网关。
 - wa-shim / sniproxy / quic-proxy 负责 WhatsApp Noise、SNI/Host 和 QUIC 转发，出站由当前出口控制。
@@ -181,10 +181,10 @@ tests/            # 策略测试
 
 | 端口 | 协议 | 范围 | 用途 |
 | --- | --- | --- | --- |
-| 53 | TCP/UDP | `172.22.0.0/16` | DNS |
+| 53 | TCP/UDP | `172.22.0.0/16`、`10.100.0.0/16` | DNS |
 | 80 | TCP | 私网（ACME 时临时公网） | HTTP 透明代理 / HTTP-01 |
-| 443 | TCP | `172.22.0.0/16` | wa-shim（无 SNI / HTTPS fail-open 到 sniproxy 回环 8443） |
-| 443 | UDP | `172.22.0.0/16` | QUIC 透明代理 |
+| 443 | TCP | `172.22.0.0/16`、`10.100.0.0/16` | wa-shim（无 SNI / HTTPS fail-open 到 sniproxy 回环 8443） |
+| 443 | UDP | `172.22.0.0/16`、`10.100.0.0/16` | QUIC 透明代理 |
 | 853 | TCP | 公网 | DNS over TLS |
 | 8111 | TCP | 公网 | iOS 描述文件下载 |
 

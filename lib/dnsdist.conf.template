@@ -35,7 +35,7 @@ __REMOTE_DNS_SERVERS__
 -- NPN client network. DNS/53 is restricted to this network; DoT/853 remains
 -- reachable but only NPN clients receive proxy-spoof answers for GFWList names.
 setACL({"0.0.0.0/0", "::/0"})
-privateClientRule = makeRule({"172.22.0.0/16"})
+privateClientRule = makeRule({"172.22.0.0/16", "10.100.0.0/16"})
 nonPrivateClientRule = NotRule(privateClientRule)
 
 -- Drop non-NPN clients on classic DNS/53.
