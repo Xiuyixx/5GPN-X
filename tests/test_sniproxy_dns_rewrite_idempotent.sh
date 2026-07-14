@@ -33,6 +33,8 @@ EOF
 chmod +x "${tmp}/update-dnsdist-rules.sh"
 
 script="${tmp}/install-wrapper.sh"
+# install.sh sources lib/host-setup.sh relative to its own directory.
+ln -s "${root}/lib" "${tmp}/lib"
 sed \
   -e "s#/etc/sniproxy.conf#${tmp}/sniproxy.conf#g" \
   -e "s#/etc/dnsdist#${tmp}/etc/dnsdist#g" \

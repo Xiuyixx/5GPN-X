@@ -199,9 +199,30 @@ LOWMEM=1                        # 强制低内存模式（≤1GB 自动启用）
 MIHOMO_VERSION="1.19.28"        # 可覆盖锁定版，建议保持默认
 TG_BOT_TOKEN="123456:ABC"
 TG_ADMIN_IDS="11111111,22222222"
+FIREWALL_MODE=preserve          # preserve(默认)/auto/managed，见下方说明
+PGW_TUNING=essential            # essential(默认)/performance 内核调优档位
 ```
 
 旧兼容变量 `DNS_UPSTREAMS`、`OVERSEAS_DNS`、`PRIVATE_OVERSEAS_DNS`、`SNIPROXY_DNS` 等同于 `REMOTE_DNS`。
+
+### 防火墙与内核调优
+
+安装脚本默认**不接管**主机防火墙（`FIREWALL_MODE=preserve`）：只维护项目自己的
+出口打标规则（`pgw_exit` 表），并提示需要放行的端口，不会覆盖 `/etc/nftables.conf`、
+不会 `flush ruleset`、不会修改 INPUT 默认策略。
+
+- `FIREWALL_MODE=auto`：在现有防火墙（UFW / firewalld / nftables / iptables）里
+  **增量**放行所需端口，不清空任何已有规则。
+- `FIREWALL_MODE=managed`：由项目完整接管 INPUT 防火墙（旧版行为）。应用前会
+  自动识别并放行**所有检测到的 SSH 端口**（当前会话端口、`sshd -T` 配置、实际
+  监听端口的并集，检测失败才回落 22），校验新规则并备份原有
+  `/etc/nftables.conf` 到 `/etc/nftables.conf.pgw-backup`。
+- 从旧版本升级：如果检测到防火墙此前已由本项目接管，会自动保持 `managed`，
+  避免留下残缺的 DROP 规则集。
+
+内核参数同理分档：默认 `PGW_TUNING=essential` 只设置网关必需项（转发、
+`rp_filter`、可用时启用 BBR）；`PGW_TUNING=performance` 使用旧版激进吞吐调优
+（大连接表、短超时等）。旧版本升级时沿用 performance，不会悄悄改变内核行为。
 
 ## 常见问题
 

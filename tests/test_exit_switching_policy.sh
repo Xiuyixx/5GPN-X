@@ -5,7 +5,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
 sniproxy_conf="${root}/lib/sniproxy.conf"
-install_body="$(cat "${install}")"
+# Firewall/tuning helpers moved to lib/host-setup.sh (sourced by install.sh).
+install_body="$(cat "${install}" "${root}/lib/host-setup.sh")"
 
 fail() { echo "$1" >&2; exit 1; }
 

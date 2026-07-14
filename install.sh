@@ -33,7 +33,7 @@ bootstrap_from_repo_if_needed() {
         lib/renew-hook.sh lib/sniproxy.conf lib/quic-proxy.go lib/china-dns-race-proxy.go
         lib/dnsdist.conf.template lib/update-rules.sh lib/ios-http.py lib/tgbot.py
         lib/wa-shim.py lib/rules-import.py lib/mihomo-exit-config.py
-        lib/mihomo-router-config.py lib/rules-default.conf
+        lib/mihomo-router-config.py lib/rules-default.conf lib/host-setup.sh
     )
     local missing=0 f tmpdir
     for f in "${required[@]}"; do
@@ -395,6 +395,17 @@ Environment variables (for non-interactive use):
   TG_BOT_TOKEN   Telegram bot token; enables the control bot when set
   TG_ADMIN_IDS   Comma-separated Telegram numeric IDs allowed to operate the bot
   MIHOMO_VERSION Override the locked mihomo version (default: ${MIHOMO_VERSION_DEFAULT})
+  FIREWALL_MODE  preserve (default) | auto | managed.
+                 preserve keeps the existing host firewall untouched and only
+                 manages the project's own egress-marking rules; auto adds the
+                 needed allow rules to UFW/firewalld/nft/iptables without
+                 flushing anything; managed fully owns the INPUT firewall
+                 (always allowing every detected SSH port). Hosts upgraded from
+                 older releases that already managed the firewall stay managed.
+  PGW_TUNING     essential (default) | performance. essential applies only the
+                 sysctls the gateway needs (ip_forward, rp_filter, BBR when
+                 available); performance applies the legacy aggressive tuning.
+                 Hosts upgraded from older releases keep the performance profile.
 EOF
 }
 check_root() {
@@ -1256,225 +1267,15 @@ EOF
     fi
     ok "iOS profile ready: $profile_url"
 }
-system_tuning() {
-    info "Applying kernel and system tuning..."
-    modprobe nf_conntrack >/dev/null 2>&1 || true
-    mkdir -p /etc/modules-load.d
-    echo nf_conntrack > /etc/modules-load.d/proxy-gateway-net.conf
-    local sy_file_max sy_nr_open sy_netdev sy_somaxconn sy_conntrack_max
-    local sy_tcp_syn sy_tcp_orphans sy_buf_max sy_swappiness
-    if [[ "${LOWMEM:-0}" == "1" ]]; then
-        sy_file_max=1048576;  sy_nr_open=1048576; sy_netdev=16384
-        sy_somaxconn=4096;    sy_conntrack_max=131072
-        sy_tcp_syn=8192;      sy_tcp_orphans=8192
-        sy_buf_max=16777216;  sy_swappiness=60
-    else
-        sy_file_max=10240000; sy_nr_open=2097152;  sy_netdev=65536
-        sy_somaxconn=10240000; sy_conntrack_max=10240000
-        sy_tcp_syn=65536;     sy_tcp_orphans=10240
-        sy_buf_max=134217728; sy_swappiness=0
-    fi
-    cat > /etc/sysctl.d/99-proxy-gateway.conf <<EOF
-# Proxy Gateway Optimizations (profile: $([[ "${LOWMEM:-0}" == "1" ]] && echo low-memory || echo standard))
-fs.file-max=${sy_file_max}
-fs.nr_open=${sy_nr_open}
-net.core.default_qdisc=fq
-net.core.netdev_max_backlog=${sy_netdev}
-net.core.somaxconn=${sy_somaxconn}
-net.ipv4.conf.all.rp_filter=2
-net.ipv4.conf.default.rp_filter=2
-net.ipv4.ip_default_ttl=128
-net.ipv4.ip_forward=1
-net.ipv4.ip_local_port_range=10240 65535
-net.ipv4.tcp_congestion_control=bbr
-net.ipv4.tcp_dsack=1
-net.ipv4.tcp_ecn=1
-net.ipv4.tcp_fastopen=1027
-net.ipv4.tcp_fastopen_blackhole_timeout_sec=0
-net.ipv4.tcp_fin_timeout=2
-net.ipv4.tcp_keepalive_intvl=5
-net.ipv4.tcp_keepalive_probes=2
-net.ipv4.tcp_keepalive_time=120
-net.ipv4.tcp_max_orphans=${sy_tcp_orphans}
-net.ipv4.tcp_max_syn_backlog=${sy_tcp_syn}
-net.ipv4.tcp_mtu_probing=1
-net.ipv4.tcp_no_metrics_save=1
-net.ipv4.tcp_retries1=2
-net.ipv4.tcp_retries2=2
-net.ipv4.tcp_rfc1337=1
-net.ipv4.tcp_rmem=8192 65536 ${sy_buf_max}
-net.ipv4.tcp_moderate_rcvbuf=1
-net.ipv4.tcp_sack=1
-net.ipv4.tcp_syn_retries=2
-net.ipv4.tcp_synack_retries=2
-net.ipv4.tcp_syncookies=1
-net.ipv4.tcp_timestamps=1
-net.ipv4.tcp_tw_reuse=1
-net.ipv4.tcp_window_scaling=1
-net.ipv4.tcp_wmem=8192 131072 ${sy_buf_max}
-net.netfilter.nf_conntrack_generic_timeout=10
-net.netfilter.nf_conntrack_icmp_timeout=2
-net.netfilter.nf_conntrack_max=${sy_conntrack_max}
-net.netfilter.nf_conntrack_tcp_max_retrans=2
-net.netfilter.nf_conntrack_tcp_timeout_close=2
-net.netfilter.nf_conntrack_tcp_timeout_close_wait=2
-net.netfilter.nf_conntrack_tcp_timeout_established=30
-net.netfilter.nf_conntrack_tcp_timeout_fin_wait=2
-net.netfilter.nf_conntrack_tcp_timeout_last_ack=2
-net.netfilter.nf_conntrack_tcp_timeout_max_retrans=2
-net.netfilter.nf_conntrack_tcp_timeout_syn_recv=2
-net.netfilter.nf_conntrack_tcp_timeout_syn_sent=2
-net.netfilter.nf_conntrack_tcp_timeout_time_wait=2
-net.netfilter.nf_conntrack_tcp_timeout_unacknowledged=2
-net.netfilter.nf_conntrack_udp_timeout=2
-net.netfilter.nf_conntrack_udp_timeout_stream=30
-vm.swappiness=${sy_swappiness}
-EOF
-    local mem_pages
-    mem_pages=$(awk '/MemTotal/ { printf "%d", ($2 * 1024) / 4096 }' /proc/meminfo 2>/dev/null || echo "")
-    if [[ -n "$mem_pages" && "$mem_pages" -gt 0 ]]; then
-        {
-            echo "net.ipv4.tcp_mem=$((mem_pages * 12 / 100)) $((mem_pages * 50 / 100)) $((mem_pages * 70 / 100))"
-        } >> /etc/sysctl.d/99-proxy-gateway.conf
-    fi
-    if grep -qE '^[[:space:]]*vm\.swappiness[[:space:]]*=' /etc/sysctl.conf 2>/dev/null; then
-        sed -i -E 's/^([[:space:]]*vm\.swappiness[[:space:]]*=)/# disabled by proxy-gateway (see 99-proxy-gateway.conf): \1/' /etc/sysctl.conf
-    fi
-    sysctl --system >/dev/null
-    if ! grep -q "proxy-gateway-limits" /etc/security/limits.conf 2>/dev/null; then
-        cat >> /etc/security/limits.conf <<'EOF'
-# proxy-gateway-limits
-* soft nofile 1048576
-* hard nofile 1048576
-root soft nofile 1048576
-root hard nofile 1048576
-EOF
-    fi
-    mkdir -p /etc/systemd/system
-    cat > /etc/systemd/system/disable-transparent-huge-pages.service <<'EOF'
-[Unit]
-Description=Disable Transparent Huge Pages (THP)
-DefaultDependencies=no
-After=sysinit.target local-fs.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/sh -c 'test -w /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/enabled || true'
-ExecStart=/bin/sh -c 'test -w /sys/kernel/mm/transparent_hugepage/defrag && echo never > /sys/kernel/mm/transparent_hugepage/defrag || true'
-
-[Install]
-WantedBy=basic.target
-EOF
-    mkdir -p /etc/systemd/journald.conf.d
-    cat > /etc/systemd/journald.conf.d/99-proxy-gateway.conf <<'EOF'
-[Journal]
-SystemMaxUse=384M
-SystemMaxFileSize=128M
-ForwardToSyslog=no
-EOF
-    systemctl daemon-reload
-    systemctl enable --now disable-transparent-huge-pages.service 2>/dev/null || true
-    systemctl restart systemd-journald 2>/dev/null || true
-    ok "System tuning applied"
-}
-setup_firewall() {
-    info "Configuring firewall..."
-    ensure_proxy_user
-    local tcp_ports="22, 53, 853, 8111" tcp_ports_ipt="22,53,853,8111"
-    if command -v nft >/dev/null 2>&1; then
-        cat > /etc/nftables.conf <<'EOF'
-#!/usr/sbin/nft -f
-flush ruleset
-
-table inet filter {
-    chain input {
-        type filter hook input priority 0; policy drop;
-        iif "lo" accept
-        ct state established,related accept
-        tcp dport { __TCP_PORTS__ } accept
-        udp dport 53 accept
-        ip saddr 172.22.0.0/16 tcp dport { 80, 443 } accept
-        ip saddr 172.22.0.0/16 udp dport 443 accept
-        # ICMP for basic network health
-        ip protocol icmp accept
-        ip6 nexthdr icmpv6 accept
-    }
-    chain forward {
-        type filter hook forward priority 0; policy accept;
-    }
-    chain output {
-        type filter hook output priority 0; policy accept;
-    }
-}
-
-# Switchable egress: mark proxy ("pxout") outbound so policy routing can send it
-# into a WireGuard tunnel; clamp MSS on tunnel interfaces. Kept in the main
-# ruleset so it survives the "flush ruleset" above on every firewall reload.
-# Traffic to the client network and any private/loopback range is NOT marked,
-# so proxy replies to 172.22.0.0/16 still take the normal route (not the tunnel).
-table inet pgw_exit {
-    chain mark_out {
-        type route hook output priority -150; policy accept;
-        ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } return
-        meta l4proto { tcp, udp } th dport 53 return
-        meta skuid "pxout" meta mark set 0x1
-    }
-    chain clamp {
-        type filter hook postrouting priority mangle; policy accept;
-        oifname "pgw-*" tcp flags syn tcp option maxseg size set rt mtu
-    }
-}
-EOF
-        sed -i "s/__TCP_PORTS__/${tcp_ports}/" /etc/nftables.conf
-        chmod +x /etc/nftables.conf
-        nft -f /etc/nftables.conf 2>/dev/null || true
-        systemctl enable nftables 2>/dev/null || true
-    else
-        iptables -F INPUT
-        iptables -P INPUT DROP
-        iptables -A INPUT -i lo -j ACCEPT
-        iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        iptables -A INPUT -p tcp -m multiport --dports ${tcp_ports_ipt} -j ACCEPT
-        iptables -A INPUT -p udp --dport 53 -j ACCEPT
-        iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT
-        iptables -A INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT
-        iptables -A INPUT -p icmp -j ACCEPT
-        iptables -P FORWARD ACCEPT
-        iptables -P OUTPUT ACCEPT
-        if id -u "${EXIT_USER}" >/dev/null 2>&1; then
-            local pn
-            while iptables -t mangle -D OUTPUT -m owner --uid-owner "${EXIT_USER}" -j MARK --set-mark "${EXIT_MARK}" 2>/dev/null; do :; done
-            for pn in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10; do
-                while iptables -t mangle -D OUTPUT -m owner --uid-owner "${EXIT_USER}" -d "$pn" -j RETURN 2>/dev/null; do :; done
-                iptables -t mangle -A OUTPUT -m owner --uid-owner "${EXIT_USER}" -d "$pn" -j RETURN 2>/dev/null || true
-            done
-            local pp
-            for pp in udp tcp; do
-                while iptables -t mangle -D OUTPUT -m owner --uid-owner "${EXIT_USER}" -p "$pp" --dport 53 -j RETURN 2>/dev/null; do :; done
-                iptables -t mangle -A OUTPUT -m owner --uid-owner "${EXIT_USER}" -p "$pp" --dport 53 -j RETURN 2>/dev/null || true
-            done
-            iptables -t mangle -A OUTPUT -m owner --uid-owner "${EXIT_USER}" -j MARK --set-mark "${EXIT_MARK}" 2>/dev/null || true
-            iptables -t mangle -C POSTROUTING -o "pgw+" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-                iptables -t mangle -A POSTROUTING -o "pgw+" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-        fi
-        if command -v iptables-save >/dev/null 2>&1; then
-            iptables-save > /etc/iptables.rules 2>/dev/null || true
-        fi
-    fi
-    ok "Firewall configured (reverse proxy whitelist: 172.22.0.0/16)"
-}
-open_cert_http_port() {
-    info "Temporarily opening TCP/80 for Let's Encrypt HTTP-01..."
-    if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
-        nft insert rule inet filter input tcp dport 80 accept 2>/dev/null || true
-    elif command -v iptables >/dev/null 2>&1; then
-        iptables -I INPUT 1 -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null || true
-    fi
-}
-restore_reverse_proxy_firewall() {
-    info "Restoring reverse proxy firewall whitelist..."
-    setup_firewall >/dev/null 2>&1 || true
-}
+# Host firewall & kernel tuning helpers live in lib/host-setup.sh to keep this
+# script below the 128 KiB single-argument limit of `bash -c "$(curl ...)"`.
+if [[ -f "${LIB_DIR}/host-setup.sh" ]]; then
+    # shellcheck source=lib/host-setup.sh
+    . "${LIB_DIR}/host-setup.sh"
+else
+    err "lib/host-setup.sh not found next to this script; run from a full git clone or the documented installer."
+    exit 1
+fi
 prepare_certbot_standalone() {
     CERT_STOPPED_SNIPROXY=0
     CERT_STOPPED_WA_SHIM=0
@@ -1510,7 +1311,7 @@ set -e
 systemctl stop sniproxy 2>/dev/null || true
 systemctl stop wa-shim 2>/dev/null || true
 if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
-    nft insert rule inet filter input tcp dport 80 accept 2>/dev/null || true
+    nft insert rule inet filter input tcp dport 80 accept comment '"proxy-gateway-cert-http"' 2>/dev/null || true
 elif command -v iptables >/dev/null 2>&1; then
     iptables -I INPUT 1 -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null || true
 fi
@@ -1518,9 +1319,14 @@ EOF
     cat > /usr/local/bin/proxy-gateway-restore-firewall.sh <<'EOF'
 #!/bin/bash
 set -e
-if command -v nft >/dev/null 2>&1 && [[ -f /etc/nftables.conf ]]; then
-    nft -f /etc/nftables.conf 2>/dev/null || true
-elif command -v iptables >/dev/null 2>&1; then
+# Delete only the tagged temporary rule. Reloading /etc/nftables.conf here
+# would be wrong when the firewall is user-managed (FIREWALL_MODE=preserve).
+if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
+    while h="$(nft --handle list chain inet filter input 2>/dev/null | awk '/proxy-gateway-cert-http/ { print $NF; exit }')" && [ -n "$h" ]; do
+        nft delete rule inet filter input handle "$h" 2>/dev/null || break
+    done
+fi
+if command -v iptables >/dev/null 2>&1; then
     while iptables -D INPUT -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null; do :; done
 fi
 systemctl start sniproxy 2>/dev/null || true
@@ -1788,6 +1594,12 @@ EXITS_DIR="${EXITS_DIR}"
 WG_DIR="${WG_DIR}"
 EOF
     cat >> /usr/local/bin/proxy-gateway-apply-exit.sh <<'EOF'
+
+# Ensure the egress-marking nftables table exists; it may have been wiped by a
+# host firewall reload (flush ruleset) since the last apply.
+if command -v nft >/dev/null 2>&1 && [[ -f /etc/proxy-gateway/pgw-exit.nft ]]; then
+    nft -f /etc/proxy-gateway/pgw-exit.nft 2>/dev/null || true
+fi
 
 # Marked traffic consults the dedicated table; an empty table falls through to
 # the main table, i.e. direct egress ("local").
@@ -2703,6 +2515,10 @@ do_uninstall() {
     rm -f /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
     rm -f /etc/sysctl.d/99-proxy-gateway.conf
     rm -f /etc/profile.d/go.sh
+    nft delete table inet pgw_exit 2>/dev/null || true
+    if [[ -f /etc/nftables.conf.pgw-backup ]]; then
+        warn "Pre-install firewall backup kept at /etc/nftables.conf.pgw-backup (restore manually if wanted)."
+    fi
     userdel "${EXIT_USER}" 2>/dev/null || true
     warn "SSL certificates in /etc/letsencrypt/live/ are kept. Remove manually if needed."
     if [[ -e /swapfile ]]; then
