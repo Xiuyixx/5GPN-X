@@ -2511,11 +2511,15 @@ do_uninstall() {
     rm -f /usr/local/sbin/sniproxy
     rm -f /usr/local/bin/proxy-gateway-apply-exit.sh
     rm -f "${WG_DIR}"/pgw-*.conf
+    # Repair the host firewall BEFORE removing /etc/proxy-gateway, otherwise a
+    # managed /etc/nftables.conf would keep a dangling include and fail to load
+    # on reboot (leaving the host with no firewall). Also clears auto-mode
+    # persistence and the managed marker.
+    firewall_cleanup_on_uninstall
     rm -rf /etc/proxy-gateway
     rm -f /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
     rm -f /etc/sysctl.d/99-proxy-gateway.conf
     rm -f /etc/profile.d/go.sh
-    nft delete table inet pgw_exit 2>/dev/null || true
     if [[ -f /etc/nftables.conf.pgw-backup ]]; then
         warn "Pre-install firewall backup kept at /etc/nftables.conf.pgw-backup (restore manually if wanted)."
     fi

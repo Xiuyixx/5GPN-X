@@ -59,28 +59,39 @@ got="$(PATH="${tmp}/bin:${PATH}" SSH_CONNECTION="" detect_ssh_ports)"
 [[ "$got" == "22" ]] || fail "detect_ssh_ports fallback must be 22: got '${got}'"
 
 # --- resolve_firewall_mode ----------------------------------------------------
-got="$(PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
+mark_absent="${tmp}/no-marker"
+got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
 [[ "$got" == "preserve" ]] || fail "default firewall mode must be preserve: got '${got}'"
 
-got="$(PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE=managed resolve_firewall_mode)"
+got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE=managed resolve_firewall_mode)"
 [[ "$got" == "managed" ]] || fail "explicit FIREWALL_MODE must win: got '${got}'"
 
-got="$(PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE=bogus resolve_firewall_mode)"
+got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE=bogus resolve_firewall_mode)"
 [[ "$got" == "preserve" ]] || fail "unknown FIREWALL_MODE must fall back to preserve: got '${got}'"
+
+# our own marker file is the authoritative managed signal, regardless of ruleset shape
+printf '' > "${tmp}/marker"
+got="$(PGW_FW_MARK="${tmp}/marker" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
+[[ "$got" == "managed" ]] || fail "managed marker file must force managed mode: got '${got}'"
 
 # upgrade path: a project-written nftables ruleset keeps being managed
 printf 'flush ruleset\ntable inet pgw_exit {}\n' > "${tmp}/nftables.conf"
-got="$(PGW_NFT_CONF="${tmp}/nftables.conf" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
+got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/nftables.conf" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
 [[ "$got" == "managed" ]] || fail "old managed nftables installs must stay managed: got '${got}'"
 
-# upgrade path: a project-written iptables DROP policy keeps being managed
-printf '*filter\n:INPUT DROP [0:0]\nCOMMIT\n' > "${tmp}/iptables.rules"
-got="$(PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/iptables.rules" FIREWALL_MODE='' resolve_firewall_mode)"
-[[ "$got" == "managed" ]] || fail "old managed iptables installs must stay managed: got '${got}'"
+# upgrade path: an OLD managed iptables ruleset carries our fingerprint (client net) beside the DROP policy
+printf '*filter\n:INPUT DROP [0:0]\n-A INPUT -s 172.22.0.0/16 -p tcp -j ACCEPT\nCOMMIT\n' > "${tmp}/managed.rules"
+got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/managed.rules" FIREWALL_MODE='' resolve_firewall_mode)"
+[[ "$got" == "managed" ]] || fail "old managed iptables installs (DROP + project rules) must stay managed: got '${got}'"
+
+# a bare ':INPUT DROP' (iptables-persistent default set by the user, no project rules) must NOT trigger managed
+printf '*filter\n:INPUT DROP [0:0]\n-A INPUT -p tcp --dport 22 -j ACCEPT\nCOMMIT\n' > "${tmp}/user.rules"
+got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/user.rules" FIREWALL_MODE='' resolve_firewall_mode)"
+[[ "$got" == "preserve" ]] || fail "a bare :INPUT DROP must not trigger managed: got '${got}'"
 
 # a user-owned nftables config must NOT trigger managed mode
 printf 'flush ruleset\ntable inet filter {}\n' > "${tmp}/user.conf"
-got="$(PGW_NFT_CONF="${tmp}/user.conf" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
+got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/user.conf" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
 [[ "$got" == "preserve" ]] || fail "user-owned nftables config must stay preserve: got '${got}'"
 
 # --- resolve_tuning_profile ----------------------------------------------------

@@ -212,17 +212,27 @@ resolve_firewall_mode() {
     # managed:            fully own the INPUT firewall (legacy behaviour).
     local nft_conf="${PGW_NFT_CONF:-/etc/nftables.conf}"
     local ipt_rules="${PGW_IPT_RULES:-/etc/iptables.rules}"
+    local mark_file="${PGW_FW_MARK:-/etc/proxy-gateway/.firewall-managed}"
     case "${FIREWALL_MODE:-}" in
         preserve|auto|managed) echo "${FIREWALL_MODE}"; return 0 ;;
         "") ;;
         *) warn "Unknown FIREWALL_MODE='${FIREWALL_MODE}'; using preserve"; echo preserve; return 0 ;;
     esac
-    # Upgrade path: earlier releases fully managed the firewall. Abandoning a
-    # project-written DROP ruleset would strand those hosts, so keep managing it.
+    # Authoritative signal: our own marker, dropped only after a successful
+    # managed install. When we know for sure, never guess from ruleset shape.
+    if [[ -f "$mark_file" ]]; then
+        echo managed; return 0
+    fi
+    # Legacy upgrade path (installs predating the marker file). Only claim a host
+    # as managed when the ruleset carries our own fingerprint. A bare
+    # ':INPUT DROP' is a common iptables-persistent default set by the user, so
+    # it must NOT on its own trigger managed mode (which would flush INPUT).
     if [[ -f "$nft_conf" ]] && grep -q 'pgw_exit' "$nft_conf" 2>/dev/null; then
         echo managed; return 0
     fi
-    if [[ -f "$ipt_rules" ]] && grep -qE '^:INPUT DROP' "$ipt_rules" 2>/dev/null; then
+    if [[ -f "$ipt_rules" ]] \
+        && grep -qE '^:INPUT DROP' "$ipt_rules" 2>/dev/null \
+        && grep -qE '172\.22\.0\.0/16|10\.100\.0\.0/16' "$ipt_rules" 2>/dev/null; then
         echo managed; return 0
     fi
     echo preserve
@@ -309,40 +319,94 @@ firewall_auto_allow() {
         return 0
     fi
     if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null 2>&1; then
-        info "FIREWALL_MODE=auto: inserting accept rules into inet filter input..."
-        local have; have="$(nft list chain inet filter input 2>/dev/null)"
-        for p in ${tcp_list//,/ }; do
-            printf '%s' "$have" | grep -qE "tcp dport ${p} .*accept" || \
-                nft insert rule inet filter input tcp dport "$p" accept 2>/dev/null || true
-        done
-        printf '%s' "$have" | grep -qE 'udp dport 53 .*accept' || \
-            nft insert rule inet filter input udp dport 53 accept 2>/dev/null || true
-        for net in ${client_nets}; do
-            printf '%s' "$have" | grep -q "${net} tcp" || \
-                nft insert rule inet filter input ip saddr "${net}" tcp dport '{ 80, 443 }' accept 2>/dev/null || true
-            printf '%s' "$have" | grep -q "${net} udp" || \
-                nft insert rule inet filter input ip saddr "${net}" udp dport 443 accept 2>/dev/null || true
-        done
+        info "FIREWALL_MODE=auto: inserting accept rules into inet filter input (persisted across reboots)..."
+        write_auto_allow_persistence "$ssh_ports" "$client_nets"
+        run_auto_allow_persistence
         return 0
     fi
+    # nft is installed but its 'inet filter input' chain is missing: the running
+    # firewall is iptables-based, so fall back rather than silently doing nothing.
+    if command -v nft >/dev/null 2>&1; then
+        warn "FIREWALL_MODE=auto: nft present but no 'inet filter input' chain; falling back to iptables."
+    fi
     if command -v iptables >/dev/null 2>&1; then
-        info "FIREWALL_MODE=auto: inserting iptables INPUT accept rules..."
-        for p in ${tcp_list//,/ }; do
-            iptables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null || \
-                iptables -I INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null || true
-        done
-        iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true
-        for net in ${client_nets}; do
-            iptables -C INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || \
-                iptables -I INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
-            iptables -C INPUT -s "${net}" -p udp --dport 443 -j ACCEPT 2>/dev/null || \
-                iptables -I INPUT -s "${net}" -p udp --dport 443 -j ACCEPT 2>/dev/null || true
-        done
+        info "FIREWALL_MODE=auto: inserting iptables INPUT accept rules (persisted across reboots)..."
+        write_auto_allow_persistence "$ssh_ports" "$client_nets"
+        run_auto_allow_persistence
         return 0
     fi
     warn "FIREWALL_MODE=auto: no known firewall found; nothing to change."
     firewall_preserve_hints "$ssh_ports"
+}
+PGW_AUTO_ALLOW_SCRIPT_DEFAULT="/usr/local/bin/proxy-gateway-fw-allow.sh"
+PGW_AUTO_ALLOW_UNIT_DEFAULT="/etc/systemd/system/proxy-gateway-firewall-allow.service"
+write_auto_allow_persistence() {
+    # auto mode adds rules to the *running* firewall, which is lost on reboot.
+    # Persist an idempotent replay script + a oneshot unit ordered after the
+    # host firewall services so 53/853/8111 and the client nets stay open.
+    local ssh_ports="$1" client_nets="$2"
+    local script="${PGW_AUTO_ALLOW_SCRIPT:-${PGW_AUTO_ALLOW_SCRIPT_DEFAULT}}"
+    local unit="${PGW_AUTO_ALLOW_UNIT:-${PGW_AUTO_ALLOW_UNIT_DEFAULT}}"
+    mkdir -p "$(dirname "$script")" "$(dirname "$unit")"
+    {
+        echo '#!/bin/bash'
+        echo '# 5GPN-X auto-mode firewall allow rules. Idempotent; safe to replay.'
+        echo '# Managed by the installer (FIREWALL_MODE=auto). Tag: proxy-gateway-auto'
+        printf 'tcp_list="%s,53,853,8111"\n' "$ssh_ports"
+        printf 'client_nets="%s"\n' "$client_nets"
+        cat <<'AUTO_BODY'
+if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null 2>&1; then
+    have="$(nft list chain inet filter input 2>/dev/null)"
+    for p in ${tcp_list//,/ }; do
+        printf '%s' "$have" | grep -qE "tcp dport ${p} .*accept" || \
+            nft insert rule inet filter input tcp dport "$p" accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+    done
+    printf '%s' "$have" | grep -qE 'udp dport 53 .*accept' || \
+        nft insert rule inet filter input udp dport 53 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+    for net in ${client_nets}; do
+        printf '%s' "$have" | grep -q "${net} tcp" || \
+            nft insert rule inet filter input ip saddr "${net}" tcp dport '{ 80, 443 }' accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+        printf '%s' "$have" | grep -q "${net} udp" || \
+            nft insert rule inet filter input ip saddr "${net}" udp dport 443 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+    done
+elif command -v iptables >/dev/null 2>&1; then
+    for p in ${tcp_list//,/ }; do
+        iptables -C INPUT -p tcp --dport "$p" -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -p tcp --dport "$p" -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
+    done
+    iptables -C INPUT -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
+        iptables -I INPUT -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
+    for net in ${client_nets}; do
+        iptables -C INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
+        iptables -C INPUT -s "${net}" -p udp --dport 443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p udp --dport 443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
+    done
+fi
+AUTO_BODY
+    } > "$script"
+    chmod 755 "$script"
+    cat > "$unit" <<AUTO_UNIT
+[Unit]
+Description=5GPN-X auto-mode firewall allow rules
+After=network-pre.target nftables.service netfilter-persistent.service iptables.service firewalld.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${script}
+
+[Install]
+WantedBy=multi-user.target
+AUTO_UNIT
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable proxy-gateway-firewall-allow.service >/dev/null 2>&1 || true
+}
+run_auto_allow_persistence() {
+    local script="${PGW_AUTO_ALLOW_SCRIPT:-${PGW_AUTO_ALLOW_SCRIPT_DEFAULT}}"
+    if [[ -x "$script" ]]; then
+        bash "$script" 2>/dev/null || true
+    fi
 }
 firewall_managed_apply() {
     local tcp_ports="$1" tcp_ports_ipt="$2"
@@ -396,6 +460,12 @@ EOF
         nft -f /etc/nftables.conf 2>/dev/null || true
         systemctl enable nftables 2>/dev/null || true
     else
+        # Keep the very first pre-project ruleset around for disaster recovery,
+        # mirroring the nftables branch above.
+        if [[ ! -f /etc/iptables.rules.pgw-backup ]] && command -v iptables-save >/dev/null 2>&1; then
+            iptables-save > /etc/iptables.rules.pgw-backup 2>/dev/null || true
+            info "Existing iptables ruleset backed up to /etc/iptables.rules.pgw-backup"
+        fi
         iptables -F INPUT
         iptables -P INPUT DROP
         iptables -A INPUT -i lo -j ACCEPT
@@ -413,6 +483,60 @@ EOF
             iptables-save > /etc/iptables.rules 2>/dev/null || true
         fi
     fi
+    # Record that this host is now project-managed so future runs never have to
+    # guess from ruleset shape (see resolve_firewall_mode). Reached only on a
+    # successful apply; the nft branch returns early on validation failure.
+    local mark_file="${PGW_FW_MARK:-/etc/proxy-gateway/.firewall-managed}"
+    mkdir -p "$(dirname "$mark_file")"
+    : > "$mark_file"
+}
+firewall_cleanup_on_uninstall() {
+    # Called by do_uninstall BEFORE /etc/proxy-gateway is removed. managed mode
+    # writes /etc/nftables.conf with include "/etc/proxy-gateway/pgw-exit.nft";
+    # once that directory is gone the include dangles and nftables.service fails
+    # to load on the next boot, leaving the host with NO firewall on a public
+    # IP. Restore the pre-install backup, or strip our include, validating
+    # before writing. Do the analogous check for the iptables ruleset.
+    local nft_conf="${PGW_NFT_CONF:-/etc/nftables.conf}"
+    local ipt_rules="${PGW_IPT_RULES:-/etc/iptables.rules}"
+    if [[ -f "$nft_conf" ]] && grep -qE 'pgw_exit|/etc/proxy-gateway/pgw-exit\.nft' "$nft_conf" 2>/dev/null; then
+        if [[ -f "${nft_conf}.pgw-backup" ]]; then
+            install -m 755 "${nft_conf}.pgw-backup" "$nft_conf"
+            rm -f "${nft_conf}.pgw-backup"
+            info "Restored pre-install ${nft_conf} from backup."
+        else
+            local tmp; tmp="$(mktemp)"
+            grep -vE 'include[[:space:]]+"/etc/proxy-gateway/pgw-exit\.nft"' "$nft_conf" > "$tmp"
+            if command -v nft >/dev/null 2>&1 && ! nft -c -f "$tmp" >/dev/null 2>&1; then
+                warn "Could not derive a valid ${nft_conf} after dropping the pgw-exit include; writing a minimal empty ruleset instead."
+                printf '#!/usr/sbin/nft -f\nflush ruleset\n' > "$tmp"
+            fi
+            install -m 755 "$tmp" "$nft_conf"
+            rm -f "$tmp"
+            info "Removed dangling pgw-exit include from ${nft_conf}."
+        fi
+        if command -v nft >/dev/null 2>&1; then
+            nft -f "$nft_conf" >/dev/null 2>&1 || true
+        fi
+    fi
+    if [[ -f "${ipt_rules}.pgw-backup" ]]; then
+        install -m 644 "${ipt_rules}.pgw-backup" "$ipt_rules"
+        rm -f "${ipt_rules}.pgw-backup"
+        info "Restored pre-install ${ipt_rules} from backup."
+        if command -v iptables-restore >/dev/null 2>&1; then
+            iptables-restore < "$ipt_rules" 2>/dev/null || true
+        fi
+    fi
+    # Drop the auto-mode persistence artifacts and the managed marker.
+    local auto_script="${PGW_AUTO_ALLOW_SCRIPT:-${PGW_AUTO_ALLOW_SCRIPT_DEFAULT:-/usr/local/bin/proxy-gateway-fw-allow.sh}}"
+    local auto_unit="${PGW_AUTO_ALLOW_UNIT:-${PGW_AUTO_ALLOW_UNIT_DEFAULT:-/etc/systemd/system/proxy-gateway-firewall-allow.service}}"
+    if [[ -f "$auto_unit" ]]; then
+        systemctl disable --now proxy-gateway-firewall-allow.service >/dev/null 2>&1 || true
+    fi
+    rm -f "$auto_script" "$auto_unit"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    rm -f "${PGW_FW_MARK:-/etc/proxy-gateway/.firewall-managed}"
+    nft delete table inet pgw_exit 2>/dev/null || true
 }
 setup_firewall() {
     info "Configuring firewall..."
