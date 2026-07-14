@@ -27,7 +27,7 @@ jobs:
         run: |
           for t in tests/*.sh; do
             echo "RUN $t"
-            bash "$t"
+            sudo -E bash "$t"
           done
       - name: Run python test suite
         run: |
@@ -41,15 +41,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run PowerShell policy tests
-        shell: pwsh
         run: |
-          $failed = 0
-          Get-ChildItem tests/*.ps1 | ForEach-Object {
-            Write-Host "RUN $($_.Name)"
-            & $_.FullName
-            if ($LASTEXITCODE -ne 0) { $failed = 1 }
-          }
-          exit $failed
+          for t in tests/*.ps1; do
+            echo "RUN $t"
+            pwsh -NoProfile -File "$t"
+          done
 
   go-tests:
     runs-on: ubuntu-latest
