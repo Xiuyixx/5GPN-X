@@ -1773,6 +1773,9 @@ exit_wait_device() {
     done
     return 1
 }
+apply_current_exit() {
+    /usr/local/bin/proxy-gateway-apply-exit.sh
+}
 install_apply_exit_helper() {
     cat > /usr/local/bin/proxy-gateway-apply-exit.sh <<EOF
 #!/bin/bash
@@ -2218,19 +2221,60 @@ regen_smart() {
         "${MIHOMO_BIN}" -d "${CONF_DIR}/mihomo/smart" -t -f "${yaml}.tmp" 2>&1 | sed 's/^/    /' >&2
         rm -f "${yaml}.tmp"; exit 1
     fi
-    install -m 600 "${yaml}.tmp" "${yaml}"; rm -f "${yaml}.tmp"
-    echo router > "$(exit_type_file smart)"
-    local n; n="$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)"
-    ok "Smart router rebuilt (${n} rules)."
-    local cur="local"
+    local cur="local" type_file backup_dir had_yaml=0 had_type=0
     [[ -f "${CONF_DIR}/current-exit" ]] && cur="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
+    type_file="$(exit_type_file smart)"
+    backup_dir="$(mktemp -d)"
+    if [[ -f "$yaml" ]]; then
+        cp -a "$yaml" "${backup_dir}/smart.yaml"
+        had_yaml=1
+    fi
+    if [[ -f "$type_file" ]]; then
+        cp -a "$type_file" "${backup_dir}/smart.type"
+        had_type=1
+    fi
+    install -m 600 "${yaml}.tmp" "${yaml}"; rm -f "${yaml}.tmp"
+    echo router > "$type_file"
     if [[ "$cur" == "smart" ]]; then
-        systemctl restart "proxy-gateway-mihomo@smart.service" 2>/dev/null || true
-        /usr/local/bin/proxy-gateway-apply-exit.sh >/dev/null 2>&1 || true
-        ok "Reloaded the active smart router."
+        local apply_ok=1
+        systemctl restart "proxy-gateway-mihomo@smart.service" >/dev/null 2>&1 || apply_ok=0
+        [[ $apply_ok -eq 1 ]] && systemctl is-active --quiet "proxy-gateway-mihomo@smart.service" || apply_ok=0
+        [[ $apply_ok -eq 1 ]] && exit_wait_device smart || apply_ok=0
+        [[ $apply_ok -eq 1 ]] && apply_current_exit >/dev/null 2>&1 || apply_ok=0
+        if [[ $apply_ok -ne 1 ]]; then
+            systemctl stop "proxy-gateway-mihomo@smart.service" >/dev/null 2>&1 || true
+            if [[ $had_yaml -eq 1 ]]; then
+                install -m 600 "${backup_dir}/smart.yaml" "$yaml"
+            else
+                rm -f "$yaml"
+            fi
+            if [[ $had_type -eq 1 ]]; then
+                install -m 600 "${backup_dir}/smart.type" "$type_file"
+            else
+                rm -f "$type_file"
+            fi
+            local rollback_ok=1
+            if [[ $had_yaml -eq 1 ]]; then
+                systemctl restart "proxy-gateway-mihomo@smart.service" >/dev/null 2>&1 || rollback_ok=0
+                [[ $rollback_ok -eq 1 ]] && systemctl is-active --quiet "proxy-gateway-mihomo@smart.service" || rollback_ok=0
+                [[ $rollback_ok -eq 1 ]] && exit_wait_device smart || rollback_ok=0
+                [[ $rollback_ok -eq 1 ]] && apply_current_exit >/dev/null 2>&1 || rollback_ok=0
+            fi
+            rm -rf "$backup_dir"
+            if [[ $rollback_ok -eq 1 && $had_yaml -eq 1 ]]; then
+                err "New smart config failed to start; previous working config restored"
+            else
+                err "New smart config failed to start; rollback could not reactivate the previous config"
+            fi
+            return 1
+        fi
+        ok "Reloaded and verified the active smart router."
     else
         info "Activate smart routing with: $0 --set-exit smart"
     fi
+    rm -rf "$backup_dir"
+    local n; n="$(grep -cvE '^[[:space:]]*(#|;|$)' "${RULES_FILE}" 2>/dev/null || echo 0)"
+    ok "Smart router rebuilt (${n} rules)."
 }
 set_rules() {
     local src="${1:-}"
