@@ -288,6 +288,20 @@ def console_async(chat_id, text_fn, keyboard=None, mono=False, keyboard_fn=None,
     background(go)
 
 
+def reanchor_console(chat_id, text, keyboard=None, mono=False):
+    """Slash commands must always be visible: send a fresh console message at
+    the bottom of the chat and drop the old one (editing an old/cleared
+    message would look like the bot did not respond). Returns the new
+    console message_id."""
+    old = CONSOLE.pop(chat_id, None)
+    new_mid = send(chat_id, text, keyboard, mono)
+    if new_mid is not None:
+        CONSOLE[chat_id] = new_mid
+        if old is not None and old != new_mid:
+            background(delete_message, chat_id, old)
+    return new_mid
+
+
 def edit(cb, text, keyboard=None, mono=False):
     """Edit the message the button belongs to (keeps everything in one bubble).
     Falls back to a new message if the edit can't be applied."""
@@ -1616,24 +1630,23 @@ def handle_message(msg):
         return
 
     if text == "/cancel":
-        state = PENDING.pop(chat_id, None) or {}
-        upsert_console(chat_id, "已取消。选择一个操作：", main_menu(),
-                       message_id=state.get("prompt_mid"))
+        PENDING.pop(chat_id, None)
+        reanchor_console(chat_id, "已取消。选择一个操作：", main_menu())
         return
 
     # A slash command always aborts any in-progress flow.
     if text.startswith("/"):
         PENDING.pop(chat_id, None)
         if text.startswith(("/start", "/menu")):
-            upsert_console(chat_id, "<b>proxy-gateway 控制台</b>\n选择一个操作：", main_menu())
+            reanchor_console(chat_id, "<b>proxy-gateway 控制台</b>\n选择一个操作：", main_menu())
         elif text.startswith("/status"):
-            upsert_console(chat_id, "⏳ 正在获取运行状态…")
-            console_async(chat_id, op_status, keyboard_fn=status_kb)
+            mid = reanchor_console(chat_id, "⏳ 正在获取运行状态…")
+            console_async(chat_id, op_status, keyboard_fn=status_kb, message_id=mid)
         elif text.startswith("/exits"):
-            upsert_console(chat_id, "⏳ 正在获取当前出口信息…")
-            console_async(chat_id, exits_overview_text, keyboard_fn=exits_menu)
+            mid = reanchor_console(chat_id, "⏳ 正在获取当前出口信息…")
+            console_async(chat_id, exits_overview_text, keyboard_fn=exits_menu, message_id=mid)
         elif text.startswith("/rules"):
-            upsert_console(chat_id, "📑 <b>分流管理</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
+            reanchor_console(chat_id, "📑 <b>分流管理</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
         else:
             send(chat_id, "未知命令。发送 /menu 打开操作面板。")
         return

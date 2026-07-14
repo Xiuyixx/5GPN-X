@@ -70,18 +70,24 @@ class ConsoleMessageTest(unittest.TestCase):
         self.api = FakeApi()
         bot.tg = self.api
 
-    def test_menu_first_sends_then_edits_same_console_message(self):
+    def test_menu_reanchors_console_to_bottom_of_chat(self):
+        deletions = []
+        bot.background = lambda fn, *args: fn(*args)
+        bot.delete_message = lambda chat_id, message_id: deletions.append(message_id) or True
+
         bot.handle_message(tg_message("/menu"))
         self.assertEqual(len(self.api.named("sendMessage")), 1)
         self.assertEqual(bot.CONSOLE[CHAT_ID], 101)
+        self.assertEqual(deletions, [])
 
+        # A later slash command must stay visible even when the old console
+        # message was cleared client-side: send fresh, drop the stale one.
         bot.handle_message(tg_message("/menu"))
-        edits = self.api.named("editMessageText")
-        self.assertEqual(len(edits), 1)
-        self.assertEqual(edits[0]["message_id"], 101)
-        self.assertEqual(len(self.api.named("sendMessage")), 1,
-                         "second /menu must edit the console, not send again")
-        self.assertEqual(bot.CONSOLE[CHAT_ID], 101)
+        self.assertEqual(len(self.api.named("sendMessage")), 2,
+                         "slash commands must send a fresh console message")
+        self.assertEqual(self.api.named("editMessageText"), [])
+        self.assertEqual(deletions, [101], "stale console message must be deleted")
+        self.assertEqual(bot.CONSOLE[CHAT_ID], 102)
 
     def test_callback_menu_still_edits_and_tracks_console(self):
         bot.handle_callback(tg_callback("menu:main", message_id=300))
