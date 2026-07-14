@@ -29,6 +29,11 @@ bot.handle_callback(cb)
 text, keyboard = edits[-1]
 assert "快捷类型" in text
 assert any(row[0]["callback_data"] == "raddt:DOMAIN" for row in keyboard[:-2])
+# Buttons carry beginner-friendly Chinese labels while callback_data stays raw.
+type_rows = keyboard[:-2]
+assert all(row[0]["text"] == bot.RULE_TYPE_LABELS[row[0]["callback_data"].split(":", 1)[1]]
+           for row in type_rows)
+assert any("域名及子域名" in row[0]["text"] for row in type_rows)
 assert keyboard[-2][0]["callback_data"] == "rules:add_manual"
 
 edits.clear()

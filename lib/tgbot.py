@@ -950,12 +950,22 @@ RULE_TYPES = [
     "GEOIP",
     "IP-CIDR",
 ]
+# Beginner-friendly Chinese button labels; callback_data keeps the raw type.
+RULE_TYPE_LABELS = {
+    "DOMAIN": "精确域名（DOMAIN）",
+    "DOMAIN-SUFFIX": "域名及子域名（DOMAIN-SUFFIX）",
+    "DOMAIN-KEYWORD": "域名关键词（DOMAIN-KEYWORD）",
+    "GEOSITE": "网站分类（GEOSITE）",
+    "GEOIP": "IP 归属地（GEOIP）",
+    "IP-CIDR": "IP 网段（IP-CIDR）",
+}
 
 
 def rule_type_menu():
     rows = []
     for value in RULE_TYPES:
-        rows.append([{"text": value, "callback_data": "raddt:%s" % value}])
+        rows.append([{"text": RULE_TYPE_LABELS.get(value, value),
+                      "callback_data": "raddt:%s" % value}])
     rows.append([{"text": "⌨️ 手工完整规则", "callback_data": "rules:add_manual"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:rules"}])
     return rows
@@ -999,12 +1009,12 @@ def validate_rule_value(rule_type, value):
 
 def rule_value_prompt(rule_type):
     hints = {
-        "DOMAIN": "示例：<code>openai.com</code>",
-        "DOMAIN-SUFFIX": "示例：<code>google.com</code>",
-        "DOMAIN-KEYWORD": "示例：<code>netflix</code>",
-        "GEOSITE": "示例：<code>telegram</code>",
-        "GEOIP": "示例：<code>cn</code>",
-        "IP-CIDR": "示例：<code>1.2.3.0/24</code>",
+        "DOMAIN": "精确匹配一个域名（不含子域名）。\n示例：<code>openai.com</code>",
+        "DOMAIN-SUFFIX": "匹配该域名及其所有子域名。\n示例：<code>google.com</code>",
+        "DOMAIN-KEYWORD": "域名中包含该关键词即匹配。\n示例：<code>netflix</code>",
+        "GEOSITE": "按 GeoSite 网站分类匹配（如 telegram、netflix）。\n示例：<code>telegram</code>",
+        "GEOIP": "按目标 IP 的归属地区匹配（国家/地区代码）。\n示例：<code>cn</code>",
+        "IP-CIDR": "匹配目标 IP 网段（CIDR 格式）。\n示例：<code>1.2.3.0/24</code>",
     }
     return ("➕ <b>添加规则</b>\n\n"
             "已选择类型：<code>%s</code>\n"
