@@ -18,7 +18,7 @@ user pxout
 pidfile /var/run/sniproxy.pid
 
 resolver {
-    nameserver 22.22.22.22
+    nameserver 9.9.9.9
     mode ipv4_only
 }
 
@@ -42,6 +42,11 @@ sed \
   "${root}/install.sh" > "${script}"
 chmod +x "${script}"
 
+# G5PNX_BOOTSTRAPPED prevents the wrapper (which lives outside the repo and has
+# no lib/) from re-execing a freshly downloaded install.sh: that pristine copy
+# would ignore every sed-redirected path above and write to the REAL host
+# config (/etc/dnsdist, systemctl restart dnsdist, ...).
+export G5PNX_BOOTSTRAPPED=1
 PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns "22.22.22.22" "223.5.5.5"
 PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns "22.22.22.22" "223.5.5.5"
 
