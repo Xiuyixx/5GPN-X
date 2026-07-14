@@ -1069,8 +1069,8 @@ def rule_value_prompt(rule_type):
 
 
 def op_del_exit(name):
-    if not EXIT_ADD_NAME_RE.match(name) or name == "local":
-        return "出口名无效（不能删除 local）。"
+    if not EXIT_ADD_NAME_RE.match(name) or name in ("local", "smart"):
+        return "出口名无效（不能删除 local/smart）。"
     ok, out = run2(["bash", MGMT, "--del-exit", name], timeout=30)
     if ok:
         return "✅ 出口 <b>%s</b> 已删除" % html.escape(name)
@@ -1619,7 +1619,7 @@ def exits_menu():
 def exits_del_menu():
     rows = []
     for name in parse_exit_names():
-        if name == "local":
+        if name in ("local", "smart"):
             continue
         rows.append([{"text": "🗑 " + name, "callback_data": "exitdel:" + name}])
     if not rows:
