@@ -12,8 +12,8 @@ GFWLIST_EXTRA_FILE="${BASE_DIR}/gfwlist-extra-local.txt"
 DEFAULT_RULES_FILE="/etc/proxy-gateway/rules-default.conf"
 MOSDNS_TEMPLATE="${BASE_DIR}/config.yaml.template"
 MOSDNS_CONF="${BASE_DIR}/config.yaml"
-DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
-DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
+DEFAULT_REMOTE_DNS=("https://1.1.1.1/dns-query" "udp://8.8.8.8:53")
+DEFAULT_LOCAL_DNS=("https://223.5.5.5/dns-query" "udp://119.29.29.29:53")
 
 normalize_domain() {
     local domain="${1:-}"

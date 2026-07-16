@@ -26,8 +26,8 @@ MIHOMO_ROUTER_GEN="/opt/proxy-gateway/bin/mihomo-router-config.py"
 RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
 MIHOMO_VERSION_DEFAULT="1.19.28"
 MOSDNS_VERSION_DEFAULT="5.3.4"
-DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
-DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
+DEFAULT_REMOTE_DNS=("https://1.1.1.1/dns-query" "udp://8.8.8.8:53")
+DEFAULT_LOCAL_DNS=("https://223.5.5.5/dns-query" "udp://119.29.29.29:53")
 bootstrap_from_repo_if_needed() {
     local required=(
         install.sh
@@ -76,12 +76,31 @@ render_sniproxy_dns_nameservers() {
     fi
     for item in "${dns_list[@]}"; do
         [[ -z "$item" ]] && continue
+        if [[ "$item" == *://* ]]; then
+            item=$(python3 - "$item" <<'PYEOF'
+import sys
+from urllib.parse import urlsplit
+
+print(urlsplit(sys.argv[1]).hostname or "")
+PYEOF
+)
+        elif [[ "$item" == \[*\]:* ]]; then
+            item="${item#\[}"
+            item="${item%%\]:*}"
+        elif [[ "$item" =~ ^([0-9]+\.){3}[0-9]+:[0-9]+$ ]]; then
+            item="${item%:*}"
+        fi
         if [[ ! "$item" =~ ^[0-9A-Fa-f:.]+$ ]]; then
             warn "Skipping invalid sniproxy DNS address: $item"
             continue
         fi
         printf '    nameserver %s\n' "$item"
     done
+}
+first_plain_dns() {
+    local rendered
+    rendered=$(render_sniproxy_dns_nameservers "${1:-}")
+    awk 'NR == 1 { print $2 }' <<< "$rendered"
 }
 normalize_dns_list() {
     local input="${1:-}"
@@ -112,8 +131,30 @@ normalize_dns_upstreams() {
     for item in "${dns_list[@]}"; do
         [[ -z "$item" ]] && continue
         if [[ "$item" == *://* ]]; then
-            err "Invalid DNS upstream: $item. 5GPN-X mosdns accepts IP[:port], not DoH/DoT URLs."
-            exit 1
+            python3 - "$item" <<'PYEOF' || { err "Invalid DNS upstream URL: $item"; exit 1; }
+import ipaddress
+import sys
+from urllib.parse import urlsplit
+
+value = sys.argv[1]
+parsed = urlsplit(value)
+if parsed.scheme not in {"https", "tls", "udp", "tcp"}:
+    raise SystemExit(1)
+if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+    raise SystemExit(1)
+try:
+    ipaddress.ip_address(parsed.hostname)
+except ValueError:
+    raise SystemExit(1)
+if parsed.port is not None and not 1 <= parsed.port <= 65535:
+    raise SystemExit(1)
+if parsed.scheme == "https" and parsed.path != "/dns-query":
+    raise SystemExit(1)
+if parsed.scheme != "https" and parsed.path not in {"", "/"}:
+    raise SystemExit(1)
+PYEOF
+            out+=("$item")
+            continue
         fi
         if [[ "$item" == *:* ]]; then
             if python3 - "$item" <<'PYEOF' >/dev/null 2>&1
@@ -231,18 +272,32 @@ certbot_diagnostics() {
 configure_dns_upstreams() {
     local remote_selected="${REMOTE_DNS:-${DNS_UPSTREAMS:-${OVERSEAS_DNS:-${PRIVATE_OVERSEAS_DNS:-${SNIPROXY_DNS:-}}}}}"
     local local_selected="${LOCAL_DNS:-}"
+    local remote_explicit=0 local_explicit=0
+    local mosdns_dir="${MOSDNS_DIR:-/etc/mosdns}"
+    [[ -n "$remote_selected" ]] && remote_explicit=1
+    [[ -n "$local_selected" ]] && local_explicit=1
     if [[ -z "$remote_selected" ]]; then
-        remote_selected=$(cat /etc/mosdns/.remote_dns 2>/dev/null || cat /etc/dnsdist/.remote_dns 2>/dev/null || true)
+        remote_selected=$(cat "${mosdns_dir}/.remote_dns" 2>/dev/null || cat /etc/dnsdist/.remote_dns 2>/dev/null || true)
     fi
     if [[ -z "$local_selected" ]]; then
-        local_selected=$(cat /etc/mosdns/.local_dns 2>/dev/null || cat /etc/dnsdist/.local_dns 2>/dev/null || true)
+        local_selected=$(cat "${mosdns_dir}/.local_dns" 2>/dev/null || cat /etc/dnsdist/.local_dns 2>/dev/null || true)
     fi
     if [[ -z "$remote_selected" && -t 0 ]]; then
         echo ""
-        read -r -p "国际 DNS remote [1.1.1.1,8.8.8.8]: " remote_selected
+        read -r -p "国际 DNS remote [Cloudflare DoH, Google UDP fallback]: " remote_selected
+        [[ -n "$remote_selected" ]] && remote_explicit=1
     fi
     if [[ -z "$local_selected" && -t 0 ]]; then
-        read -r -p "国内 DNS local [223.5.5.5,119.29.29.29]: " local_selected
+        read -r -p "国内 DNS local [AliDNS DoH, DNSPod UDP fallback]: " local_selected
+        [[ -n "$local_selected" ]] && local_explicit=1
+    fi
+    if [[ $remote_explicit -eq 0 && "${remote_selected//,/ }" =~ ^1\.1\.1\.1[[:space:]]+8\.8\.8\.8$ ]]; then
+        remote_selected="${DEFAULT_REMOTE_DNS[*]}"
+        info "Migrating legacy international UDP defaults to DoH + UDP fallback"
+    fi
+    if [[ $local_explicit -eq 0 && "${local_selected//,/ }" =~ ^223\.5\.5\.5[[:space:]]+119\.29\.29\.29$ ]]; then
+        local_selected="${DEFAULT_LOCAL_DNS[*]}"
+        info "Migrating legacy domestic UDP defaults to DoH + UDP fallback"
     fi
     [[ -n "$remote_selected" ]] || remote_selected="${DEFAULT_REMOTE_DNS[*]}"
     [[ -n "$local_selected" ]] || local_selected="${DEFAULT_LOCAL_DNS[*]}"
@@ -949,7 +1004,7 @@ install_whatsapp_shim() {
     for domain in whatsapp.net whatsapp.com; do
         grep -qxF "$domain" /etc/mosdns/gfwlist-extra-local.txt || echo "$domain" >> /etc/mosdns/gfwlist-extra-local.txt
     done
-    shim_dns="${REMOTE_DNS:-$(cat "${CONF_DIR}/.remote_dns" 2>/dev/null || echo '1.1.1.1 8.8.8.8')}"
+    shim_dns="${REMOTE_DNS:-$(cat "${CONF_DIR}/.remote_dns" 2>/dev/null || printf '%s ' "${DEFAULT_REMOTE_DNS[@]}")}"
     self_ips="${PUBLIC_IP:-},127.0.0.1,::1,"
     self_ips+="$(hostname -I 2>/dev/null | tr ' ' ',' | tr -d '\n')"
     cat > "${CONF_DIR}/wa-shim.env" <<EOF
@@ -957,7 +1012,7 @@ WA_SHIM_LISTEN=0.0.0.0
 WA_SHIM_PORT=443
 WA_SHIM_BACKEND=127.0.0.1:8443
 WA_SHIM_WA_HOST=g.whatsapp.net
-WA_SHIM_RESOLVER=${shim_dns%% *},8.8.8.8
+WA_SHIM_RESOLVER=$(first_plain_dns "$shim_dns"),8.8.8.8
 WA_SHIM_SELF_IPS=${self_ips}
 WA_SHIM_ALLOW_CIDR=172.22.0.0/16,127.0.0.0/8
 EOF
@@ -2737,7 +2792,7 @@ set_custom_dns() {
     echo "$remote_dns" > /etc/mosdns/.overseas_public_dns
     echo "$remote_dns" > /etc/mosdns/.sniproxy_dns
     if [[ -f "${CONF_DIR}/wa-shim.env" ]]; then
-        sed -i -E "s#^WA_SHIM_RESOLVER=.*#WA_SHIM_RESOLVER=${remote_dns%% *},8.8.8.8#" "${CONF_DIR}/wa-shim.env"
+        sed -i -E "s#^WA_SHIM_RESOLVER=.*#WA_SHIM_RESOLVER=$(first_plain_dns "$remote_dns"),8.8.8.8#" "${CONF_DIR}/wa-shim.env"
     fi
     if ! rewrite_sniproxy_dns "$remote_dns"; then
         restore_dns_backup

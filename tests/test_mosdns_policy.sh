@@ -44,6 +44,10 @@ has "$template" 'type: udp_server' "UDP/53 listener is missing"
 has "$template" 'cert: /etc/mosdns/certs/fullchain.pem' "DoT certificate is missing"
 
 has "$rules" 'mode == "primary"' "upstream renderer must split primary and fallback servers"
+has "$rules" 'DEFAULT_REMOTE_DNS=("https://1.1.1.1/dns-query" "udp://8.8.8.8:53")' \
+    "international DNS must prefer DoH with an independent UDP fallback"
+has "$rules" 'DEFAULT_LOCAL_DNS=("https://223.5.5.5/dns-query" "udp://119.29.29.29:53")' \
+    "domestic DNS must prefer DoH with an independent UDP fallback"
 has "$rules" 'next(item for item in fallbacks if item != items[0])' \
     "a single configured resolver must still get an independent fallback"
 has "$rules" 'timeout 2 mosdns start -c "$validate_conf"' "generated mosdns config must be validated"
