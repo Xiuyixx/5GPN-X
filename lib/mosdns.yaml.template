@@ -122,8 +122,8 @@ __LOCAL_SECONDARY_UPSTREAMS__
       - exec: $local_fallback
 
   # DNS service does not return AAAA records; clients use IPv4 only.
-  # Internal clients: GFWList -> server IP; ChinaList -> local_resolve;
-  #                   other -> server IP (all proxied via TCP/QUIC).
+  # Internal clients: ChinaList -> local_resolve (direct);
+  #                   everything else -> server IP (proxied via TCP/QUIC).
   # External clients: GFWList -> normal overseas resolve (no hijack);
   #                   ChinaList -> local_resolve; other -> overseas.
   - tag: reject_aaaa
@@ -145,7 +145,7 @@ __LOCAL_SECONDARY_UPSTREAMS__
       - matches:
           - has_resp
         exec: accept
-      - exec: goto remote_resolve
+      - exec: black_hole __SERVER_IP__
 
   - tag: public_client
     type: sequence
