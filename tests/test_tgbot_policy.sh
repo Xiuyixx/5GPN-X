@@ -168,12 +168,12 @@ bot_body="$(cat "${bot}")"
 [[ "${install_body}" != *'sniproxy resolver upstreams'* ]] || fail "install.sh must not prompt for three DNS lists interactively"
 [[ "${install_body}" == *'EnvironmentFile='* ]] || fail "tgbot service must load its token from an EnvironmentFile"
 [[ "${install_body}" == *'chmod 600 "${CONF_DIR}/tgbot.env"'* ]] || fail "tgbot.env must be chmod 600 (token secrecy)"
-[[ "${install_body}" == *'proxy-gateway-tgbot.service'* ]] || fail "install.sh must create the tgbot systemd service"
+[[ "${install_body}" == *'5gpn-tgbot.service'* ]] || fail "install.sh must create the tgbot systemd service"
 
 # --- token must be optional: no token => skip, not fail ----------------------
 [[ "${install_body}" == *'跳过 tgbot'* ]] || fail "install.sh must skip tgbot when no token is provided"
 
 # --- uninstall must remove the bot ------------------------------------------
-[[ "${install_body}" == *'proxy-gateway-tgbot}.*'* ]] || fail "uninstall must remove the tgbot service unit"
+[[ "${install_body}" == *'5gpn-tgbot}.*'* ]] || fail "uninstall must remove the tgbot service unit"
 
 echo "tgbot policy OK"

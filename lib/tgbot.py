@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-proxy-gateway Telegram control bot.
+5gpn Telegram control bot.
 
-Stdlib-only (urllib) long-polling bot that drives the proxy-gateway management
+Stdlib-only (urllib) long-polling bot that drives the 5gpn management
 commands and systemd services from Telegram, using inline-keyboard buttons.
 
 Security model:
@@ -42,7 +42,7 @@ TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
 ADMIN_IDS = {
     int(x) for x in re.split(r"[,\s]+", os.environ.get("TG_ADMIN_IDS", "").strip()) if x
 }
-MGMT = os.environ.get("MGMT", "/opt/proxy-gateway/bin/proxy-gateway-ctl")
+MGMT = os.environ.get("MGMT", "/opt/5gpn/bin/5gpn-ctl")
 API = "https://api.telegram.org/bot%s/" % TOKEN
 
 # Services the bot may tail. Order matters for display only.
@@ -51,22 +51,22 @@ SERVICES = [
     "sniproxy",
     "wa-shim",
     "quic-proxy",
-    "proxy-gateway-ios-profile",
-    "proxy-gateway-tgbot",
+    "5gpn-ios-profile",
+    "5gpn-tgbot",
 ]
 RESTART_SERVICES = [
     "mosdns",
     "sniproxy",
     "wa-shim",
     "quic-proxy",
-    "proxy-gateway-ios-profile.socket",
+    "5gpn-ios-profile.socket",
 ]
 EXIT_NAME_RE = re.compile(r"^(local|[\w\-\u4e00-\u9fff]{1,16})$", re.UNICODE)
 EXIT_ADD_NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff]{1,16}$", re.UNICODE)  # 'local' is reserved
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 DNS_LIST_RE = re.compile(r"^[0-9A-Fa-f:.,\s]+$")
 DNS_UPSTREAM_SCHEMES = {"https", "tls", "udp", "tcp"}
-WWW_DIR = "/opt/proxy-gateway/www"
+WWW_DIR = "/opt/5gpn/www"
 
 # Per-chat conversational state for multi-step flows (e.g. add-exit).
 PENDING = {}
@@ -557,8 +557,8 @@ STATUS_ITEMS = [
     ("mosdns", "mosdns"),
     ("sniproxy", "sniproxy"),
     ("quic-proxy", "quic-proxy"),
-    ("proxy-gateway-ios-profile.socket", "iOS 描述文件"),
-    ("proxy-gateway-tgbot", "Telegram Bot"),
+    ("5gpn-ios-profile.socket", "iOS 描述文件"),
+    ("5gpn-tgbot", "Telegram Bot"),
 ]
 
 
@@ -727,14 +727,14 @@ def op_status():
             down.append(label)
     lines.append("")
 
-    cur = _read_file("/opt/proxy-gateway/etc/current-exit") or "local"
+    cur = _read_file("/opt/5gpn/etc/current-exit") or "local"
     if cur == "local":
         lines.append("🌐 出口：<b>local</b>（本机直出）")
     else:
-        t = _read_file("/etc/proxy-gateway/exits/%s.type" % cur) or "?"
+        t = _read_file("/etc/5gpn/exits/%s.type" % cur) or "?"
         lines.append("🌐 出口：<b>%s</b>（%s）" % (html.escape(cur), html.escape(t)))
 
-    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/5gpn/etc/.domain")
     if domain:
         lines.append("🔗 域名：<code>%s</code>" % html.escape(domain))
 
@@ -774,7 +774,7 @@ def op_set_exit(name):
         return "❌ <b>切换失败</b>\n%s" % html.escape(_reason(out))
     if name == "local":
         return "✅ 已切回 <b>local</b>（本机直出）"
-    t = _read_file("/etc/proxy-gateway/exits/%s.type" % name) or "?"
+    t = _read_file("/etc/5gpn/exits/%s.type" % name) or "?"
     ip = _exit_ip()
     if ip:
         tail = "\n🌍 出口 IP：<code>%s</code>" % html.escape(ip)
@@ -784,11 +784,11 @@ def op_set_exit(name):
 
 
 def exits_overview_text():
-    cur = _read_file("/opt/proxy-gateway/etc/current-exit") or "local"
+    cur = _read_file("/opt/5gpn/etc/current-exit") or "local"
     if cur == "local":
         desc = "本机直出"
     else:
-        desc = _read_file("/etc/proxy-gateway/exits/%s.type" % cur) or "?"
+        desc = _read_file("/etc/5gpn/exits/%s.type" % cur) or "?"
     ip = _exit_ip()
     if ip:
         ip_line = "🌍 出口 IP：<code>%s</code>" % html.escape(ip)
@@ -1087,9 +1087,9 @@ def op_update_rules():
     if cn:
         parts.append("• ChinaList：%s 域名" % cn.group(1))
     # Also refresh mihomo smart routing rule-sets (re-download remote rule-sets)
-    smart_active = _is_active("proxy-gateway-mihomo@smart.service") == "active"
+    smart_active = _is_active("5gpn-mihomo@smart.service") == "active"
     if smart_active:
-        run2(["systemctl", "restart", "proxy-gateway-mihomo@smart.service"], timeout=60)
+        run2(["systemctl", "restart", "5gpn-mihomo@smart.service"], timeout=60)
         parts.append("• 远程规则集已刷新（mihomo 重载）")
     return "\n".join(parts)
 
@@ -1132,7 +1132,7 @@ def _cert_status_line():
 
 
 def op_dot_status():
-    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/5gpn/etc/.domain") or "未设置"
     remote_dns = (_read_file("/etc/mosdns/.remote_dns") or
                   _read_file("/etc/mosdns/.overseas_dns") or "?")
     local_dns = (_read_file("/etc/mosdns/.local_dns") or "?")
@@ -1270,7 +1270,7 @@ def op_logs(svc):
 # --------------------------------------------------------------------------- #
 # Smart-routing rules (the 'smart' exit)
 # --------------------------------------------------------------------------- #
-RULES_PATH = "/etc/proxy-gateway/rules.conf"
+RULES_PATH = "/etc/5gpn/rules.conf"
 
 
 def _rule_entries():
@@ -1396,7 +1396,7 @@ def op_del_rule_button(index, token):
 # --------------------------------------------------------------------------- #
 # Category -> exit policy map
 # --------------------------------------------------------------------------- #
-POLICY_PATH = "/etc/proxy-gateway/policy-map.conf"
+POLICY_PATH = "/etc/5gpn/policy-map.conf"
 
 
 def _policy_map():
@@ -1470,7 +1470,7 @@ def parse_exit_names():
     names = ["local"]
     seen = set()
     try:
-        for f in sorted(os.listdir("/etc/proxy-gateway/exits")):
+        for f in sorted(os.listdir("/etc/5gpn/exits")):
             if f.endswith(".type"):
                 seen.add(f[: -len(".type")])
     except OSError:
@@ -1489,7 +1489,7 @@ def parse_exit_names():
 
 def op_ios_send(chat_id):
     """Send the iOS profile QR as an image (with the URL as caption)."""
-    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/5gpn/etc/.domain")
     if domain:
         url = "http://%s:8111/ios-dot.mobileconfig" % domain
     else:
@@ -1515,7 +1515,7 @@ def op_ios_send(chat_id):
 def op_ios_send_inline(cb):
     """Edit the callback message in-place to show the iOS QR code.
     Returns an error string on failure, or None on success."""
-    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/5gpn/etc/.domain")
     if domain:
         url = "http://%s:8111/ios-dot.mobileconfig" % domain
     else:
@@ -1751,7 +1751,7 @@ def handle_message(msg):
     if text.startswith("/"):
         PENDING.pop(chat_id, None)
         if text.startswith(("/start", "/menu")):
-            reanchor_console(chat_id, "<b>proxy-gateway 控制台</b>\n选择一个操作：", main_menu())
+            reanchor_console(chat_id, "<b>5GPN 控制台</b>\n选择一个操作：", main_menu())
         elif text.startswith("/status"):
             mid = reanchor_console(chat_id, "⏳ 正在获取运行状态…")
             console_async(chat_id, op_status, keyboard_fn=status_kb, message_id=mid)
@@ -2201,7 +2201,7 @@ def main():
               file=sys.stderr)
 
     set_commands()
-    print("proxy-gateway tgbot started; admins=%s" % sorted(ADMIN_IDS), file=sys.stderr)
+    print("5gpn tgbot started; admins=%s" % sorted(ADMIN_IDS), file=sys.stderr)
     offset = None
     while True:
         # Stay below common 30s idle TCP timeouts so the next update does not

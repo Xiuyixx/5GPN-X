@@ -53,7 +53,7 @@ with open(path, encoding="utf-8") as f:
 assert device == "pgw-" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:11]
 PY
 unit="$(exit_mihomo_unit "$name")"
-[[ "$unit" == proxy-gateway-mihomo@*.service && "$unit" != *"$name"* ]] || fail "Unicode mihomo unit must be escaped"
+[[ "$unit" == 5gpn-mihomo@*.service && "$unit" != *"$name"* ]] || fail "Unicode mihomo unit must be escaped"
 
 # WireGuard runtime aliases (symlinks) must not surface as phantom exits.
 printf '[Interface]\n' > "${WG_DIR}/pgw-${name}.conf"
@@ -119,9 +119,9 @@ for m in 'ensure_mihomo()' 'exit_type()' 'exit_up()' 'exit_down()' 'install_miho
     [[ "${install_body}" == *"${m}"* ]] || fail "install.sh missing function: ${m}"
 done
 [[ "${install_body}" == *'MIHOMO_VERSION_DEFAULT="1.19.28"'* ]] || fail "mihomo version must be locked"
-[[ "${install_body}" == *'proxy-gateway-mihomo@'* ]] || fail "mihomo systemd template missing"
+[[ "${install_body}" == *'5gpn-mihomo@'* ]] || fail "mihomo systemd template missing"
 [[ "${install_body}" == *'mihomo-exit-config.py'* ]] || fail "mihomo generator wiring missing"
-[[ "${install_body}" == *'systemd-escape --template=proxy-gateway-mihomo@.service'* ]] || fail "mihomo instance names must be escaped"
+[[ "${install_body}" == *'systemd-escape --template=5gpn-mihomo@.service'* ]] || fail "mihomo instance names must be escaped"
 [[ "${install_body}" == *'systemctl start "$(mihomo_unit "${current}")"'* ]] || fail "apply-exit must start escaped mihomo units"
 [[ "${install_body}" == *'ExecStart=${MIHOMO_BIN} -d ${CONF_DIR}/mihomo/%I -f ${EXITS_DIR}/%I.yaml'* ]] || fail "mihomo unit must use the unescaped instance for config paths"
 [[ "${install_body}" == *'ip route replace default dev'* ]] || fail "exit must route through pgw device"

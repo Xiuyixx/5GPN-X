@@ -18,7 +18,7 @@ fail() { echo "$1" >&2; exit 1; }
 [[ "${install_body}" == *'FIREWALL_MODE'* ]] || fail "firewall mode must be selectable via FIREWALL_MODE"
 [[ "${install_body}" == *'nft -c -f'* ]] || fail "managed nftables config must be validated before install"
 [[ "${install_body}" == *'/etc/nftables.conf.pgw-backup'* ]] || fail "managed mode must back up the pre-existing ruleset"
-[[ "${install_body}" == *'include "/etc/proxy-gateway/pgw-exit.nft"'* ]] || fail "managed ruleset must include the shared pgw-exit table file"
+[[ "${install_body}" == *'include "/etc/5gpn/pgw-exit.nft"'* ]] || fail "managed ruleset must include the shared pgw-exit table file"
 
 # --- load the functions under test -------------------------------------------
 helpers='info() { :; }; warn() { :; }; ok() { :; }; err() { echo "$*" >&2; }'
@@ -119,6 +119,6 @@ fi
 # --- cert hook must not reload the full ruleset -------------------------------
 [[ "${install_body}" != *'nft -f /etc/nftables.conf 2>/dev/null || true
 elif command -v iptables'* ]] || fail "cert restore hook must not reapply the full nftables.conf"
-[[ "${install_body}" == *'proxy-gateway-cert-http'* ]] || fail "temporary cert rule must stay tagged"
+[[ "${install_body}" == *'5gpn-cert-http'* ]] || fail "temporary cert rule must stay tagged"
 
 echo "firewall ssh-port & mode policy OK"

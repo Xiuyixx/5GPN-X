@@ -40,8 +40,8 @@ done
 [[ "${install_body}" == *'ip route replace default dev'* ]] || fail "install.sh must route marked traffic into the exit interface"
 
 # --- boot persistence --------------------------------------------------------
-[[ "${install_body}" == *'proxy-gateway-exit.service'* ]] || fail "install.sh must install the boot-time exit selector service"
-[[ "${install_body}" == *'proxy-gateway-apply-exit.sh'* ]] || fail "install.sh must install the apply-exit helper"
+[[ "${install_body}" == *'5gpn-exit.service'* ]] || fail "install.sh must install the boot-time exit selector service"
+[[ "${install_body}" == *'5gpn-apply-exit.sh'* ]] || fail "install.sh must install the apply-exit helper"
 
 # --- WireGuard configs must never hijack the global default route -----------
 [[ "${install_body}" == *'Table = off'* ]] || fail "install.sh must force 'Table = off' on imported WireGuard exit configs"

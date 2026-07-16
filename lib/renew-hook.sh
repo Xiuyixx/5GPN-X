@@ -2,7 +2,7 @@
 # Let's Encrypt renewal hook - copy certs to mosdns-readable location and reload
 set -e
 
-DOMAIN=$(cat /opt/proxy-gateway/etc/.domain 2>/dev/null || cat /etc/mosdns/.domain 2>/dev/null || true)
+DOMAIN=$(cat /opt/5gpn/etc/.domain 2>/dev/null || cat /etc/mosdns/.domain 2>/dev/null || true)
 if [[ -n "$DOMAIN" && -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     LIVE_DIR="/etc/letsencrypt/live/${DOMAIN}"
 else

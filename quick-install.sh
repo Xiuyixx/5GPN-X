@@ -33,25 +33,19 @@ pkg_install() {
     else return 1; fi
 }
 
-command -v tar >/dev/null 2>&1 || pkg_install tar || { err "tar is required"; exit 1; }
-
-DL=""
-if command -v curl >/dev/null 2>&1; then DL="curl -fsSL"
-elif command -v wget >/dev/null 2>&1; then DL="wget -qO-"
-else
-    if pkg_install curl; then
-        DL="curl -fsSL"
-    else
-        err "curl or wget is required"
-        exit 1
-    fi
-fi
+command -v git >/dev/null 2>&1 || pkg_install git || { err "git is required"; exit 1; }
 
 info "Downloading ${REPO}@${BRANCH} into ${DIR} ..."
-mkdir -p "${DIR}"
-if ! $DL "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" | tar -xz --strip-components=1 -C "${DIR}"; then
-    err "Download/extract failed. Check network access to github.com."
-    exit 1
+if [[ -d "${DIR}/.git" ]]; then
+    info "Existing repo found, pulling latest..."
+    git -C "${DIR}" fetch origin "${BRANCH}" --quiet
+    git -C "${DIR}" reset --hard "origin/${BRANCH}"
+else
+    rm -rf "${DIR}"
+    if ! git clone --depth 1 -b "${BRANCH}" "https://github.com/${REPO}.git" "${DIR}"; then
+        err "git clone failed. Check network access to github.com."
+        exit 1
+    fi
 fi
 ok "Source ready at ${DIR}"
 

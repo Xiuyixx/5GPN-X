@@ -10,10 +10,10 @@ import sys
 from urllib.parse import urldefrag
 
 
-EXITS_DIR = os.environ.get("EXITS_DIR", "/etc/proxy-gateway/exits")
+EXITS_DIR = os.environ.get("EXITS_DIR", "/etc/5gpn/exits")
 WG_DIR = os.environ.get("WG_DIR", "/etc/wireguard")
-CACHE_DIR = os.environ.get("PGW_RULESET_CACHE", "/etc/proxy-gateway/rulesets")
-POLICY_MAP_FILE = os.environ.get("PGW_POLICY_MAP", "/etc/proxy-gateway/policy-map.conf")
+CACHE_DIR = os.environ.get("PGW_RULESET_CACHE", "/etc/5gpn/rulesets")
+POLICY_MAP_FILE = os.environ.get("PGW_POLICY_MAP", "/etc/5gpn/policy-map.conf")
 DEFAULT_TARGET = os.environ.get("PGW_DEFAULT_TARGET", "direct")
 INTERVAL = int(os.environ.get("PGW_RULESET_INTERVAL", "86400"))
 GEOSITE_MRS = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/%s.mrs"

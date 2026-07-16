@@ -58,7 +58,7 @@ fi
 [[ "${install_body}" == *'set_rules()'* && "${install_body}" == *'add_rule()'* && "${install_body}" == *'add_ruleset()'* ]] || fail "rule management functions missing"
 [[ "${install_body}" == *'--set-rules)'* && "${install_body}" == *'--add-rule)'* && "${install_body}" == *'--add-ruleset)'* ]] || fail "rule dispatch missing"
 [[ "${install_body}" == *'mihomo-router-config.py'* ]] || fail "mihomo router generator wiring missing"
-[[ "${install_body}" == *'systemctl restart "proxy-gateway-mihomo@smart.service"'* ]] || fail "smart must reload through mihomo"
+[[ "${install_body}" == *'systemctl restart "5gpn-mihomo@smart.service"'* ]] || fail "smart must reload through mihomo"
 [[ "${install_body}" == *'Rules rejected; previous rules restored'* ]] || fail "set-rules must roll back invalid input"
 [[ "${install_body}" == *'reserved exit name'* ]] || fail "smart/local must be reserved"
 [[ "${install_body}" == *'exit_reachable()'* && "${install_body}" == *'preflight_exit()'* ]] || fail "exit preflight missing"

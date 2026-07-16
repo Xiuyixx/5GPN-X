@@ -4,7 +4,7 @@ REPO_URL="https://github.com/Xiuyixx/5GPN-X.git"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "$0")"
 LIB_DIR="${SCRIPT_DIR}/lib"
-BASE_DIR="/opt/proxy-gateway"
+BASE_DIR="/opt/5gpn"
 CONF_DIR="${BASE_DIR}/etc"
 SRC_DIR="${BASE_DIR}/src"
 WWW_DIR="${BASE_DIR}/www"
@@ -13,17 +13,17 @@ EXIT_USER="pxout"
 EXIT_MARK="0x1"
 EXIT_TABLE="100"
 WG_DIR="/etc/wireguard"
-EXITS_DIR="/etc/proxy-gateway/exits"
-RULES_FILE="/etc/proxy-gateway/rules.conf"
-POLICY_MAP="/etc/proxy-gateway/policy-map.conf"
-KEEP_FILE="/etc/proxy-gateway/keep-categories"
-DIRECT_FILE="/etc/proxy-gateway/direct-categories"
-RULES_DEFAULT="/etc/proxy-gateway/rules-default.conf"
-RULESET_CACHE="/etc/proxy-gateway/rulesets"
-MIHOMO_BIN="/opt/proxy-gateway/bin/mihomo"
-MIHOMO_CFG_GEN="/opt/proxy-gateway/bin/mihomo-exit-config.py"
-MIHOMO_ROUTER_GEN="/opt/proxy-gateway/bin/mihomo-router-config.py"
-RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
+EXITS_DIR="/etc/5gpn/exits"
+RULES_FILE="/etc/5gpn/rules.conf"
+POLICY_MAP="/etc/5gpn/policy-map.conf"
+KEEP_FILE="/etc/5gpn/keep-categories"
+DIRECT_FILE="/etc/5gpn/direct-categories"
+RULES_DEFAULT="/etc/5gpn/rules-default.conf"
+RULESET_CACHE="/etc/5gpn/rulesets"
+MIHOMO_BIN="/opt/5gpn/bin/mihomo"
+MIHOMO_CFG_GEN="/opt/5gpn/bin/mihomo-exit-config.py"
+MIHOMO_ROUTER_GEN="/opt/5gpn/bin/mihomo-router-config.py"
+RULES_IMPORT="/opt/5gpn/bin/rules-import.py"
 MIHOMO_VERSION_DEFAULT="1.19.28"
 MOSDNS_VERSION_DEFAULT="5.3.4"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
@@ -857,12 +857,12 @@ install_cert() {
     install_certbot_firewall_hooks
     certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" \
         --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
-        --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
-        --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
+        --pre-hook /usr/local/bin/5gpn-open-cert-http.sh \
+        --post-hook /usr/local/bin/5gpn-restore-firewall.sh)
     certbot_cmd_force=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
         --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
-        --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
-        --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
+        --pre-hook /usr/local/bin/5gpn-open-cert-http.sh \
+        --post-hook /usr/local/bin/5gpn-restore-firewall.sh)
     local cb_cmd=()
     if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
         info "Let's Encrypt certificate already exists for $DOMAIN, forcing renewal..."
@@ -1053,7 +1053,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/proxy-gateway/bin/quic-proxy -l 0.0.0.0:443
+ExecStart=/opt/5gpn/bin/quic-proxy -l 0.0.0.0:443
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
@@ -1176,7 +1176,7 @@ generate_ios_profile() {
             <key>PayloadDisplayName</key>
             <string>Proxy Gateway Cellular DoT</string>
             <key>PayloadIdentifier</key>
-            <string>com.proxy-gateway.${DOMAIN}.dnssettings</string>
+            <string>com.5gpn.${DOMAIN}.dnssettings</string>
             <key>PayloadType</key>
             <string>com.apple.dnsSettings.managed</string>
             <key>PayloadUUID</key>
@@ -1190,7 +1190,7 @@ generate_ios_profile() {
     <key>PayloadDisplayName</key>
     <string>Proxy Gateway Cellular DoT</string>
     <key>PayloadIdentifier</key>
-    <string>com.proxy-gateway.${DOMAIN}</string>
+    <string>com.5gpn.${DOMAIN}</string>
     <key>PayloadOrganization</key>
     <string>Proxy Gateway</string>
     <key>PayloadRemovalDisallowed</key>
@@ -1223,11 +1223,11 @@ EOF
     if [[ -f "${LIB_DIR}/ios-http.py" ]]; then
         install -m 0755 "${LIB_DIR}/ios-http.py" "${BASE_DIR}/bin/ios-http.py"
     fi
-    if systemctl list-unit-files 2>/dev/null | grep -q '^proxy-gateway-ios-profile\.service'; then
-        systemctl disable --now proxy-gateway-ios-profile.service 2>/dev/null || true
+    if systemctl list-unit-files 2>/dev/null | grep -q '^5gpn-ios-profile\.service'; then
+        systemctl disable --now 5gpn-ios-profile.service 2>/dev/null || true
     fi
-    rm -f /etc/systemd/system/proxy-gateway-ios-profile.service
-    cat > /etc/systemd/system/proxy-gateway-ios-profile.socket <<EOF
+    rm -f /etc/systemd/system/5gpn-ios-profile.service
+    cat > /etc/systemd/system/5gpn-ios-profile.socket <<EOF
 [Unit]
 Description=Proxy Gateway iOS profile HTTP socket
 
@@ -1238,7 +1238,7 @@ Accept=yes
 [Install]
 WantedBy=sockets.target
 EOF
-    cat > /etc/systemd/system/proxy-gateway-ios-profile@.service <<EOF
+    cat > /etc/systemd/system/5gpn-ios-profile@.service <<EOF
 [Unit]
 Description=Proxy Gateway iOS profile responder (per-connection)
 
@@ -1252,7 +1252,7 @@ StandardError=journal
 User=root
 EOF
     systemctl daemon-reload
-    systemctl enable --now proxy-gateway-ios-profile.socket
+    systemctl enable --now 5gpn-ios-profile.socket
     echo "$profile_url" > "${WWW_DIR}/ios-profile-url.txt"
     if command -v qrencode >/dev/null 2>&1; then
         qrencode -t ANSIUTF8 "$profile_url" | tee "${WWW_DIR}/ios-dot.qr.txt"
@@ -1299,38 +1299,38 @@ cleanup_certbot_standalone() {
 }
 install_certbot_firewall_hooks() {
     mkdir -p /etc/letsencrypt/renewal-hooks/pre /etc/letsencrypt/renewal-hooks/post
-    cat > /usr/local/bin/proxy-gateway-open-cert-http.sh <<'EOF'
+    cat > /usr/local/bin/5gpn-open-cert-http.sh <<'EOF'
 #!/bin/bash
 set -e
 systemctl stop sniproxy 2>/dev/null || true
 systemctl stop wa-shim 2>/dev/null || true
 if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
-    nft insert rule inet filter input tcp dport 80 accept comment '"proxy-gateway-cert-http"' 2>/dev/null || true
+    nft insert rule inet filter input tcp dport 80 accept comment '"5gpn-cert-http"' 2>/dev/null || true
 elif command -v iptables >/dev/null 2>&1; then
-    iptables -I INPUT 1 -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null || true
+    iptables -I INPUT 1 -p tcp --dport 80 -m comment --comment 5gpn-cert-http -j ACCEPT 2>/dev/null || true
 fi
 EOF
-    cat > /usr/local/bin/proxy-gateway-restore-firewall.sh <<'EOF'
+    cat > /usr/local/bin/5gpn-restore-firewall.sh <<'EOF'
 #!/bin/bash
 set -e
 # Delete only the tagged temporary rule. Reloading /etc/nftables.conf here
 # would be wrong when the firewall is user-managed (FIREWALL_MODE=preserve).
 if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
-    while h="$(nft --handle list chain inet filter input 2>/dev/null | awk '/proxy-gateway-cert-http/ { print $NF; exit }')" && [ -n "$h" ]; do
+    while h="$(nft --handle list chain inet filter input 2>/dev/null | awk '/5gpn-cert-http/ { print $NF; exit }')" && [ -n "$h" ]; do
         nft delete rule inet filter input handle "$h" 2>/dev/null || break
     done
 fi
 if command -v iptables >/dev/null 2>&1; then
-    while iptables -D INPUT -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null; do :; done
+    while iptables -D INPUT -p tcp --dport 80 -m comment --comment 5gpn-cert-http -j ACCEPT 2>/dev/null; do :; done
 fi
 systemctl start sniproxy 2>/dev/null || true
 systemctl start wa-shim 2>/dev/null || true
 EOF
-    chmod +x /usr/local/bin/proxy-gateway-open-cert-http.sh /usr/local/bin/proxy-gateway-restore-firewall.sh
-    cp /usr/local/bin/proxy-gateway-open-cert-http.sh /etc/letsencrypt/renewal-hooks/pre/10-proxy-gateway-open-http.sh
-    cp /usr/local/bin/proxy-gateway-restore-firewall.sh /etc/letsencrypt/renewal-hooks/post/90-proxy-gateway-restore-firewall.sh
-    chmod +x /etc/letsencrypt/renewal-hooks/pre/10-proxy-gateway-open-http.sh \
-        /etc/letsencrypt/renewal-hooks/post/90-proxy-gateway-restore-firewall.sh
+    chmod +x /usr/local/bin/5gpn-open-cert-http.sh /usr/local/bin/5gpn-restore-firewall.sh
+    cp /usr/local/bin/5gpn-open-cert-http.sh /etc/letsencrypt/renewal-hooks/pre/10-5gpn-open-http.sh
+    cp /usr/local/bin/5gpn-restore-firewall.sh /etc/letsencrypt/renewal-hooks/post/90-5gpn-restore-firewall.sh
+    chmod +x /etc/letsencrypt/renewal-hooks/pre/10-5gpn-open-http.sh \
+        /etc/letsencrypt/renewal-hooks/post/90-5gpn-restore-firewall.sh
 }
 ensure_proxy_user() {
     if id -u "${EXIT_USER}" >/dev/null 2>&1; then
@@ -1350,7 +1350,7 @@ exit_iface() {
         printf 'pgw-%s\n' "$(printf '%s' "$name" | sha256sum | cut -c1-11)"
     fi
 }
-exit_mihomo_unit() { systemd-escape --template=proxy-gateway-mihomo@.service "$1"; }
+exit_mihomo_unit() { systemd-escape --template=5gpn-mihomo@.service "$1"; }
 exit_type_file()    { echo "${EXITS_DIR}/${1}.type"; }
 exit_mihomo_conf()  { echo "${EXITS_DIR}/${1}.yaml"; }
 exit_type() {
@@ -1427,7 +1427,7 @@ ensure_mihomo() {
     ok "mihomo ${ver} installed: ${MIHOMO_BIN}"
 }
 install_mihomo_unit() {
-    cat > /etc/systemd/system/proxy-gateway-mihomo@.service <<EOF
+    cat > /etc/systemd/system/5gpn-mihomo@.service <<EOF
 [Unit]
 Description=Proxy Gateway mihomo exit (%i)
 After=network-online.target
@@ -1437,7 +1437,7 @@ Wants=network-online.target
 Type=simple
 ExecStart=${MIHOMO_BIN} -d ${CONF_DIR}/mihomo/%I -f ${EXITS_DIR}/%I.yaml
 # Recreating the TUN drops the table-100 route; re-apply it after (re)start.
-ExecStartPost=-/usr/local/bin/proxy-gateway-apply-exit.sh
+ExecStartPost=-/usr/local/bin/5gpn-apply-exit.sh
 Restart=on-failure
 RestartSec=5
 User=root
@@ -1450,8 +1450,8 @@ Environment=GOMEMLIMIT=128MiB
 WantedBy=multi-user.target
 EOF
     mkdir -p "${CONF_DIR}/mihomo"
-    systemctl stop 'proxy-gateway-singbox@*.service' 2>/dev/null || true
-    rm -f /etc/systemd/system/proxy-gateway-singbox@.service
+    systemctl stop '5gpn-singbox@*.service' 2>/dev/null || true
+    rm -f /etc/systemd/system/5gpn-singbox@.service
     rm -f "${BASE_DIR}/bin/sing-box" "${BASE_DIR}/bin/singbox-exit-config.py" \
         "${BASE_DIR}/bin/singbox-router-config.py"
     systemctl daemon-reload
@@ -1474,7 +1474,7 @@ migrate_singbox_exits() {
     done
     shopt -u nullglob
     [[ $old -eq 1 ]] || return 0
-    systemctl stop 'proxy-gateway-singbox@*.service' 2>/dev/null || true
+    systemctl stop '5gpn-singbox@*.service' 2>/dev/null || true
     if [[ $current_removed -eq 1 ]]; then
         echo local > "${CONF_DIR}/current-exit"
         ip route flush table "${EXIT_TABLE}" 2>/dev/null || true
@@ -1574,12 +1574,12 @@ exit_wait_device() {
     return 1
 }
 apply_current_exit() {
-    /usr/local/bin/proxy-gateway-apply-exit.sh
+    /usr/local/bin/5gpn-apply-exit.sh
 }
 install_apply_exit_helper() {
-    cat > /usr/local/bin/proxy-gateway-apply-exit.sh <<EOF
+    cat > /usr/local/bin/5gpn-apply-exit.sh <<EOF
 #!/bin/bash
-# Re-apply the currently selected proxy-gateway egress exit.
+# Re-apply the currently selected 5gpn egress exit.
 set -e
 MARK="${EXIT_MARK}"
 TABLE="${EXIT_TABLE}"
@@ -1587,12 +1587,12 @@ STATE="${CONF_DIR}/current-exit"
 EXITS_DIR="${EXITS_DIR}"
 WG_DIR="${WG_DIR}"
 EOF
-    cat >> /usr/local/bin/proxy-gateway-apply-exit.sh <<'EOF'
+    cat >> /usr/local/bin/5gpn-apply-exit.sh <<'EOF'
 
 # Ensure the egress-marking nftables table exists; it may have been wiped by a
 # host firewall reload (flush ruleset) since the last apply.
-if command -v nft >/dev/null 2>&1 && [[ -f /etc/proxy-gateway/pgw-exit.nft ]]; then
-    nft -f /etc/proxy-gateway/pgw-exit.nft 2>/dev/null || true
+if command -v nft >/dev/null 2>&1 && [[ -f /etc/5gpn/pgw-exit.nft ]]; then
+    nft -f /etc/5gpn/pgw-exit.nft 2>/dev/null || true
 fi
 
 # Marked traffic consults the dedicated table; an empty table falls through to
@@ -1607,7 +1607,7 @@ exit_iface() {
         printf 'pgw-%s\n' "$(printf '%s' "$name" | sha256sum | cut -c1-11)"
     fi
 }
-mihomo_unit() { systemd-escape --template=proxy-gateway-mihomo@.service "$1"; }
+mihomo_unit() { systemd-escape --template=5gpn-mihomo@.service "$1"; }
 
 current="local"
 [[ -f "${STATE}" ]] && current="$(cat "${STATE}" 2>/dev/null || echo local)"
@@ -1637,7 +1637,7 @@ ip link show up "${iface}" >/dev/null 2>&1 || { echo "[!] exit '${current}' (${e
 ip route replace default dev "${iface}" table "${TABLE}"
 echo "[OK] egress exit active: ${current} (${etype}, dev ${iface})"
 EOF
-    chmod +x /usr/local/bin/proxy-gateway-apply-exit.sh
+    chmod +x /usr/local/bin/5gpn-apply-exit.sh
 }
 setup_exit_switching() {
     info "Setting up switchable egress (exit) routing..."
@@ -1663,7 +1663,7 @@ setup_exit_switching() {
     install_mihomo_unit
     migrate_singbox_exits
     install_apply_exit_helper
-    cat > /etc/systemd/system/proxy-gateway-exit.service <<'EOF'
+    cat > /etc/systemd/system/5gpn-exit.service <<'EOF'
 [Unit]
 Description=Proxy Gateway egress exit selector
 After=network-online.target nftables.service
@@ -1672,14 +1672,14 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/proxy-gateway-apply-exit.sh
+ExecStart=/usr/local/bin/5gpn-apply-exit.sh
 
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable proxy-gateway-exit.service 2>/dev/null || true
-    /usr/local/bin/proxy-gateway-apply-exit.sh >/dev/null 2>&1 || true
+    systemctl enable 5gpn-exit.service 2>/dev/null || true
+    /usr/local/bin/5gpn-apply-exit.sh >/dev/null 2>&1 || true
     ok "Egress exit routing ready (default: local / direct)"
 }
 list_exits() {
@@ -1977,7 +1977,7 @@ set_exit() {
     local name="${1:-}"
     [[ -z "$name" ]] && { err "Usage: $0 --set-exit <name|local>"; exit 1; }
     ensure_proxy_user
-    [[ -x /usr/local/bin/proxy-gateway-apply-exit.sh ]] || setup_exit_switching >/dev/null
+    [[ -x /usr/local/bin/5gpn-apply-exit.sh ]] || setup_exit_switching >/dev/null
     ip rule add fwmark "${EXIT_MARK}" table "${EXIT_TABLE}" 2>/dev/null || true
     local prev="local"
     [[ -f "${CONF_DIR}/current-exit" ]] && prev="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
@@ -2022,7 +2022,7 @@ regen_smart() {
     [[ -f "${MIHOMO_ROUTER_GEN}" ]] || { err "Router generator missing: ${MIHOMO_ROUTER_GEN}"; exit 1; }
     ensure_proxy_user
     mkdir -p "${EXITS_DIR}" "${RULESET_CACHE}"; chmod 700 "${EXITS_DIR}"
-    [[ -x /usr/local/bin/proxy-gateway-apply-exit.sh ]] || setup_exit_switching >/dev/null
+    [[ -x /usr/local/bin/5gpn-apply-exit.sh ]] || setup_exit_switching >/dev/null
     ensure_mihomo || exit 1
     install_mihomo_unit
     info "Building smart mihomo config and rule providers..."
@@ -2058,12 +2058,12 @@ regen_smart() {
     echo router > "$type_file"
     if [[ "$cur" == "smart" ]]; then
         local apply_ok=1
-        systemctl restart "proxy-gateway-mihomo@smart.service" >/dev/null 2>&1 || apply_ok=0
-        [[ $apply_ok -eq 1 ]] && systemctl is-active --quiet "proxy-gateway-mihomo@smart.service" || apply_ok=0
+        systemctl restart "5gpn-mihomo@smart.service" >/dev/null 2>&1 || apply_ok=0
+        [[ $apply_ok -eq 1 ]] && systemctl is-active --quiet "5gpn-mihomo@smart.service" || apply_ok=0
         [[ $apply_ok -eq 1 ]] && exit_wait_device smart || apply_ok=0
         [[ $apply_ok -eq 1 ]] && apply_current_exit >/dev/null 2>&1 || apply_ok=0
         if [[ $apply_ok -ne 1 ]]; then
-            systemctl stop "proxy-gateway-mihomo@smart.service" >/dev/null 2>&1 || true
+            systemctl stop "5gpn-mihomo@smart.service" >/dev/null 2>&1 || true
             if [[ $had_yaml -eq 1 ]]; then
                 install -m 600 "${backup_dir}/smart.yaml" "$yaml"
             else
@@ -2076,8 +2076,8 @@ regen_smart() {
             fi
             local rollback_ok=1
             if [[ $had_yaml -eq 1 ]]; then
-                systemctl restart "proxy-gateway-mihomo@smart.service" >/dev/null 2>&1 || rollback_ok=0
-                [[ $rollback_ok -eq 1 ]] && systemctl is-active --quiet "proxy-gateway-mihomo@smart.service" || rollback_ok=0
+                systemctl restart "5gpn-mihomo@smart.service" >/dev/null 2>&1 || rollback_ok=0
+                [[ $rollback_ok -eq 1 ]] && systemctl is-active --quiet "5gpn-mihomo@smart.service" || rollback_ok=0
                 [[ $rollback_ok -eq 1 ]] && exit_wait_device smart || rollback_ok=0
                 [[ $rollback_ok -eq 1 ]] && apply_current_exit >/dev/null 2>&1 || rollback_ok=0
             fi
@@ -2367,15 +2367,15 @@ setup_tgbot() {
         return 1
     fi
     install -m 0755 "${LIB_DIR}/tgbot.py" "${BASE_DIR}/bin/tgbot.py"
-    install -m 0755 "${SCRIPT_PATH}" "${BASE_DIR}/bin/proxy-gateway-ctl"
+    install -m 0755 "${SCRIPT_PATH}" "${BASE_DIR}/bin/5gpn-ctl"
     mkdir -p "${CONF_DIR}"
     cat > "${CONF_DIR}/tgbot.env" <<EOF
 TG_BOT_TOKEN=${token}
 TG_ADMIN_IDS=${ids}
-MGMT=${BASE_DIR}/bin/proxy-gateway-ctl
+MGMT=${BASE_DIR}/bin/5gpn-ctl
 EOF
     chmod 600 "${CONF_DIR}/tgbot.env"
-    cat > /etc/systemd/system/proxy-gateway-tgbot.service <<EOF
+    cat > /etc/systemd/system/5gpn-tgbot.service <<EOF
 [Unit]
 Description=Proxy Gateway Telegram control bot
 After=network-online.target
@@ -2393,10 +2393,10 @@ User=root
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now proxy-gateway-tgbot.service
+    systemctl enable --now 5gpn-tgbot.service
     if [[ -z "$ids" ]]; then
         warn "尚未设置授权 ID。给 Bot 发送 /id 获取数字 ID，填入 ${CONF_DIR}/tgbot.env 的 TG_ADMIN_IDS，然后:"
-        warn "  systemctl restart proxy-gateway-tgbot"
+        warn "  systemctl restart 5gpn-tgbot"
     fi
     ok "Telegram bot 已安装。在 Telegram 给你的 Bot 发送 /start 开始操作。"
 }
@@ -2463,15 +2463,15 @@ show_status() {
             echo -e "$svc: ${RED}$status${NC}"
         fi
     done
-    ios_status=$(systemctl is-active proxy-gateway-ios-profile.socket 2>/dev/null || echo "unknown")
+    ios_status=$(systemctl is-active 5gpn-ios-profile.socket 2>/dev/null || echo "unknown")
     if [[ "$ios_status" == "active" ]]; then
-        echo -e "proxy-gateway-ios-profile.socket: ${GREEN}listening${NC}"
+        echo -e "5gpn-ios-profile.socket: ${GREEN}listening${NC}"
     else
-        echo -e "proxy-gateway-ios-profile.socket: ${RED}$ios_status${NC}"
+        echo -e "5gpn-ios-profile.socket: ${RED}$ios_status${NC}"
     fi
-    if systemctl list-unit-files 2>/dev/null | grep -q '^proxy-gateway-tgbot\.service'; then
-        tg_status=$(systemctl is-active proxy-gateway-tgbot 2>/dev/null || echo "unknown")
-        echo -e "proxy-gateway-tgbot: $([[ "$tg_status" == active ]] && echo "${GREEN}running${NC}" || echo "${RED}$tg_status${NC}")"
+    if systemctl list-unit-files 2>/dev/null | grep -q '^5gpn-tgbot\.service'; then
+        tg_status=$(systemctl is-active 5gpn-tgbot 2>/dev/null || echo "unknown")
+        echo -e "5gpn-tgbot: $([[ "$tg_status" == active ]] && echo "${GREEN}running${NC}" || echo "${RED}$tg_status${NC}")"
     fi
     echo ""
     if [[ -f "${CONF_DIR}/.domain" ]]; then
@@ -2500,31 +2500,31 @@ do_uninstall() {
     done
     for f in "${EXITS_DIR}"/*.type; do
         systemctl stop "$(exit_mihomo_unit "$(basename "$f" .type)")" 2>/dev/null || true
-        systemctl stop "proxy-gateway-singbox@$(basename "$f" .type).service" 2>/dev/null || true
+        systemctl stop "5gpn-singbox@$(basename "$f" .type).service" 2>/dev/null || true
     done
     shopt -u nullglob
-    systemctl stop mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
-    systemctl disable mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
-    rm -f /etc/systemd/system/{mosdns,sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-mosdns-rules,proxy-gateway-exit,proxy-gateway-tgbot}.*
-    rm -f /etc/systemd/system/proxy-gateway-ios-profile@.service \
-        /etc/systemd/system/proxy-gateway-mihomo@.service \
-        /etc/systemd/system/proxy-gateway-singbox@.service
+    systemctl stop mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 2>/dev/null || true
+    systemctl disable mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 2>/dev/null || true
+    rm -f /etc/systemd/system/{mosdns,sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,5gpn-ios-profile,update-mosdns-rules,5gpn-exit,5gpn-tgbot}.*
+    rm -f /etc/systemd/system/5gpn-ios-profile@.service \
+        /etc/systemd/system/5gpn-mihomo@.service \
+        /etc/systemd/system/5gpn-singbox@.service
     rm -rf /etc/systemd/system/quic-proxy.service.d /etc/systemd/system/mosdns.service.d \
         /etc/systemd/system/dnsdist.service.d /etc/systemd/system/china-dns-race-proxy.service.d
     systemctl daemon-reload
     rm -rf "$BASE_DIR" /etc/sniproxy.conf /etc/mosdns /etc/dnsdist /usr/local/bin/update-mosdns-rules.sh
     rm -f /usr/local/bin/update-dnsdist-rules.sh /usr/local/bin/mosdns
     rm -f /usr/local/sbin/sniproxy
-    rm -f /usr/local/bin/proxy-gateway-apply-exit.sh
+    rm -f /usr/local/bin/5gpn-apply-exit.sh
     rm -f "${WG_DIR}"/pgw-*.conf
-    # Repair the host firewall BEFORE removing /etc/proxy-gateway, otherwise a
+    # Repair the host firewall BEFORE removing /etc/5gpn, otherwise a
     # managed /etc/nftables.conf would keep a dangling include and fail to load
     # on reboot (leaving the host with no firewall). Also clears auto-mode
     # persistence and the managed marker.
     firewall_cleanup_on_uninstall
-    rm -rf /etc/proxy-gateway
+    rm -rf /etc/5gpn
     rm -f /etc/letsencrypt/renewal-hooks/deploy/99-reload-mosdns.sh
-    rm -f /etc/sysctl.d/99-proxy-gateway.conf
+    rm -f /etc/sysctl.d/99-5gpn.conf
     rm -f /etc/profile.d/go.sh
     if [[ -f /etc/nftables.conf.pgw-backup ]]; then
         warn "Pre-install firewall backup kept at /etc/nftables.conf.pgw-backup (restore manually if wanted)."
@@ -2556,13 +2556,13 @@ force_renew_cert() {
     if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
         certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
             --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
-            --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
-            --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
+            --pre-hook /usr/local/bin/5gpn-open-cert-http.sh \
+            --post-hook /usr/local/bin/5gpn-restore-firewall.sh)
     else
         certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" \
             --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
-            --pre-hook /usr/local/bin/proxy-gateway-open-cert-http.sh \
-            --post-hook /usr/local/bin/proxy-gateway-restore-firewall.sh)
+            --pre-hook /usr/local/bin/5gpn-open-cert-http.sh \
+            --post-hook /usr/local/bin/5gpn-restore-firewall.sh)
     fi
     prepare_certbot_standalone
     trap cleanup_certbot_standalone RETURN

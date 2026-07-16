@@ -45,7 +45,7 @@ fail() { echo "$1" >&2; exit 1; }
 # --- iOS server must be socket-activated (zero idle process) -----------------
 [[ -f "${ioshttp}" ]] || fail "ios-http.py must exist"
 python3 -m py_compile "${ioshttp}" || fail "ios-http.py must compile"
-[[ "${install_body}" == *'proxy-gateway-ios-profile.socket'* ]] || fail "iOS server must use a systemd socket"
+[[ "${install_body}" == *'5gpn-ios-profile.socket'* ]] || fail "iOS server must use a systemd socket"
 [[ "${install_body}" == *'Accept=yes'* ]] || fail "iOS socket must be inetd-style (Accept=yes)"
 [[ "${install_body}" != *'http.server'* ]] || fail "the always-on python http.server must be gone"
 

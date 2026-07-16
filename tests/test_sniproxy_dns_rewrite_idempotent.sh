@@ -38,7 +38,7 @@ ln -s "${root}/lib" "${tmp}/lib"
 sed \
   -e "s#/etc/sniproxy.conf#${tmp}/sniproxy.conf#g" \
   -e "s#/etc/mosdns#${tmp}/etc/mosdns#g" \
-  -e "s#/opt/proxy-gateway/etc#${tmp}/opt/etc#g" \
+  -e "s#/opt/5gpn/etc#${tmp}/opt/etc#g" \
   -e "s#/usr/local/bin/update-mosdns-rules.sh#${tmp}/update-mosdns-rules.sh#g" \
   "${root}/install.sh" > "${script}"
 chmod +x "${script}"

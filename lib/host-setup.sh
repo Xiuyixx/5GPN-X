@@ -8,7 +8,7 @@
 resolve_tuning_profile() {
     # essential (default): only what the gateway needs to function.
     # performance:         the legacy aggressive tuning (opt-in).
-    local sysctl_file="${PGW_SYSCTL_FILE:-/etc/sysctl.d/99-proxy-gateway.conf}"
+    local sysctl_file="${PGW_SYSCTL_FILE:-/etc/sysctl.d/99-5gpn.conf}"
     case "${PGW_TUNING:-}" in
         essential|performance) echo "${PGW_TUNING}"; return 0 ;;
         "") ;;
@@ -22,7 +22,7 @@ resolve_tuning_profile() {
     echo essential
 }
 write_essential_sysctl() {
-    cat > /etc/sysctl.d/99-proxy-gateway.conf <<EOF
+    cat > /etc/sysctl.d/99-5gpn.conf <<EOF
 # Proxy Gateway Optimizations (profile: essential)
 # Only settings the gateway needs to function. Re-run the installer with
 # PGW_TUNING=performance for the aggressive throughput profile.
@@ -32,7 +32,7 @@ net.ipv4.conf.default.rp_filter=2
 EOF
     modprobe tcp_bbr >/dev/null 2>&1 || true
     if grep -qw bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
-        cat >> /etc/sysctl.d/99-proxy-gateway.conf <<EOF
+        cat >> /etc/sysctl.d/99-5gpn.conf <<EOF
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 EOF
@@ -41,7 +41,7 @@ EOF
 write_performance_sysctl() {
     modprobe nf_conntrack >/dev/null 2>&1 || true
     mkdir -p /etc/modules-load.d
-    echo nf_conntrack > /etc/modules-load.d/proxy-gateway-net.conf
+    echo nf_conntrack > /etc/modules-load.d/5gpn-net.conf
     local sy_file_max sy_nr_open sy_netdev sy_somaxconn sy_conntrack_max
     local sy_tcp_syn sy_tcp_orphans sy_buf_max sy_swappiness
     if [[ "${LOWMEM:-0}" == "1" ]]; then
@@ -55,7 +55,7 @@ write_performance_sysctl() {
         sy_tcp_syn=65536;     sy_tcp_orphans=10240
         sy_buf_max=134217728; sy_swappiness=0
     fi
-    cat > /etc/sysctl.d/99-proxy-gateway.conf <<EOF
+    cat > /etc/sysctl.d/99-5gpn.conf <<EOF
 # Proxy Gateway Optimizations (profile: performance$([[ "${LOWMEM:-0}" == "1" ]] && printf '%s' ', low-memory scaled'; true))
 fs.file-max=${sy_file_max}
 fs.nr_open=${sy_nr_open}
@@ -116,16 +116,16 @@ EOF
     if [[ -n "$mem_pages" && "$mem_pages" -gt 0 ]]; then
         {
             echo "net.ipv4.tcp_mem=$((mem_pages * 12 / 100)) $((mem_pages * 50 / 100)) $((mem_pages * 70 / 100))"
-        } >> /etc/sysctl.d/99-proxy-gateway.conf
+        } >> /etc/sysctl.d/99-5gpn.conf
     fi
     if grep -qE '^[[:space:]]*vm\.swappiness[[:space:]]*=' /etc/sysctl.conf 2>/dev/null; then
-        sed -i -E 's/^([[:space:]]*vm\.swappiness[[:space:]]*=)/# disabled by proxy-gateway (see 99-proxy-gateway.conf): \1/' /etc/sysctl.conf
+        sed -i -E 's/^([[:space:]]*vm\.swappiness[[:space:]]*=)/# disabled by 5gpn (see 99-5gpn.conf): \1/' /etc/sysctl.conf
     fi
 }
 system_tuning() {
     local profile; profile="$(resolve_tuning_profile)"
     info "Applying kernel and system tuning (profile: ${profile})..."
-    local sysctl_file=/etc/sysctl.d/99-proxy-gateway.conf backup=""
+    local sysctl_file=/etc/sysctl.d/99-5gpn.conf backup=""
     if [[ -f "$sysctl_file" ]]; then
         backup="$(mktemp)"
         cp -a "$sysctl_file" "$backup"
@@ -147,9 +147,9 @@ system_tuning() {
         return 1
     fi
     [[ -n "$backup" ]] && rm -f "$backup"
-    if ! grep -q "proxy-gateway-limits" /etc/security/limits.conf 2>/dev/null; then
+    if ! grep -q "5gpn-limits" /etc/security/limits.conf 2>/dev/null; then
         cat >> /etc/security/limits.conf <<'EOF'
-# proxy-gateway-limits
+# 5gpn-limits
 * soft nofile 1048576
 * hard nofile 1048576
 root soft nofile 1048576
@@ -172,7 +172,7 @@ ExecStart=/bin/sh -c 'test -w /sys/kernel/mm/transparent_hugepage/defrag && echo
 WantedBy=basic.target
 EOF
     mkdir -p /etc/systemd/journald.conf.d
-    cat > /etc/systemd/journald.conf.d/99-proxy-gateway.conf <<'EOF'
+    cat > /etc/systemd/journald.conf.d/99-5gpn.conf <<'EOF'
 [Journal]
 SystemMaxUse=384M
 SystemMaxFileSize=128M
@@ -183,7 +183,7 @@ EOF
     systemctl restart systemd-journald 2>/dev/null || true
     ok "System tuning applied"
 }
-PGW_EXIT_NFT="/etc/proxy-gateway/pgw-exit.nft"
+PGW_EXIT_NFT="/etc/5gpn/pgw-exit.nft"
 detect_ssh_ports() {
     # Union of: the current session's server port, sshd's configured ports and
     # the ports sshd actually listens on. Never assume 22 is the only entrance.
@@ -323,8 +323,8 @@ firewall_auto_allow() {
     warn "FIREWALL_MODE=auto: no known firewall found; nothing to change."
     firewall_preserve_hints "$ssh_ports"
 }
-PGW_AUTO_ALLOW_SCRIPT_DEFAULT="/usr/local/bin/proxy-gateway-fw-allow.sh"
-PGW_AUTO_ALLOW_UNIT_DEFAULT="/etc/systemd/system/proxy-gateway-firewall-allow.service"
+PGW_AUTO_ALLOW_SCRIPT_DEFAULT="/usr/local/bin/5gpn-fw-allow.sh"
+PGW_AUTO_ALLOW_UNIT_DEFAULT="/etc/systemd/system/5gpn-firewall-allow.service"
 write_auto_allow_persistence() {
     # auto mode adds rules to the *running* firewall, which is lost on reboot.
     # Persist an idempotent replay script + a oneshot unit ordered after the
@@ -336,7 +336,7 @@ write_auto_allow_persistence() {
     {
         echo '#!/bin/bash'
         echo '# 5GPN-X auto-mode firewall allow rules. Idempotent; safe to replay.'
-        echo '# Managed by the installer (FIREWALL_MODE=auto). Tag: proxy-gateway-auto'
+        echo '# Managed by the installer (FIREWALL_MODE=auto). Tag: 5gpn-auto'
         printf 'tcp_list="%s,853,8111"\n' "$ssh_ports"
         printf 'client_nets="%s"\n' "$client_nets"
         cat <<'AUTO_BODY'
@@ -344,32 +344,32 @@ if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null
     have="$(nft list chain inet filter input 2>/dev/null)"
     for p in ${tcp_list//,/ }; do
         printf '%s' "$have" | grep -qE "tcp dport ${p} .*accept" || \
-            nft insert rule inet filter input tcp dport "$p" accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+            nft insert rule inet filter input tcp dport "$p" accept comment '"5gpn-auto"' 2>/dev/null || true
     done
     for net in ${client_nets}; do
         printf '%s' "$have" | grep -q "${net}.*dport 53" || \
-            nft insert rule inet filter input ip saddr "${net}" tcp dport 53 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+            nft insert rule inet filter input ip saddr "${net}" tcp dport 53 accept comment '"5gpn-auto"' 2>/dev/null || true
         printf '%s' "$have" | grep -q "${net}.*udp.*53" || \
-            nft insert rule inet filter input ip saddr "${net}" udp dport 53 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+            nft insert rule inet filter input ip saddr "${net}" udp dport 53 accept comment '"5gpn-auto"' 2>/dev/null || true
         printf '%s' "$have" | grep -q "${net} tcp" || \
-            nft insert rule inet filter input ip saddr "${net}" tcp dport '{ 80, 443 }' accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+            nft insert rule inet filter input ip saddr "${net}" tcp dport '{ 80, 443 }' accept comment '"5gpn-auto"' 2>/dev/null || true
         printf '%s' "$have" | grep -q "${net} udp" || \
-            nft insert rule inet filter input ip saddr "${net}" udp dport 443 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+            nft insert rule inet filter input ip saddr "${net}" udp dport 443 accept comment '"5gpn-auto"' 2>/dev/null || true
     done
 elif command -v iptables >/dev/null 2>&1; then
     for p in ${tcp_list//,/ }; do
-        iptables -C INPUT -p tcp --dport "$p" -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -p tcp --dport "$p" -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
+        iptables -C INPUT -p tcp --dport "$p" -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -p tcp --dport "$p" -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
     done
     for net in ${client_nets}; do
-        iptables -C INPUT -s "${net}" -p tcp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s "${net}" -p tcp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
-        iptables -C INPUT -s "${net}" -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s "${net}" -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
-        iptables -C INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
-        iptables -C INPUT -s "${net}" -p udp --dport 443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s "${net}" -p udp --dport 443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
+        iptables -C INPUT -s "${net}" -p tcp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p tcp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
+        iptables -C INPUT -s "${net}" -p udp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p udp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
+        iptables -C INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
+        iptables -C INPUT -s "${net}" -p udp --dport 443 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p udp --dport 443 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
     done
 fi
 AUTO_BODY
@@ -389,7 +389,7 @@ ExecStart=${script}
 WantedBy=multi-user.target
 AUTO_UNIT
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl enable proxy-gateway-firewall-allow.service >/dev/null 2>&1 || true
+    systemctl enable 5gpn-firewall-allow.service >/dev/null 2>&1 || true
 }
 run_auto_allow_persistence() {
     local script="${PGW_AUTO_ALLOW_SCRIPT:-${PGW_AUTO_ALLOW_SCRIPT_DEFAULT}}"
@@ -441,7 +441,7 @@ table inet filter {
 
 # Egress-marking table (pgw_exit) lives in its own include so it can also be
 # reloaded independently after partial firewall reloads.
-include "/etc/proxy-gateway/pgw-exit.nft"
+include "/etc/5gpn/pgw-exit.nft"
 EOF
         sed -i "s/__TCP_PORTS__/${tcp_ports}/" "$tmp_conf"
         if ! nft -c -f "$tmp_conf" >/dev/null 2>&1; then
@@ -482,27 +482,27 @@ EOF
     fi
     # Record that this host has project-managed firewall state so uninstall can
     # clean up safely. This marker never opts a later install into managed mode.
-    local mark_file="${PGW_FW_MARK:-/etc/proxy-gateway/.firewall-managed}"
+    local mark_file="${PGW_FW_MARK:-/etc/5gpn/.firewall-managed}"
     mkdir -p "$(dirname "$mark_file")"
     : > "$mark_file"
 }
 firewall_cleanup_on_uninstall() {
-    # Called by do_uninstall BEFORE /etc/proxy-gateway is removed. managed mode
-    # writes /etc/nftables.conf with include "/etc/proxy-gateway/pgw-exit.nft";
+    # Called by do_uninstall BEFORE /etc/5gpn is removed. managed mode
+    # writes /etc/nftables.conf with include "/etc/5gpn/pgw-exit.nft";
     # once that directory is gone the include dangles and nftables.service fails
     # to load on the next boot, leaving the host with NO firewall on a public
     # IP. Restore the pre-install backup, or strip our include, validating
     # before writing. Do the analogous check for the iptables ruleset.
     local nft_conf="${PGW_NFT_CONF:-/etc/nftables.conf}"
     local ipt_rules="${PGW_IPT_RULES:-/etc/iptables.rules}"
-    if [[ -f "$nft_conf" ]] && grep -qE 'pgw_exit|/etc/proxy-gateway/pgw-exit\.nft' "$nft_conf" 2>/dev/null; then
+    if [[ -f "$nft_conf" ]] && grep -qE 'pgw_exit|/etc/5gpn/pgw-exit\.nft' "$nft_conf" 2>/dev/null; then
         if [[ -f "${nft_conf}.pgw-backup" ]]; then
             install -m 755 "${nft_conf}.pgw-backup" "$nft_conf"
             rm -f "${nft_conf}.pgw-backup"
             info "Restored pre-install ${nft_conf} from backup."
         else
             local tmp; tmp="$(mktemp)"
-            grep -vE 'include[[:space:]]+"/etc/proxy-gateway/pgw-exit\.nft"' "$nft_conf" > "$tmp"
+            grep -vE 'include[[:space:]]+"/etc/5gpn/pgw-exit\.nft"' "$nft_conf" > "$tmp"
             if command -v nft >/dev/null 2>&1 && ! nft -c -f "$tmp" >/dev/null 2>&1; then
                 warn "Could not derive a valid ${nft_conf} after dropping the pgw-exit include; writing a minimal empty ruleset instead."
                 printf '#!/usr/sbin/nft -f\nflush ruleset\n' > "$tmp"
@@ -524,14 +524,14 @@ firewall_cleanup_on_uninstall() {
         fi
     fi
     # Drop the auto-mode persistence artifacts and the managed marker.
-    local auto_script="${PGW_AUTO_ALLOW_SCRIPT:-${PGW_AUTO_ALLOW_SCRIPT_DEFAULT:-/usr/local/bin/proxy-gateway-fw-allow.sh}}"
-    local auto_unit="${PGW_AUTO_ALLOW_UNIT:-${PGW_AUTO_ALLOW_UNIT_DEFAULT:-/etc/systemd/system/proxy-gateway-firewall-allow.service}}"
+    local auto_script="${PGW_AUTO_ALLOW_SCRIPT:-${PGW_AUTO_ALLOW_SCRIPT_DEFAULT:-/usr/local/bin/5gpn-fw-allow.sh}}"
+    local auto_unit="${PGW_AUTO_ALLOW_UNIT:-${PGW_AUTO_ALLOW_UNIT_DEFAULT:-/etc/systemd/system/5gpn-firewall-allow.service}}"
     if [[ -f "$auto_unit" ]]; then
-        systemctl disable --now proxy-gateway-firewall-allow.service >/dev/null 2>&1 || true
+        systemctl disable --now 5gpn-firewall-allow.service >/dev/null 2>&1 || true
     fi
     rm -f "$auto_script" "$auto_unit"
     systemctl daemon-reload >/dev/null 2>&1 || true
-    rm -f "${PGW_FW_MARK:-/etc/proxy-gateway/.firewall-managed}"
+    rm -f "${PGW_FW_MARK:-/etc/5gpn/.firewall-managed}"
     nft delete table inet pgw_exit 2>/dev/null || true
 }
 setup_firewall() {
@@ -554,9 +554,9 @@ setup_firewall() {
 open_cert_http_port() {
     info "Temporarily opening TCP/80 for Let's Encrypt HTTP-01..."
     if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
-        nft insert rule inet filter input tcp dport 80 accept comment '"proxy-gateway-cert-http"' 2>/dev/null || true
+        nft insert rule inet filter input tcp dport 80 accept comment '"5gpn-cert-http"' 2>/dev/null || true
     elif command -v iptables >/dev/null 2>&1; then
-        iptables -I INPUT 1 -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null || true
+        iptables -I INPUT 1 -p tcp --dport 80 -m comment --comment 5gpn-cert-http -j ACCEPT 2>/dev/null || true
     fi
 }
 close_cert_http_port() {
@@ -564,12 +564,12 @@ close_cert_http_port() {
     # because in preserve/auto mode /etc/nftables.conf belongs to the user.
     local h
     if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then
-        while h="$(nft --handle list chain inet filter input 2>/dev/null | awk '/proxy-gateway-cert-http/ { print $NF; exit }')" && [[ -n "$h" ]]; do
+        while h="$(nft --handle list chain inet filter input 2>/dev/null | awk '/5gpn-cert-http/ { print $NF; exit }')" && [[ -n "$h" ]]; do
             nft delete rule inet filter input handle "$h" 2>/dev/null || break
         done
     fi
     if command -v iptables >/dev/null 2>&1; then
-        while iptables -D INPUT -p tcp --dport 80 -m comment --comment proxy-gateway-cert-http -j ACCEPT 2>/dev/null; do :; done
+        while iptables -D INPUT -p tcp --dport 80 -m comment --comment 5gpn-cert-http -j ACCEPT 2>/dev/null; do :; done
     fi
 }
 restore_reverse_proxy_firewall() {

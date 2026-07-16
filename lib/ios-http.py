@@ -10,7 +10,7 @@ import os
 import signal
 import sys
 
-WWW_DIR = os.environ.get("WWW_DIR", "/opt/proxy-gateway/www")
+WWW_DIR = os.environ.get("WWW_DIR", "/opt/5gpn/www")
 
 ROUTES = {
     "/ios-dot.mobileconfig": ("ios-dot.mobileconfig", "application/x-apple-aspen-config"),
