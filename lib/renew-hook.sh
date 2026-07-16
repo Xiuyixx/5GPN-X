@@ -1,8 +1,8 @@
 #!/bin/bash
-# Let's Encrypt renewal hook - copy certs to dnsdist-readable location and reload
+# Let's Encrypt renewal hook - copy certs to mosdns-readable location and reload
 set -e
 
-DOMAIN=$(cat /opt/proxy-gateway/etc/.domain 2>/dev/null || cat /etc/dnsdist/.domain 2>/dev/null || true)
+DOMAIN=$(cat /opt/proxy-gateway/etc/.domain 2>/dev/null || cat /etc/mosdns/.domain 2>/dev/null || true)
 if [[ -n "$DOMAIN" && -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     LIVE_DIR="/etc/letsencrypt/live/${DOMAIN}"
 else
@@ -13,12 +13,12 @@ if [[ -z "$LIVE_DIR" ]]; then
     exit 1
 fi
 
-mkdir -p /etc/dnsdist/certs
-cp "${LIVE_DIR}/fullchain.pem" /etc/dnsdist/certs/fullchain.pem
-cp "${LIVE_DIR}/privkey.pem" /etc/dnsdist/certs/privkey.pem
-chown -R _dnsdist:_dnsdist /etc/dnsdist/certs/
-chmod 640 /etc/dnsdist/certs/*.pem
+mkdir -p /etc/mosdns/certs
+cp "${LIVE_DIR}/fullchain.pem" /etc/mosdns/certs/fullchain.pem
+cp "${LIVE_DIR}/privkey.pem" /etc/mosdns/certs/privkey.pem
+chown -R mosdns:mosdns /etc/mosdns/certs/
+chmod 600 /etc/mosdns/certs/*.pem
 
-if systemctl is-active --quiet dnsdist; then
-    systemctl restart dnsdist   # dnsdist can't hot-reload (SIGHUP exits it); restart applies the new cert
+if systemctl is-active --quiet mosdns; then
+    systemctl restart mosdns
 fi

@@ -54,10 +54,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
-      - name: Test quic-proxy and china-dns-race-proxy
+      - name: Test quic-proxy
         run: |
           set -euo pipefail
-          for prog in quic-proxy china-dns-race-proxy; do
+          for prog in quic-proxy; do
             dir="$(mktemp -d)"
             cp "lib/${prog}.go" "lib/${prog}_test.go" "$dir/"
             (cd "$dir" && go mod init "$prog" >/dev/null && go vet ./... && go test ./...)

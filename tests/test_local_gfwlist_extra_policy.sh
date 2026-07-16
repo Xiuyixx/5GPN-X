@@ -19,8 +19,8 @@ assert_contains() {
 
 assert_contains "${rules}" 'GFWLIST_EXTRA_FILE="${BASE_DIR}/gfwlist-extra-local.txt"' 'local extra list path'
 assert_contains "${rules}" 'append_local_gfwlist_extras()' 'local extra append function'
-assert_contains "${rules}" 'grep -Fxq "${domain}" "${gfw_domain_index}"' 'dedupe against downloaded GFWList'
-assert_contains "${rules}" 'gfwList:add(newDNSName(\"${domain}\"))' 'append extra domains to dnsdist rules'
-assert_contains "${readme}" '/etc/dnsdist/gfwlist-extra-local.txt' 'operator documentation for local extras'
+assert_contains "${rules}" 'printf '\''%s\n'\'' "$domain"' 'append valid local domains to the mosdns domain set'
+assert_contains "${rules}" 'sort -u -o "$GFWLIST_FILE" "$GFWLIST_FILE"' 'dedupe the merged mosdns domain set'
+assert_contains "${readme}" '/etc/mosdns/gfwlist-extra-local.txt' 'operator documentation for local extras'
 
 echo "local GFWList extra policy markers OK"

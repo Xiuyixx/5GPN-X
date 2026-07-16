@@ -1,0 +1,150 @@
+log:
+  level: info
+
+plugins:
+  - tag: gfw_domains
+    type: domain_set
+    args:
+      files:
+        - /etc/mosdns/gfwlist.txt
+
+  - tag: china_domains
+    type: domain_set
+    args:
+      files:
+        - /etc/mosdns/chinalist.txt
+
+  - tag: remote_primary
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+__REMOTE_PRIMARY_UPSTREAMS__
+
+  - tag: remote_secondary
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+__REMOTE_SECONDARY_UPSTREAMS__
+
+  - tag: local_primary_forward
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+__LOCAL_PRIMARY_UPSTREAMS__
+
+  - tag: local_secondary_forward
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+__LOCAL_SECONDARY_UPSTREAMS__
+
+  - tag: local_primary
+    type: sequence
+    args:
+      - exec: ecs 139.226.48.1
+      - exec: $local_primary_forward
+
+  - tag: local_secondary
+    type: sequence
+    args:
+      - exec: ecs 139.226.48.1
+      - exec: $local_secondary_forward
+
+  - tag: remote_fallback
+    type: fallback
+    args:
+      primary: remote_primary
+      secondary: remote_secondary
+      threshold: 1000
+      always_standby: true
+
+  - tag: local_fallback
+    type: fallback
+    args:
+      primary: local_primary
+      secondary: local_secondary
+      threshold: 800
+      always_standby: true
+
+  - tag: remote_cache
+    type: cache
+    args:
+      size: __CACHE_SIZE__
+      lazy_cache_ttl: 300
+
+  - tag: local_cache
+    type: cache
+    args:
+      size: __CACHE_SIZE__
+      lazy_cache_ttl: 300
+
+  - tag: remote_resolve
+    type: sequence
+    args:
+      - exec: $remote_cache
+      - exec: $remote_fallback
+
+  - tag: local_resolve
+    type: sequence
+    args:
+      - exec: $local_cache
+      - exec: $local_fallback
+
+  # Only gateway client networks receive synthetic proxy answers. Queries from
+  # Wi-Fi/public source addresses always use remote_resolve and retain real A
+  # and AAAA records.
+  - tag: private_client
+    type: sequence
+    args:
+      - matches:
+          - qtype 28
+        exec: reject 0
+      - matches:
+          - qtype 1
+          - qname $gfw_domains
+        exec: black_hole __SERVER_IP__
+      - matches:
+          - has_resp
+        exec: accept
+      - matches:
+          - qname $china_domains
+        exec: goto local_resolve
+      - matches:
+          - qtype 1
+        exec: black_hole __SERVER_IP__
+      - matches:
+          - has_resp
+        exec: accept
+      - exec: goto remote_resolve
+
+  - tag: main_sequence
+    type: sequence
+    args:
+      - matches:
+          - client_ip 172.22.0.0/16 10.100.0.0/16
+        exec: goto private_client
+      - exec: goto remote_resolve
+
+  - tag: udp_53
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: "0.0.0.0:53"
+
+  - tag: tcp_53
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: "0.0.0.0:53"
+
+  - tag: dot_853
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: "0.0.0.0:853"
+      cert: /etc/mosdns/certs/fullchain.pem
+      key: /etc/mosdns/certs/privkey.pem

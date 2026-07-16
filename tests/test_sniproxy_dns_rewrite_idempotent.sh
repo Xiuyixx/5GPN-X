@@ -12,7 +12,7 @@ exit 0
 EOF
 chmod +x "${tmp}/systemctl"
 
-mkdir -p "${tmp}/etc/dnsdist" "${tmp}/opt/etc" "${tmp}/systemd"
+mkdir -p "${tmp}/etc/mosdns" "${tmp}/opt/etc"
 cat > "${tmp}/sniproxy.conf" <<'EOF'
 user pxout
 pidfile /var/run/sniproxy.pid
@@ -26,28 +26,27 @@ listener 80 {
     proto http
 }
 EOF
-cat > "${tmp}/update-dnsdist-rules.sh" <<'EOF'
+cat > "${tmp}/update-mosdns-rules.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "${tmp}/update-dnsdist-rules.sh"
+chmod +x "${tmp}/update-mosdns-rules.sh"
 
 script="${tmp}/install-wrapper.sh"
 # install.sh sources lib/host-setup.sh relative to its own directory.
 ln -s "${root}/lib" "${tmp}/lib"
 sed \
   -e "s#/etc/sniproxy.conf#${tmp}/sniproxy.conf#g" \
-  -e "s#/etc/dnsdist#${tmp}/etc/dnsdist#g" \
+  -e "s#/etc/mosdns#${tmp}/etc/mosdns#g" \
   -e "s#/opt/proxy-gateway/etc#${tmp}/opt/etc#g" \
-  -e "s#/etc/systemd/system/china-dns-race-proxy.service#${tmp}/systemd/china-dns-race-proxy.service#g" \
-  -e "s#/usr/local/bin/update-dnsdist-rules.sh#${tmp}/update-dnsdist-rules.sh#g" \
+  -e "s#/usr/local/bin/update-mosdns-rules.sh#${tmp}/update-mosdns-rules.sh#g" \
   "${root}/install.sh" > "${script}"
 chmod +x "${script}"
 
 # G5PNX_BOOTSTRAPPED prevents the wrapper (which lives outside the repo and has
 # no lib/) from re-execing a freshly downloaded install.sh: that pristine copy
 # would ignore every sed-redirected path above and write to the REAL host
-# config (/etc/dnsdist, systemctl restart dnsdist, ...).
+# config (/etc/mosdns, systemctl restart mosdns, ...).
 export G5PNX_BOOTSTRAPPED=1
 PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns "22.22.22.22" "223.5.5.5"
 PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns "22.22.22.22" "223.5.5.5"

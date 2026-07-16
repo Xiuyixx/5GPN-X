@@ -25,13 +25,14 @@ MIHOMO_CFG_GEN="/opt/proxy-gateway/bin/mihomo-exit-config.py"
 MIHOMO_ROUTER_GEN="/opt/proxy-gateway/bin/mihomo-router-config.py"
 RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
 MIHOMO_VERSION_DEFAULT="1.19.28"
+MOSDNS_VERSION_DEFAULT="5.3.4"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8")
 DEFAULT_LOCAL_DNS=("223.5.5.5" "119.29.29.29")
 bootstrap_from_repo_if_needed() {
     local required=(
         install.sh
-        lib/renew-hook.sh lib/sniproxy.conf lib/quic-proxy.go lib/china-dns-race-proxy.go
-        lib/dnsdist.conf.template lib/update-rules.sh lib/ios-http.py lib/tgbot.py
+        lib/renew-hook.sh lib/sniproxy.conf lib/quic-proxy.go
+        lib/mosdns.yaml.template lib/update-rules.sh lib/ios-http.py lib/tgbot.py
         lib/wa-shim.py lib/rules-import.py lib/mihomo-exit-config.py
         lib/mihomo-router-config.py lib/rules-default.conf lib/host-setup.sh
     )
@@ -63,55 +64,6 @@ info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()   { echo -e "${RED}[ERR]${NC}  $*" >&2; }
-render_remote_dns_servers() {
-    local input="${1:-}"
-    local pool="${2:-overseas}"
-    local prefix="${3:-overseas}"
-    local dns_list=()
-    local item order=1 name
-    if [[ -z "$input" ]]; then
-        dns_list=("${DEFAULT_REMOTE_DNS[@]}")
-    else
-        input="${input//,/ }"
-        read -r -a dns_list <<< "$input"
-    fi
-    for item in "${dns_list[@]}"; do
-        [[ -z "$item" ]] && continue
-        if [[ ! "$item" =~ ^[0-9A-Fa-f:.]+$ ]]; then
-            warn "Skipping invalid remote DNS address: $item"
-            continue
-        fi
-        name="${prefix}${order}"
-        printf 'newServer({address="%s", pool="%s", name="%s", order=%d, useClientSubnet=true})\n' "$(dnsdist_upstream_address "$item")" "$pool" "$name" "$order"
-        order=$((order + 1))
-    done
-}
-dnsdist_upstream_address() {
-    local item="${1:-}" host port
-    if [[ "$item" == *:* ]]; then
-        if python3 - "$item" <<'PYEOF' >/dev/null 2>&1
-import ipaddress, sys
-ipaddress.ip_address(sys.argv[1])
-PYEOF
-        then
-            if [[ "$item" == *:*:* ]]; then
-                printf '[%s]:53' "$item"
-            else
-                printf '%s:53' "$item"
-            fi
-        else
-            host="${item%:*}"
-            port="${item##*:}"
-            if [[ "$host" == *:* ]]; then
-                printf '[%s]:%s' "$host" "$port"
-            else
-                printf '%s:%s' "$host" "$port"
-            fi
-        fi
-    else
-        printf '%s:53' "$item"
-    fi
-}
 render_sniproxy_dns_nameservers() {
     local input="${1:-}"
     local dns_list=()
@@ -160,7 +112,7 @@ normalize_dns_upstreams() {
     for item in "${dns_list[@]}"; do
         [[ -z "$item" ]] && continue
         if [[ "$item" == *://* ]]; then
-            err "Invalid DNS upstream: $item. 5GPN-X dnsdist/china-dns-race-proxy accepts IP[:port], not DoH/DoT URLs."
+            err "Invalid DNS upstream: $item. 5GPN-X mosdns accepts IP[:port], not DoH/DoT URLs."
             exit 1
         fi
         if [[ "$item" == *:* ]]; then
@@ -192,30 +144,6 @@ PYEOF
         fi
     done
     [[ ${#out[@]} -gt 0 ]] || { err "DNS upstream list cannot be empty"; exit 1; }
-    printf '%s' "${out[*]}"
-}
-dns_upstreams_with_ports() {
-    local input="${1:-}" item out=()
-    read -r -a out <<< "$input"
-    for i in "${!out[@]}"; do
-        item="${out[$i]}"
-        if [[ "$item" == *:* ]] && ! python3 - "$item" <<'PYEOF' >/dev/null 2>&1
-import ipaddress, sys
-ipaddress.ip_address(sys.argv[1])
-PYEOF
-        then
-            if [[ "${item%:*}" == *:* ]]; then
-                out[i]="[${item%:*}]:${item##*:}"
-            fi
-            continue
-        fi
-        if [[ "$item" == *:*:* ]]; then
-            out[i]="[${item}]:53"
-        else
-            out[i]="${item}:53"
-        fi
-    done
-    local IFS=,
     printf '%s' "${out[*]}"
 }
 rewrite_sniproxy_dns() {
@@ -303,6 +231,12 @@ certbot_diagnostics() {
 configure_dns_upstreams() {
     local remote_selected="${REMOTE_DNS:-${DNS_UPSTREAMS:-${OVERSEAS_DNS:-${PRIVATE_OVERSEAS_DNS:-${SNIPROXY_DNS:-}}}}}"
     local local_selected="${LOCAL_DNS:-}"
+    if [[ -z "$remote_selected" ]]; then
+        remote_selected=$(cat /etc/mosdns/.remote_dns 2>/dev/null || cat /etc/dnsdist/.remote_dns 2>/dev/null || true)
+    fi
+    if [[ -z "$local_selected" ]]; then
+        local_selected=$(cat /etc/mosdns/.local_dns 2>/dev/null || cat /etc/dnsdist/.local_dns 2>/dev/null || true)
+    fi
     if [[ -z "$remote_selected" && -t 0 ]]; then
         echo ""
         read -r -p "国际 DNS remote [1.1.1.1,8.8.8.8]: " remote_selected
@@ -331,14 +265,14 @@ Usage: $0 [OPTION]
 Options:
   (none)         Full interactive installation
   --status       Show service status
-  --update-rules Update GFWList/ChinaList and reload dnsdist
+  --update-rules Update GFWList/ChinaList and reload mosdns
   --renew-cert   Force renew certificates and reload services
   --set-dot-domain <domain>
-                 Change DoT domain, issue certificate, reload dnsdist
+                 Change DoT domain, issue certificate, reload mosdns
   --set-dot-domain-force <domain>
                  Force-change DoT domain without issuing a certificate first
   --set-dns <remote-dns> [local-dns]
-                 Set DNS upstreams and reload dnsdist/sniproxy/china DNS race.
+                 Set primary/fallback DNS upstreams and reload mosdns/sniproxy.
                  remote is used for international/proxy-side resolution; local
                  is used for ChinaList direct resolution.
   --list-exits   List configured egress exits and which one is active
@@ -580,9 +514,14 @@ check_port_53() {
         pid=$(printf '%s\n' "$pids" | head -n1)
         proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
         warn "Port 53 is already in use by: $(port53_owner_summary)"
-        read -r -p "Stop and disable '$proc' to free port 53? [Y/n]: " confirm
+        local confirm=""
+        if [[ "$proc" == "dnsdist" || "$proc" == "mosdns" ]]; then
+            info "Stopping the existing $proc service for DNS migration/update..."
+        else
+            read -r -p "Stop and disable '$proc' to free port 53? [Y/n]: " confirm
+        fi
         if [[ "$confirm" =~ ^[Nn]$ ]]; then
-            err "Port 53 must be free for dnsdist to start. Aborting."
+            err "Port 53 must be free for mosdns to start. Aborting."
             exit 1
         fi
         for pid in $pids; do
@@ -654,6 +593,9 @@ EOF
             fi
             stop_systemd_unit_and_socket systemd-resolved.service
             ;;
+        mosdns)
+            stop_systemd_unit_and_socket mosdns.service
+            ;;
         dnsdist)
             stop_systemd_unit_and_socket dnsdist.service
             ;;
@@ -698,7 +640,7 @@ install_deps() {
                 build-essential git wget curl ca-certificates \
                 libev-dev "${pcre_dev_pkg}" libudns-dev libssl-dev \
                 autoconf automake libtool pkg-config \
-                dnsdist certbot python3-certbot-dns-cloudflare \
+                certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap2-bin \
                 nftables qrencode wireguard-tools || true
             ;;
@@ -707,7 +649,7 @@ install_deps() {
                 gcc gcc-c++ make git wget curl ca-certificates \
                 libev-devel pcre-devel openssl-devel \
                 autoconf automake libtool pkgconfig \
-                dnsdist certbot python3-certbot-dns-cloudflare \
+                certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap-ng-utils \
                 nftables qrencode wireguard-tools || true
             ;;
@@ -737,13 +679,48 @@ install_deps() {
                 pip3 install --upgrade certbot josepy cryptography 2>/dev/null || true
         fi
     fi
-    for bin in dnsdist certbot; do
-        if ! command -v "$bin" >/dev/null 2>&1; then
-            err "Required package '$bin' was not installed successfully."
-            err "Please check your package manager output above."
-            exit 1
-        fi
-    done
+    if ! command -v certbot >/dev/null 2>&1; then
+        err "Required package 'certbot' was not installed successfully."
+        err "Please check your package manager output above."
+        exit 1
+    fi
+}
+ensure_mosdns_user() {
+    if ! id mosdns >/dev/null 2>&1; then
+        useradd --system --home-dir /etc/mosdns --shell /usr/sbin/nologin mosdns
+    fi
+}
+install_mosdns_binary() {
+    local version="${MOSDNS_VERSION:-$MOSDNS_VERSION_DEFAULT}" arch asset url tmpdir
+    case "$(uname -m)" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) err "Unsupported mosdns architecture: $(uname -m)"; exit 1 ;;
+    esac
+    if command -v mosdns >/dev/null 2>&1 && mosdns version 2>/dev/null | grep -q "v${version}"; then
+        info "mosdns v${version} already installed"
+        return 0
+    fi
+    info "Installing mosdns v${version}..."
+    asset="mosdns-linux-${arch}.zip"
+    url="https://github.com/IrineSistiana/mosdns/releases/download/v${version}/${asset}"
+    tmpdir=$(mktemp -d /tmp/mosdns.XXXXXX)
+    curl -fL --retry 3 --connect-timeout 15 "$url" -o "${tmpdir}/${asset}"
+    python3 - "${tmpdir}/${asset}" "$tmpdir" <<'PYEOF'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    member = next((name for name in archive.namelist() if name.rstrip("/").endswith("mosdns")), None)
+    if member is None:
+        raise SystemExit("mosdns binary missing from release archive")
+    with archive.open(member) as source, open(sys.argv[2] + "/mosdns", "wb") as target:
+        target.write(source.read())
+PYEOF
+    install -m 0755 "${tmpdir}/mosdns" /usr/local/bin/mosdns
+    rm -rf "$tmpdir"
+    mosdns version >/dev/null
+    ok "mosdns v${version} installed"
 }
 is_valid_domain() {
     local d="${1:-}"
@@ -833,6 +810,7 @@ verify_domain_dns() {
 }
 install_cert() {
     local certbot_cmd certbot_cmd_force
+    ensure_mosdns_user
     CERTBOT_LAST_OUTPUT=""
     install_certbot_firewall_hooks
     certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" \
@@ -885,22 +863,22 @@ install_cert() {
         fi
         exit 1
     fi
-    info "Copying certificates to /etc/dnsdist/certs/ ..."
+    info "Copying certificates to /etc/mosdns/certs/ ..."
     local cert_live_dir="/etc/letsencrypt/live/${DOMAIN}"
     if [[ -d "$cert_live_dir" ]]; then
-        mkdir -p /etc/dnsdist/certs
-        cp "${cert_live_dir}/fullchain.pem" /etc/dnsdist/certs/fullchain.pem
-        cp "${cert_live_dir}/privkey.pem" /etc/dnsdist/certs/privkey.pem
-        chown -R _dnsdist:_dnsdist /etc/dnsdist/certs/
-        chmod 640 /etc/dnsdist/certs/*.pem
-        ok "Certificates copied to /etc/dnsdist/certs/"
+        mkdir -p /etc/mosdns/certs
+        cp "${cert_live_dir}/fullchain.pem" /etc/mosdns/certs/fullchain.pem
+        cp "${cert_live_dir}/privkey.pem" /etc/mosdns/certs/privkey.pem
+        chown -R mosdns:mosdns /etc/mosdns/certs/
+        chmod 600 /etc/mosdns/certs/*.pem
+        ok "Certificates copied to /etc/mosdns/certs/"
     else
         warn "Could not find certificate live directory: $cert_live_dir"
     fi
     mkdir -p /etc/letsencrypt/renewal-hooks/deploy
     if [[ -f "${LIB_DIR}/renew-hook.sh" ]]; then
-        cp "${LIB_DIR}/renew-hook.sh" /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
-        chmod +x /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
+        cp "${LIB_DIR}/renew-hook.sh" /etc/letsencrypt/renewal-hooks/deploy/99-reload-mosdns.sh
+        chmod +x /etc/letsencrypt/renewal-hooks/deploy/99-reload-mosdns.sh
         ok "证书已就绪，自动续期 Hook 已部署"
     else
         warn "renew-hook.sh not found in ${LIB_DIR}; keeping existing renewal hook"
@@ -966,10 +944,10 @@ install_whatsapp_shim() {
     [[ -f "${LIB_DIR}/wa-shim.py" ]] || { err "wa-shim.py not found in ${LIB_DIR}"; return 1; }
     mkdir -p "${BASE_DIR}/bin" "${CONF_DIR}"
     install -m 0755 "${LIB_DIR}/wa-shim.py" "${BASE_DIR}/bin/wa-shim.py"
-    mkdir -p /etc/dnsdist
-    touch /etc/dnsdist/gfwlist-extra-local.txt
+    mkdir -p /etc/mosdns
+    touch /etc/mosdns/gfwlist-extra-local.txt
     for domain in whatsapp.net whatsapp.com; do
-        grep -qxF "$domain" /etc/dnsdist/gfwlist-extra-local.txt || echo "$domain" >> /etc/dnsdist/gfwlist-extra-local.txt
+        grep -qxF "$domain" /etc/mosdns/gfwlist-extra-local.txt || echo "$domain" >> /etc/mosdns/gfwlist-extra-local.txt
     done
     shim_dns="${REMOTE_DNS:-$(cat "${CONF_DIR}/.remote_dns" 2>/dev/null || echo '1.1.1.1 8.8.8.8')}"
     self_ips="${PUBLIC_IP:-},127.0.0.1,::1,"
@@ -1048,91 +1026,65 @@ EOF
     systemctl enable quic-proxy
     ok "quic-proxy installed"
 }
-install_china_dns_race_proxy() {
-    info "Compiling china-dns-race-proxy..."
-    mkdir -p "${BASE_DIR}/bin"
-    mkdir -p "${SRC_DIR}"
-    cp "${LIB_DIR}/china-dns-race-proxy.go" "${SRC_DIR}/china-dns-race-proxy.go"
-    cd "${SRC_DIR}"
-    export PATH=$PATH:/usr/local/go/bin
-    go build -ldflags="-s -w" -o "${BASE_DIR}/bin/china-dns-race-proxy" china-dns-race-proxy.go
-    local local_dns_with_ports
-    local_dns_with_ports=$(dns_upstreams_with_ports "$LOCAL_DNS")
-    cat > /etc/systemd/system/china-dns-race-proxy.service <<EOF
+install_mosdns() {
+    info "Configuring mosdns..."
+    ensure_mosdns_user
+    install_mosdns_binary
+    mkdir -p /etc/mosdns
+    cp "${LIB_DIR}/mosdns.yaml.template" /etc/mosdns/config.yaml.template
+    cp "${LIB_DIR}/update-rules.sh" /usr/local/bin/update-mosdns-rules.sh
+    chmod +x /usr/local/bin/update-mosdns-rules.sh
+    echo "$DOMAIN" > /etc/mosdns/.domain
+    echo "$PUBLIC_IP" > /etc/mosdns/.public_ip
+    echo "$REMOTE_DNS" > /etc/mosdns/.remote_dns
+    echo "$LOCAL_DNS" > /etc/mosdns/.local_dns
+    echo "$REMOTE_DNS" > /etc/mosdns/.overseas_dns
+    echo "$REMOTE_DNS" > /etc/mosdns/.overseas_private_dns
+    echo "$REMOTE_DNS" > /etc/mosdns/.overseas_public_dns
+    echo "$REMOTE_DNS" > /etc/mosdns/.sniproxy_dns
+    echo "${PACKET_CACHE_SIZE:-500000}" > /etc/mosdns/.cache_size
+    touch /etc/mosdns/gfwlist.txt /etc/mosdns/chinalist.txt /etc/mosdns/gfwlist-extra-local.txt
+    chown -R mosdns:mosdns /etc/mosdns
+    chmod 0750 /etc/mosdns /etc/mosdns/certs
+    cat > /etc/systemd/system/mosdns.service <<'EOF'
 [Unit]
-Description=China DNS race proxy
-After=network.target
-Before=dnsdist.service
+Description=mosdns smart DNS and DNS-over-TLS
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}
-Restart=on-failure
+ExecStart=/usr/local/bin/mosdns start -c /etc/mosdns/config.yaml
+Restart=always
 RestartSec=3
-User=root
+User=mosdns
+Group=mosdns
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/mosdns
 LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    systemctl disable --now dnsdist.service update-dnsdist-rules.timer china-dns-race-proxy.service 2>/dev/null || true
+    rm -rf /etc/systemd/system/dnsdist.service.d /etc/systemd/system/china-dns-race-proxy.service.d
+    rm -f /etc/systemd/system/update-dnsdist-rules.{service,timer} \
+        /etc/systemd/system/china-dns-race-proxy.service \
+        /usr/local/bin/update-dnsdist-rules.sh \
+        /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh \
+        "${BASE_DIR}/bin/china-dns-race-proxy"
     systemctl daemon-reload
-    systemctl enable china-dns-race-proxy
-    ok "china-dns-race-proxy installed"
-}
-install_dnsdist() {
-    info "Configuring dnsdist..."
-    mkdir -p /etc/dnsdist
-    cp "${LIB_DIR}/dnsdist.conf.template" /etc/dnsdist/dnsdist.conf.template
-    cp "${LIB_DIR}/update-rules.sh" /usr/local/bin/update-dnsdist-rules.sh
-    chmod +x /usr/local/bin/update-dnsdist-rules.sh
-    echo "$DOMAIN" > /etc/dnsdist/.domain
-    echo "$PUBLIC_IP" > /etc/dnsdist/.public_ip
-    echo "$REMOTE_DNS" > /etc/dnsdist/.remote_dns
-    echo "$LOCAL_DNS" > /etc/dnsdist/.local_dns
-    echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_dns
-    echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_private_dns
-    echo "$REMOTE_DNS" > /etc/dnsdist/.overseas_public_dns
-    echo "$REMOTE_DNS" > /etc/dnsdist/.sniproxy_dns
-    echo "${PACKET_CACHE_SIZE:-500000}" > /etc/dnsdist/.cache_size
-    local remote_servers
-    remote_servers=$(render_remote_dns_servers "$REMOTE_DNS" "remote" "remote")
-    local cert_basename="${DOMAIN}"
-    if [[ -f "${CONF_DIR}/.cert_basename" ]]; then
-        cert_basename=$(cat "${CONF_DIR}/.cert_basename")
-    fi
-    python3 - /etc/dnsdist/dnsdist.conf.template "${PUBLIC_IP}" "${cert_basename}" "$remote_servers" "${PACKET_CACHE_SIZE:-500000}" /etc/dnsdist/dnsdist.conf <<'PYEOF'
-import sys
-with open(sys.argv[1], "r", encoding="utf-8") as f:
-    content = f.read()
-content = content.replace("__GFWLIST_RULES__", "-- (rules will be loaded by update-rules.sh)")
-content = content.replace("__CHINALIST_RULES__", "-- (rules will be loaded by update-rules.sh)")
-content = content.replace("__SERVER_IP__", sys.argv[2])
-content = content.replace("__DOMAIN__", sys.argv[3])
-content = content.replace("__REMOTE_DNS_SERVERS__", sys.argv[4])
-content = content.replace("__PACKET_CACHE_SIZE__", sys.argv[5])
-with open(sys.argv[6], "w", encoding="utf-8") as f:
-    f.write(content)
-PYEOF
-    mkdir -p /etc/systemd/system/dnsdist.service.d
-    cat > /etc/systemd/system/dnsdist.service.d/override.conf <<'EOF'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/dnsdist --supervised -C /etc/dnsdist/dnsdist.conf
-# dnsdist has no signal-based config reload — SIGHUP makes it EXIT. Disable the
-# HUP reload (so a stray `systemctl reload` can't kill it) and apply config via
-# restart instead. Restart=always also recovers from OOM on small hosts.
-ExecReload=
-Restart=always
-RestartSec=3
-LimitNOFILE=65535
-EOF
-    systemctl daemon-reload
-    systemctl enable dnsdist
-    ok "dnsdist configured"
+    systemctl enable mosdns
+    ok "mosdns configured"
 }
 init_rules() {
     info "Initializing GFWList and ChinaList..."
-    /usr/local/bin/update-dnsdist-rules.sh || warn "Rule update failed, will retry later"
+    /usr/local/bin/update-mosdns-rules.sh || warn "Rule update failed, will retry later"
 }
 generate_ios_profile() {
     info "Generating iOS DoT configuration profile..."
@@ -2331,18 +2283,14 @@ proxy_domain() {
     local esc="${domain//./\\.}" rule="DOMAIN-SUFFIX,${domain},${target}"
     grep -vE "^DOMAIN-SUFFIX,${esc}," "${RULES_FILE}" > "${RULES_FILE}.tmp" 2>/dev/null || true
     { echo "$rule"; cat "${RULES_FILE}.tmp"; } > "${RULES_FILE}"; rm -f "${RULES_FILE}.tmp"
-    local extra="/etc/dnsdist/gfwlist-extra-local.txt" lua="/etc/dnsdist/gfwlist.lua"
-    mkdir -p /etc/dnsdist; touch "$extra"
+    local extra="/etc/mosdns/gfwlist-extra-local.txt"
+    mkdir -p /etc/mosdns; touch "$extra"
     if [[ "$target" == "direct" ]]; then
         grep -vxF "$domain" "$extra" > "$extra.tmp" 2>/dev/null || true; mv "$extra.tmp" "$extra"
-        [[ -f "$lua" ]] && sed -i "/newDNSName(\"${esc}\")/d" "$lua"
     else
         grep -qxF "$domain" "$extra" || echo "$domain" >> "$extra"
-        if [[ -f "$lua" ]] && ! grep -q "newDNSName(\"${esc}\")" "$lua"; then
-            echo "gfwList:add(newDNSName(\"${domain}\"))" >> "$lua"
-        fi
     fi
-    systemctl restart dnsdist 2>/dev/null || true   # dnsdist can't hot-reload; restart applies config
+    /usr/local/bin/update-mosdns-rules.sh >/dev/null
     ok "Domain '${domain}' -> ${target}  (hijack: $([[ "$target" == direct ]] && echo off || echo on))"
     regen_smart
 }
@@ -2412,7 +2360,7 @@ EOF
 }
 apply_lowmem_go_limits() {
     local d
-    for svc in quic-proxy china-dns-race-proxy; do
+    for svc in quic-proxy mosdns; do
         d="/etc/systemd/system/${svc}.service.d"
         if [[ "${LOWMEM:-0}" == "1" ]]; then
             mkdir -p "$d"
@@ -2428,8 +2376,7 @@ EOF
 }
 start_services() {
     info "Starting services..."
-    systemctl restart china-dns-race-proxy || { err "china-dns-race-proxy failed to start"; journalctl -u china-dns-race-proxy --no-pager -n 20; exit 1; }
-    systemctl restart dnsdist || { err "dnsdist failed to start"; journalctl -u dnsdist --no-pager -n 20; exit 1; }
+    systemctl restart mosdns || { err "mosdns failed to start"; journalctl -u mosdns --no-pager -n 20; exit 1; }
     systemctl restart sniproxy || { err "sniproxy failed to start"; journalctl -u sniproxy --no-pager -n 20; exit 1; }
     systemctl restart wa-shim || { err "wa-shim failed to start"; journalctl -u wa-shim --no-pager -n 20; exit 1; }
     systemctl restart quic-proxy || { err "quic-proxy failed to start"; journalctl -u quic-proxy --no-pager -n 20; exit 1; }
@@ -2437,9 +2384,9 @@ start_services() {
 }
 setup_schedules() {
     info "Setting up automatic updates..."
-    cat > /etc/systemd/system/update-dnsdist-rules.timer <<'EOF'
+    cat > /etc/systemd/system/update-mosdns-rules.timer <<'EOF'
 [Unit]
-Description=Weekly dnsdist rules update
+Description=Weekly mosdns rules update
 
 [Timer]
 OnCalendar=Sun *-*-* 03:00:00
@@ -2448,16 +2395,16 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
-    cat > /etc/systemd/system/update-dnsdist-rules.service <<'EOF'
+    cat > /etc/systemd/system/update-mosdns-rules.service <<'EOF'
 [Unit]
-Description=Update dnsdist GFWList/ChinaList rules
+Description=Update mosdns GFWList/ChinaList rules
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/update-dnsdist-rules.sh
+ExecStart=/usr/local/bin/update-mosdns-rules.sh
 EOF
     systemctl daemon-reload
-    systemctl enable --now update-dnsdist-rules.timer
+    systemctl enable --now update-mosdns-rules.timer
     install_certbot_firewall_hooks
     systemctl enable --now certbot.timer 2>/dev/null || true
     ok "Schedules configured (rules: weekly, cert: auto)"
@@ -2466,7 +2413,7 @@ show_status() {
     echo "=========================================="
     echo "      Proxy Gateway Status"
     echo "=========================================="
-    for svc in dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy; do
+    for svc in mosdns sniproxy wa-shim quic-proxy; do
         status=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
         if [[ "$status" == "active" ]]; then
             echo -e "$svc: ${GREEN}running${NC}"
@@ -2492,14 +2439,14 @@ show_status() {
     local cur_exit="local"
     [[ -f "${CONF_DIR}/current-exit" ]] && cur_exit="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
     echo "Egress exit: ${cur_exit}"
-    if [[ -f /etc/dnsdist/.cache_size ]]; then
-        local cs; cs="$(cat /etc/dnsdist/.cache_size 2>/dev/null || echo '?')"
-        echo "Mem profile: $([[ "$cs" -le 50000 ]] 2>/dev/null && echo low-memory || echo standard) (dnsdist cache=${cs})"
+    if [[ -f /etc/mosdns/.cache_size ]]; then
+        local cs; cs="$(cat /etc/mosdns/.cache_size 2>/dev/null || echo '?')"
+        echo "Mem profile: $([[ "$cs" -le 50000 ]] 2>/dev/null && echo low-memory || echo standard) (mosdns cache=${cs})"
     fi
     echo "=========================================="
 }
 do_uninstall() {
-    warn "This will remove sniproxy, quic-proxy, china-dns-race-proxy, dnsdist configs, and rules."
+    warn "This will remove sniproxy, quic-proxy, mosdns configs, and rules."
     read -r -p "Are you sure? [y/N]: " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || { info "Uninstall cancelled"; exit 0; }
     set_exit local 2>/dev/null || true
@@ -2514,15 +2461,17 @@ do_uninstall() {
         systemctl stop "proxy-gateway-singbox@$(basename "$f" .type).service" 2>/dev/null || true
     done
     shopt -u nullglob
-    systemctl stop dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
-    systemctl disable dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
-    rm -f /etc/systemd/system/{sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-dnsdist-rules,proxy-gateway-exit,proxy-gateway-tgbot}.*
+    systemctl stop mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
+    systemctl disable mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy proxy-gateway-ios-profile.socket proxy-gateway-ios-profile proxy-gateway-exit proxy-gateway-tgbot 2>/dev/null || true
+    rm -f /etc/systemd/system/{mosdns,sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,proxy-gateway-ios-profile,update-mosdns-rules,proxy-gateway-exit,proxy-gateway-tgbot}.*
     rm -f /etc/systemd/system/proxy-gateway-ios-profile@.service \
         /etc/systemd/system/proxy-gateway-mihomo@.service \
         /etc/systemd/system/proxy-gateway-singbox@.service
-    rm -rf /etc/systemd/system/quic-proxy.service.d /etc/systemd/system/china-dns-race-proxy.service.d
+    rm -rf /etc/systemd/system/quic-proxy.service.d /etc/systemd/system/mosdns.service.d \
+        /etc/systemd/system/dnsdist.service.d /etc/systemd/system/china-dns-race-proxy.service.d
     systemctl daemon-reload
-    rm -rf "$BASE_DIR" /etc/sniproxy.conf /etc/dnsdist /usr/local/bin/update-dnsdist-rules.sh
+    rm -rf "$BASE_DIR" /etc/sniproxy.conf /etc/mosdns /etc/dnsdist /usr/local/bin/update-mosdns-rules.sh
+    rm -f /usr/local/bin/update-dnsdist-rules.sh /usr/local/bin/mosdns
     rm -f /usr/local/sbin/sniproxy
     rm -f /usr/local/bin/proxy-gateway-apply-exit.sh
     rm -f "${WG_DIR}"/pgw-*.conf
@@ -2532,13 +2481,14 @@ do_uninstall() {
     # persistence and the managed marker.
     firewall_cleanup_on_uninstall
     rm -rf /etc/proxy-gateway
-    rm -f /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh
+    rm -f /etc/letsencrypt/renewal-hooks/deploy/99-reload-mosdns.sh
     rm -f /etc/sysctl.d/99-proxy-gateway.conf
     rm -f /etc/profile.d/go.sh
     if [[ -f /etc/nftables.conf.pgw-backup ]]; then
         warn "Pre-install firewall backup kept at /etc/nftables.conf.pgw-backup (restore manually if wanted)."
     fi
     userdel "${EXIT_USER}" 2>/dev/null || true
+    userdel mosdns 2>/dev/null || true
     warn "SSL certificates in /etc/letsencrypt/live/ are kept. Remove manually if needed."
     if [[ -e /swapfile ]]; then
         warn "Swapfile /swapfile is kept. To remove: swapoff /swapfile && rm -f /swapfile && sed -i '/^\\/swapfile /d' /etc/fstab"
@@ -2546,6 +2496,7 @@ do_uninstall() {
     ok "Uninstall completed"
 }
 force_renew_cert() {
+    ensure_mosdns_user
     if [[ -f "${CONF_DIR}/.domain" ]]; then
         DOMAIN=$(cat "${CONF_DIR}/.domain")
     fi
@@ -2605,26 +2556,26 @@ force_renew_cert() {
     fi
     local cert_live_dir="/etc/letsencrypt/live/${DOMAIN}"
     if [[ -d "$cert_live_dir" ]]; then
-        mkdir -p /etc/dnsdist/certs
-        cp "${cert_live_dir}/fullchain.pem" /etc/dnsdist/certs/fullchain.pem
-        cp "${cert_live_dir}/privkey.pem" /etc/dnsdist/certs/privkey.pem
-        chown -R _dnsdist:_dnsdist /etc/dnsdist/certs/
-        chmod 640 /etc/dnsdist/certs/*.pem
+        mkdir -p /etc/mosdns/certs
+        cp "${cert_live_dir}/fullchain.pem" /etc/mosdns/certs/fullchain.pem
+        cp "${cert_live_dir}/privkey.pem" /etc/mosdns/certs/privkey.pem
+        chown -R mosdns:mosdns /etc/mosdns/certs/
+        chmod 600 /etc/mosdns/certs/*.pem
     fi
-    if systemctl is-active --quiet dnsdist; then
-        systemctl restart dnsdist && ok "Certificate renewed and dnsdist reloaded"
+    if systemctl is-active --quiet mosdns; then
+        systemctl restart mosdns && ok "Certificate renewed and mosdns reloaded"
     else
-        systemctl start dnsdist && ok "Certificate renewed and dnsdist started"
+        systemctl start mosdns && ok "Certificate renewed and mosdns started"
     fi
 }
 regenerate_ios_profile() {
     if [[ -f "${CONF_DIR}/.domain" ]]; then
         DOMAIN=$(cat "${CONF_DIR}/.domain")
-    elif [[ -f /etc/dnsdist/.domain ]]; then
-        DOMAIN=$(cat /etc/dnsdist/.domain)
+    elif [[ -f /etc/mosdns/.domain ]]; then
+        DOMAIN=$(cat /etc/mosdns/.domain)
     fi
-    if [[ -f /etc/dnsdist/.public_ip ]]; then
-        PUBLIC_IP=$(cat /etc/dnsdist/.public_ip)
+    if [[ -f /etc/mosdns/.public_ip ]]; then
+        PUBLIC_IP=$(cat /etc/mosdns/.public_ip)
     else
         get_public_ip
     fi
@@ -2635,7 +2586,7 @@ regenerate_ios_profile() {
     generate_ios_profile
 }
 set_dot_domain() {
-    local new_domain="${1:-}" resolved="" old_conf_domain="" old_dnsdist_domain="" old_cert_basename=""
+    local new_domain="${1:-}" resolved="" old_conf_domain="" old_mosdns_domain="" old_cert_basename=""
     [[ -n "$new_domain" ]] || { err "Usage: $0 --set-dot-domain <domain>"; exit 1; }
     if ! is_valid_domain "$new_domain"; then
         err "Invalid domain: '$new_domain'. Provide a fully-qualified domain like dns.example.com"
@@ -2652,35 +2603,35 @@ set_dot_domain() {
         exit 1
     fi
     old_conf_domain=$(cat "${CONF_DIR}/.domain" 2>/dev/null || true)
-    old_dnsdist_domain=$(cat /etc/dnsdist/.domain 2>/dev/null || true)
+    old_mosdns_domain=$(cat /etc/mosdns/.domain 2>/dev/null || true)
     old_cert_basename=$(cat "${CONF_DIR}/.cert_basename" 2>/dev/null || true)
     DOMAIN="$new_domain"
     install_cert
-    mkdir -p "$CONF_DIR" /etc/dnsdist
+    mkdir -p "$CONF_DIR" /etc/mosdns
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
-    echo "$DOMAIN" > /etc/dnsdist/.domain
+    echo "$DOMAIN" > /etc/mosdns/.domain
     rm -f "${CONF_DIR}/.cert_basename"
-    if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
-        if ! /usr/local/bin/update-dnsdist-rules.sh; then
+    if [[ -f /usr/local/bin/update-mosdns-rules.sh ]]; then
+        if ! /usr/local/bin/update-mosdns-rules.sh; then
             restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
-            restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+            restore_or_remove_file "$old_mosdns_domain" /etc/mosdns/.domain
             restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
-            /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
-            err "dnsdist config update failed; DoT domain rolled back"
+            /usr/local/bin/update-mosdns-rules.sh >/dev/null 2>&1 || true
+            err "mosdns config update failed; DoT domain rolled back"
             exit 1
         fi
-    elif ! systemctl restart dnsdist; then
+    elif ! systemctl restart mosdns; then
         restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
-        restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+        restore_or_remove_file "$old_mosdns_domain" /etc/mosdns/.domain
         restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
-        err "dnsdist restart failed; DoT domain rolled back"
+        err "mosdns restart failed; DoT domain rolled back"
         exit 1
     fi
     regenerate_ios_profile || warn "iOS profile regeneration failed"
     ok "DoT domain updated: $DOMAIN"
 }
 force_set_dot_domain() {
-    local new_domain="${1:-}" resolved="" old_conf_domain="" old_dnsdist_domain="" old_cert_basename=""
+    local new_domain="${1:-}" resolved="" old_conf_domain="" old_mosdns_domain="" old_cert_basename=""
     [[ -n "$new_domain" ]] || { err "Usage: $0 --set-dot-domain-force <domain>"; exit 1; }
     if ! is_valid_domain "$new_domain"; then
         err "Invalid domain: '$new_domain'. Provide a fully-qualified domain like dns.example.com"
@@ -2692,27 +2643,27 @@ force_set_dot_domain() {
         warn "$new_domain 当前解析到 ${resolved:-无}，不是本机 $PUBLIC_IP；按强制模式继续。"
     fi
     old_conf_domain=$(cat "${CONF_DIR}/.domain" 2>/dev/null || true)
-    old_dnsdist_domain=$(cat /etc/dnsdist/.domain 2>/dev/null || true)
+    old_mosdns_domain=$(cat /etc/mosdns/.domain 2>/dev/null || true)
     old_cert_basename=$(cat "${CONF_DIR}/.cert_basename" 2>/dev/null || true)
     DOMAIN="$new_domain"
-    mkdir -p "$CONF_DIR" /etc/dnsdist
+    mkdir -p "$CONF_DIR" /etc/mosdns
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
-    echo "$DOMAIN" > /etc/dnsdist/.domain
+    echo "$DOMAIN" > /etc/mosdns/.domain
     rm -f "${CONF_DIR}/.cert_basename"
-    if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
-        if ! /usr/local/bin/update-dnsdist-rules.sh; then
+    if [[ -f /usr/local/bin/update-mosdns-rules.sh ]]; then
+        if ! /usr/local/bin/update-mosdns-rules.sh; then
             restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
-            restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+            restore_or_remove_file "$old_mosdns_domain" /etc/mosdns/.domain
             restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
-            /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
-            err "dnsdist config update failed; DoT domain rolled back"
+            /usr/local/bin/update-mosdns-rules.sh >/dev/null 2>&1 || true
+            err "mosdns config update failed; DoT domain rolled back"
             exit 1
         fi
-    elif ! systemctl restart dnsdist; then
+    elif ! systemctl restart mosdns; then
         restore_or_remove_file "$old_conf_domain" "${CONF_DIR}/.domain"
-        restore_or_remove_file "$old_dnsdist_domain" /etc/dnsdist/.domain
+        restore_or_remove_file "$old_mosdns_domain" /etc/mosdns/.domain
         restore_or_remove_file "$old_cert_basename" "${CONF_DIR}/.cert_basename"
-        err "dnsdist restart failed; DoT domain rolled back"
+        err "mosdns restart failed; DoT domain rolled back"
         exit 1
     fi
     regenerate_ios_profile || warn "iOS profile regeneration failed"
@@ -2720,11 +2671,11 @@ force_set_dot_domain() {
     ok "DoT domain forcibly updated: $DOMAIN"
 }
 set_custom_dns() {
-    local remote_dns local_dns backup_dir sniproxy_backup="" china_service_backup=""
+    local remote_dns local_dns backup_dir sniproxy_backup=""
     [[ -n "${1:-}" ]] || { err "Usage: $0 --set-dns <remote-dns> [local-dns]"; exit 1; }
     remote_dns=$(normalize_dns_upstreams "$1")
-    local_dns=$(normalize_dns_upstreams "${2:-$(cat /etc/dnsdist/.local_dns 2>/dev/null || printf '%s' "${DEFAULT_LOCAL_DNS[*]}")}")
-    mkdir -p "$CONF_DIR" /etc/dnsdist
+    local_dns=$(normalize_dns_upstreams "${2:-$(cat /etc/mosdns/.local_dns 2>/dev/null || printf '%s' "${DEFAULT_LOCAL_DNS[*]}")}")
+    mkdir -p "$CONF_DIR" /etc/mosdns
     backup_dir=$(mktemp -d)
     for f in \
         "${CONF_DIR}/.remote_dns" \
@@ -2734,21 +2685,17 @@ set_custom_dns() {
         "${CONF_DIR}/.overseas_public_dns" \
         "${CONF_DIR}/.sniproxy_dns" \
         "${CONF_DIR}/wa-shim.env" \
-        /etc/dnsdist/.remote_dns \
-        /etc/dnsdist/.local_dns \
-        /etc/dnsdist/.overseas_dns \
-        /etc/dnsdist/.overseas_private_dns \
-        /etc/dnsdist/.overseas_public_dns \
-        /etc/dnsdist/.sniproxy_dns; do
+        /etc/mosdns/.remote_dns \
+        /etc/mosdns/.local_dns \
+        /etc/mosdns/.overseas_dns \
+        /etc/mosdns/.overseas_private_dns \
+        /etc/mosdns/.overseas_public_dns \
+        /etc/mosdns/.sniproxy_dns; do
         [[ -f "$f" ]] && cp -a "$f" "${backup_dir}/${f//\//__}"
     done
     if [[ -f /etc/sniproxy.conf ]]; then
         sniproxy_backup="${backup_dir}/sniproxy.conf"
         cp -a /etc/sniproxy.conf "$sniproxy_backup"
-    fi
-    if [[ -f /etc/systemd/system/china-dns-race-proxy.service ]]; then
-        china_service_backup="${backup_dir}/china-dns-race-proxy.service"
-        cp -a /etc/systemd/system/china-dns-race-proxy.service "$china_service_backup"
     fi
     restore_dns_backup() {
         local f b
@@ -2760,12 +2707,12 @@ set_custom_dns() {
             "${CONF_DIR}/.overseas_public_dns" \
             "${CONF_DIR}/.sniproxy_dns" \
             "${CONF_DIR}/wa-shim.env" \
-            /etc/dnsdist/.remote_dns \
-            /etc/dnsdist/.local_dns \
-            /etc/dnsdist/.overseas_dns \
-            /etc/dnsdist/.overseas_private_dns \
-            /etc/dnsdist/.overseas_public_dns \
-            /etc/dnsdist/.sniproxy_dns; do
+            /etc/mosdns/.remote_dns \
+            /etc/mosdns/.local_dns \
+            /etc/mosdns/.overseas_dns \
+            /etc/mosdns/.overseas_private_dns \
+            /etc/mosdns/.overseas_public_dns \
+            /etc/mosdns/.sniproxy_dns; do
             b="${backup_dir}/${f//\//__}"
             if [[ -f "$b" ]]; then
                 cp -a "$b" "$f"
@@ -2776,10 +2723,6 @@ set_custom_dns() {
         if [[ -n "$sniproxy_backup" && -f "$sniproxy_backup" ]]; then
             cp -a "$sniproxy_backup" /etc/sniproxy.conf
         fi
-        if [[ -n "$china_service_backup" && -f "$china_service_backup" ]]; then
-            cp -a "$china_service_backup" /etc/systemd/system/china-dns-race-proxy.service
-            systemctl daemon-reload 2>/dev/null || true
-        fi
     }
     echo "$remote_dns" > "${CONF_DIR}/.remote_dns"
     echo "$local_dns" > "${CONF_DIR}/.local_dns"
@@ -2787,12 +2730,12 @@ set_custom_dns() {
     echo "$remote_dns" > "${CONF_DIR}/.overseas_private_dns"
     echo "$remote_dns" > "${CONF_DIR}/.overseas_public_dns"
     echo "$remote_dns" > "${CONF_DIR}/.sniproxy_dns"
-    echo "$remote_dns" > /etc/dnsdist/.remote_dns
-    echo "$local_dns" > /etc/dnsdist/.local_dns
-    echo "$remote_dns" > /etc/dnsdist/.overseas_dns
-    echo "$remote_dns" > /etc/dnsdist/.overseas_private_dns
-    echo "$remote_dns" > /etc/dnsdist/.overseas_public_dns
-    echo "$remote_dns" > /etc/dnsdist/.sniproxy_dns
+    echo "$remote_dns" > /etc/mosdns/.remote_dns
+    echo "$local_dns" > /etc/mosdns/.local_dns
+    echo "$remote_dns" > /etc/mosdns/.overseas_dns
+    echo "$remote_dns" > /etc/mosdns/.overseas_private_dns
+    echo "$remote_dns" > /etc/mosdns/.overseas_public_dns
+    echo "$remote_dns" > /etc/mosdns/.sniproxy_dns
     if [[ -f "${CONF_DIR}/wa-shim.env" ]]; then
         sed -i -E "s#^WA_SHIM_RESOLVER=.*#WA_SHIM_RESOLVER=${remote_dns%% *},8.8.8.8#" "${CONF_DIR}/wa-shim.env"
     fi
@@ -2802,31 +2745,24 @@ set_custom_dns() {
         err "sniproxy config update failed; DNS upstreams rolled back"
         exit 1
     fi
-    if [[ -f /etc/systemd/system/china-dns-race-proxy.service ]]; then
-        local local_dns_with_ports
-        local_dns_with_ports=$(dns_upstreams_with_ports "$local_dns")
-        sed -i -E "s#^ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127\\.0\\.0\\.1:5301( -upstreams [^[:space:]]+)?#ExecStart=/opt/proxy-gateway/bin/china-dns-race-proxy -l 127.0.0.1:5301 -upstreams ${local_dns_with_ports}#" /etc/systemd/system/china-dns-race-proxy.service
-        systemctl daemon-reload
-    fi
-    if [[ -f /usr/local/bin/update-dnsdist-rules.sh ]]; then
-        if ! /usr/local/bin/update-dnsdist-rules.sh; then
+    if [[ -f /usr/local/bin/update-mosdns-rules.sh ]]; then
+        if ! /usr/local/bin/update-mosdns-rules.sh; then
             restore_dns_backup
-            /usr/local/bin/update-dnsdist-rules.sh >/dev/null 2>&1 || true
+            /usr/local/bin/update-mosdns-rules.sh >/dev/null 2>&1 || true
             rm -rf "$backup_dir"
-            err "dnsdist config update failed; DNS upstreams rolled back"
+            err "mosdns config update failed; DNS upstreams rolled back"
             exit 1
         fi
     else
-        if ! systemctl restart dnsdist; then
+        if ! systemctl restart mosdns; then
             restore_dns_backup
             rm -rf "$backup_dir"
-            err "dnsdist restart failed; DNS upstreams rolled back"
+            err "mosdns restart failed; DNS upstreams rolled back"
             exit 1
         fi
     fi
     systemctl restart sniproxy 2>/dev/null || true
     systemctl restart wa-shim 2>/dev/null || true
-    systemctl restart china-dns-race-proxy 2>/dev/null || true
     rm -rf "$backup_dir"
     ok "DNS upstreams updated"
     echo "Remote DNS: $remote_dns"
@@ -2847,13 +2783,13 @@ main_install() {
     check_port_53
     generate_domain
     verify_domain_dns
+    ensure_mosdns_user
     install_cert
     configure_dns_upstreams
     install_sniproxy
     install_whatsapp_shim
     install_quic_proxy
-    install_china_dns_race_proxy
-    install_dnsdist
+    install_mosdns
     init_rules
     system_tuning
     setup_firewall
@@ -2902,7 +2838,7 @@ case "${1:-}" in
         show_status
         ;;
     --update-rules)
-        /usr/local/bin/update-dnsdist-rules.sh
+        /usr/local/bin/update-mosdns-rules.sh
         ;;
     --renew-cert)
         force_renew_cert

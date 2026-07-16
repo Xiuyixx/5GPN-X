@@ -13,9 +13,9 @@ spec.loader.exec_module(bot)
 
 class DotCertStatusTest(unittest.TestCase):
     def test_dot_status_shows_certificate_days_left(self):
-        bot._read_file = lambda path: {"/etc/dnsdist/.domain": "dns.example.com",
-                                       "/etc/dnsdist/.remote_dns": "8.8.8.8",
-                                       "/etc/dnsdist/.local_dns": "223.5.5.5"}.get(path)
+        bot._read_file = lambda path: {"/etc/mosdns/.domain": "dns.example.com",
+                                       "/etc/mosdns/.remote_dns": "8.8.8.8",
+                                       "/etc/mosdns/.local_dns": "223.5.5.5"}.get(path)
         bot._cert_expiry = lambda path=None: (29, "2026-08-11")
         text = bot.op_dot_status()
         self.assertIn("证书剩余：<code>29 天</code>（到期：2026-08-11）", text)

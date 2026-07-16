@@ -4,7 +4,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
-tmpl="${root}/lib/dnsdist.conf.template"
+tmpl="${root}/lib/mosdns.yaml.template"
 update="${root}/lib/update-rules.sh"
 ioshttp="${root}/lib/ios-http.py"
 # Firewall/tuning helpers moved to lib/host-setup.sh (sourced by install.sh).
@@ -17,11 +17,10 @@ fail() { echo "$1" >&2; exit 1; }
 [[ "${install_body}" == *'MemTotal'* ]] || fail "memory detection must read MemTotal"
 [[ "${install_body}" == *'detect_memory_profile'*'ensure_swap'* ]] || fail "main_install must detect memory then ensure swap"
 
-# --- dnsdist cache must be parametrised, not a hard 500000 -------------------
-[[ "$(cat "${tmpl}")" != *'newPacketCache(500000'* ]] || fail "template must not hard-code a 500000 packet cache"
-[[ "$(cat "${tmpl}")" == *'newPacketCache(__PACKET_CACHE_SIZE__'* ]] || fail "template must use the cache-size placeholder"
+# --- mosdns cache must be parametrised, not hard-coded -----------------------
+[[ "$(cat "${tmpl}")" == *'size: __CACHE_SIZE__'* ]] || fail "template must use the cache-size placeholder"
 [[ "${install_body}" == *'PACKET_CACHE_SIZE=20000'* ]] || fail "low-memory mode must shrink the packet cache"
-[[ "$(cat "${update}")" == *'__PACKET_CACHE_SIZE__'* ]] || fail "update-rules.sh must substitute the cache-size placeholder"
+[[ "$(cat "${update}")" == *'__CACHE_SIZE__'* ]] || fail "update-rules.sh must substitute the cache-size placeholder"
 [[ "$(cat "${update}")" == *'.cache_size'* ]] || fail "update-rules.sh must read the persisted cache size"
 
 # --- sysctl must scale down on low memory -----------------------------------

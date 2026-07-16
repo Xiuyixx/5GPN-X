@@ -18,7 +18,7 @@ for needle in 'install_whatsapp_shim()' 'WA_SHIM_BACKEND=127.0.0.1:8443' \
     [[ "${install}" == *"${needle}"* ]] || fail "missing WhatsApp integration: ${needle}"
 done
 [[ "${install}" == *'for domain in whatsapp.net whatsapp.com'* ]] || fail "WhatsApp DNS interception must be persistent"
-[[ "${install}" == *'systemctl stop dnsdist sniproxy wa-shim'* ]] || fail "uninstall must stop wa-shim"
+[[ "${install}" == *'systemctl stop mosdns dnsdist sniproxy wa-shim'* ]] || fail "uninstall must stop wa-shim"
 [[ "${install}" == *'--setup-whatsapp)'* ]] || fail "repair command must be dispatched"
 
 echo "WhatsApp patch policy OK"

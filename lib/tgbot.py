@@ -47,20 +47,18 @@ API = "https://api.telegram.org/bot%s/" % TOKEN
 
 # Services the bot may tail. Order matters for display only.
 SERVICES = [
-    "dnsdist",
+    "mosdns",
     "sniproxy",
     "wa-shim",
     "quic-proxy",
-    "china-dns-race-proxy",
     "proxy-gateway-ios-profile",
     "proxy-gateway-tgbot",
 ]
 RESTART_SERVICES = [
-    "dnsdist",
+    "mosdns",
     "sniproxy",
     "wa-shim",
     "quic-proxy",
-    "china-dns-race-proxy",
     "proxy-gateway-ios-profile.socket",
 ]
 EXIT_NAME_RE = re.compile(r"^(local|[\w\-\u4e00-\u9fff]{1,16})$", re.UNICODE)
@@ -555,10 +553,9 @@ def _exit_ip():
 
 # (unit, friendly label) shown on the status card.
 STATUS_ITEMS = [
-    ("dnsdist", "dnsdist"),
+    ("mosdns", "mosdns"),
     ("sniproxy", "sniproxy"),
     ("quic-proxy", "quic-proxy"),
-    ("china-dns-race-proxy", "china-dns-race"),
     ("proxy-gateway-ios-profile.socket", "iOS 描述文件"),
     ("proxy-gateway-tgbot", "Telegram Bot"),
 ]
@@ -736,11 +733,11 @@ def op_status():
         t = _read_file("/etc/proxy-gateway/exits/%s.type" % cur) or "?"
         lines.append("🌐 出口：<b>%s</b>（%s）" % (html.escape(cur), html.escape(t)))
 
-    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
     if domain:
         lines.append("🔗 域名：<code>%s</code>" % html.escape(domain))
 
-    cs = _read_file("/etc/dnsdist/.cache_size")
+    cs = _read_file("/etc/mosdns/.cache_size")
     if cs.isdigit():
         prof = "低内存" if int(cs) <= 50000 else "标准"
         lines.append("💾 内存档：%s" % prof)
@@ -1099,11 +1096,11 @@ def op_update_rules():
 def op_renew_cert():
     ok, out = run2(["bash", MGMT, "--renew-cert"], timeout=600)
     if ok:
-        return "✅ <b>证书已续期</b>并重载 dnsdist"
+        return "✅ <b>证书已续期</b>并重载 mosdns"
     return "❌ <b>证书续期失败</b>\n<pre>%s</pre>" % html.escape(_tail_output(out))
 
 
-DOT_CERT_PATH = "/etc/dnsdist/certs/fullchain.pem"
+DOT_CERT_PATH = "/etc/mosdns/certs/fullchain.pem"
 
 
 def _cert_expiry(path=DOT_CERT_PATH):
@@ -1134,10 +1131,10 @@ def _cert_status_line():
 
 
 def op_dot_status():
-    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
-    remote_dns = (_read_file("/etc/dnsdist/.remote_dns") or
-                  _read_file("/etc/dnsdist/.overseas_dns") or "?")
-    local_dns = (_read_file("/etc/dnsdist/.local_dns") or "?")
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain") or "未设置"
+    remote_dns = (_read_file("/etc/mosdns/.remote_dns") or
+                  _read_file("/etc/mosdns/.overseas_dns") or "?")
+    local_dns = (_read_file("/etc/mosdns/.local_dns") or "?")
     lines = [
         "🔐 <b>DoT 管理</b>",
         "当前域名：<code>%s</code>" % html.escape(domain),
@@ -1158,7 +1155,7 @@ def op_set_dot_domain(domain):
     if ok:
         return (("✅ <b>DoT 域名已更新</b>\n"
                  "当前域名：<code>%s</code>\n"
-                 "证书已签发并重载 dnsdist。iOS 用户请重新生成二维码。" % html.escape(domain)), None)
+                 "证书已签发并重载 mosdns。iOS 用户请重新生成二维码。" % html.escape(domain)), None)
     text = ("❌ <b>DoT 域名更新失败</b>\n%s\n\n"
             "如果你确认域名已经解析到本机，也可以强制更换域名。\n"
             "注意：强制更换会跳过本次证书签发，DoT 客户端可能因为证书不匹配暂时无法连接；修好 80 端口/certbot 问题后请再点续期证书。" %
@@ -1193,12 +1190,12 @@ def _dns_arg(text):
 
 
 def current_remote_dns():
-    return (_read_file("/etc/dnsdist/.remote_dns") or
-            _read_file("/etc/dnsdist/.overseas_dns") or "?")
+    return (_read_file("/etc/mosdns/.remote_dns") or
+            _read_file("/etc/mosdns/.overseas_dns") or "?")
 
 
 def current_local_dns():
-    return _read_file("/etc/dnsdist/.local_dns") or "?"
+    return _read_file("/etc/mosdns/.local_dns") or "?"
 
 
 def op_set_dns(kind, text):
@@ -1459,7 +1456,7 @@ def parse_exit_names():
 
 def op_ios_send(chat_id):
     """Send the iOS profile QR as an image (with the URL as caption)."""
-    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
     if domain:
         url = "http://%s:8111/ios-dot.mobileconfig" % domain
     else:
@@ -1485,7 +1482,7 @@ def op_ios_send(chat_id):
 def op_ios_send_inline(cb):
     """Edit the callback message in-place to show the iOS QR code.
     Returns an error string on failure, or None on success."""
-    domain = _read_file("/etc/dnsdist/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
+    domain = _read_file("/etc/mosdns/.domain") or _read_file("/opt/proxy-gateway/etc/.domain")
     if domain:
         url = "http://%s:8111/ios-dot.mobileconfig" % domain
     else:
@@ -1820,7 +1817,7 @@ def handle_message(msg):
         dns_text = text
         kind = "remote" if state.get("action") == "dot_dns_remote" else "local"
         background(delete_message, chat_id, msg.get("message_id"))
-        mid = upsert_console(chat_id, "⏳ 正在更新 DNS 上游并重载 dnsdist/sniproxy…",
+        mid = upsert_console(chat_id, "⏳ 正在更新 DNS 上游并重载 mosdns/sniproxy…",
                              message_id=prompt_mid)
         console_async(chat_id, lambda: op_set_dns(kind, dns_text), dot_menu(), message_id=mid)
         return
