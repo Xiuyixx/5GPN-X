@@ -125,7 +125,7 @@ __LOCAL_SECONDARY_UPSTREAMS__
     type: sequence
     args:
       - matches:
-          - client_ip 172.22.0.0/16 10.100.0.0/16
+          - client_ip 172.22.0.0/16
         exec: goto private_client
       - exec: goto remote_resolve
 

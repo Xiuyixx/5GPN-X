@@ -959,7 +959,7 @@ WA_SHIM_BACKEND=127.0.0.1:8443
 WA_SHIM_WA_HOST=g.whatsapp.net
 WA_SHIM_RESOLVER=${shim_dns%% *},8.8.8.8
 WA_SHIM_SELF_IPS=${self_ips}
-WA_SHIM_ALLOW_CIDR=172.22.0.0/16,10.100.0.0/16,127.0.0.0/8
+WA_SHIM_ALLOW_CIDR=172.22.0.0/16,127.0.0.0/8
 EOF
     chmod 600 "${CONF_DIR}/wa-shim.env"
     cat > /etc/systemd/system/wa-shim.service <<EOF

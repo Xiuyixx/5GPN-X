@@ -10,8 +10,8 @@ install="$(cat "${root}/install.sh")"
 fail() { echo "$1" >&2; exit 1; }
 has() { [[ "$1" == *"$2"* ]] || fail "$3"; }
 
-has "$template" 'client_ip 172.22.0.0/16 10.100.0.0/16' \
-    "mosdns must identify both gateway client networks by source address"
+has "$template" 'client_ip 172.22.0.0/16' \
+    "mosdns must identify the gateway client network by source address"
 has "$template" 'exec: goto private_client' \
     "gateway client networks must enter the synthetic proxy policy"
 has "$template" 'exec: goto remote_resolve' \

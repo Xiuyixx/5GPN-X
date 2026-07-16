@@ -36,14 +36,14 @@ export PATH="${tmp}/bin:${PATH}"
 auto_script="${tmp}/fw-allow.sh"
 auto_unit="${tmp}/proxy-gateway-firewall-allow.service"
 PGW_AUTO_ALLOW_SCRIPT="${auto_script}" PGW_AUTO_ALLOW_UNIT="${auto_unit}" \
-    write_auto_allow_persistence "2222,10022" "172.22.0.0/16 10.100.0.0/16"
+    write_auto_allow_persistence "2222,10022" "172.22.0.0/16"
 
 [[ -f "${auto_script}" ]] || fail "auto mode must write a persistent replay script"
 [[ -x "${auto_script}" ]] || fail "auto persistence script must be executable"
 [[ -f "${auto_unit}" ]] || fail "auto mode must install a boot-time oneshot unit"
 grep -q 'proxy-gateway-auto' "${auto_script}" || fail "auto replay rules must carry the project tag"
 grep -q '2222,10022,53,853,8111' "${auto_script}" || fail "auto replay must keep the detected SSH ports and service ports"
-grep -q '10.100.0.0/16' "${auto_script}" || fail "auto replay must whitelist the client networks"
+grep -q '172.22.0.0/16' "${auto_script}" || fail "auto replay must whitelist the client network"
 grep -q "ExecStart=${auto_script}" "${auto_unit}" || fail "oneshot unit must run the replay script"
 grep -qE 'After=.*nftables.service' "${auto_unit}" || fail "oneshot must be ordered after the host firewall services"
 

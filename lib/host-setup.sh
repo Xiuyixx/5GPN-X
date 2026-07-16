@@ -289,13 +289,13 @@ firewall_preserve_hints() {
     info "Make sure these inbound ports are open (SSH detected on: ${ssh_ports}):"
     info "  TCP ${ssh_ports} (SSH), 53 (DNS), 853 (DoT), 8111 (iOS profile)"
     info "  UDP 53 (DNS)"
-    info "  From 172.22.0.0/16 and 10.100.0.0/16 only: TCP 80/443 and UDP 443 (reverse proxy)"
+    info "  From 172.22.0.0/16 only: TCP 80/443 and UDP 443 (reverse proxy)"
     info "  TCP 80 must be reachable while Let's Encrypt issues/renews the cert."
 }
 firewall_auto_allow() {
     local ssh_ports="$1" p net
     local tcp_list="${ssh_ports},53,853,8111"
-    local client_nets="172.22.0.0/16 10.100.0.0/16"
+    local client_nets="172.22.0.0/16"
     if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
         info "FIREWALL_MODE=auto: adding allow rules to the active UFW profile..."
         for p in ${tcp_list//,/ }; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
@@ -431,8 +431,6 @@ table inet filter {
         udp dport 53 accept
         ip saddr 172.22.0.0/16 tcp dport { 80, 443 } accept
         ip saddr 172.22.0.0/16 udp dport 443 accept
-        ip saddr 10.100.0.0/16 tcp dport { 80, 443 } accept
-        ip saddr 10.100.0.0/16 udp dport 443 accept
         # ICMP for basic network health
         ip protocol icmp accept
         ip6 nexthdr icmpv6 accept
@@ -474,8 +472,6 @@ EOF
         iptables -A INPUT -p udp --dport 53 -j ACCEPT
         iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT
         iptables -A INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT
-        iptables -A INPUT -s 10.100.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT
-        iptables -A INPUT -s 10.100.0.0/16 -p udp --dport 443 -j ACCEPT
         iptables -A INPUT -p icmp -j ACCEPT
         iptables -P FORWARD ACCEPT
         iptables -P OUTPUT ACCEPT
@@ -553,7 +549,7 @@ setup_firewall() {
         auto)     firewall_auto_allow "$ssh_ports" ;;
         managed)  firewall_managed_apply "$tcp_ports" "$tcp_ports_ipt" || true ;;
     esac
-    ok "Firewall configured (reverse proxy whitelist: 172.22.0.0/16, 10.100.0.0/16)"
+    ok "Firewall configured (reverse proxy whitelist: 172.22.0.0/16)"
 }
 open_cert_http_port() {
     info "Temporarily opening TCP/80 for Let's Encrypt HTTP-01..."
