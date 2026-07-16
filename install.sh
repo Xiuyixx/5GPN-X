@@ -770,6 +770,7 @@ is_valid_domain() {
 }
 generate_domain() {
     if [[ -n "${DOMAIN:-}" ]]; then
+        DOMAIN="${DOMAIN,,}"  # normalize to lowercase (certbot always lowercases)
         if ! is_valid_domain "$DOMAIN"; then
             err "Invalid DOMAIN: '$DOMAIN'. Provide a fully-qualified domain like dns.example.com"
             exit 1
@@ -799,6 +800,7 @@ generate_domain() {
         input="${input%/}"
         if is_valid_domain "$input"; then
             DOMAIN="$input"
+            DOMAIN="${DOMAIN,,}"  # normalize to lowercase
             break
         fi
         warn "无效域名，请输入形如 dns.example.com 的完整域名"
