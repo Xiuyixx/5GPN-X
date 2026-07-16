@@ -42,7 +42,7 @@ PGW_AUTO_ALLOW_SCRIPT="${auto_script}" PGW_AUTO_ALLOW_UNIT="${auto_unit}" \
 [[ -x "${auto_script}" ]] || fail "auto persistence script must be executable"
 [[ -f "${auto_unit}" ]] || fail "auto mode must install a boot-time oneshot unit"
 grep -q 'proxy-gateway-auto' "${auto_script}" || fail "auto replay rules must carry the project tag"
-grep -q '2222,10022,53,853,8111' "${auto_script}" || fail "auto replay must keep the detected SSH ports and service ports"
+grep -q '2222,10022,853,8111' "${auto_script}" || fail "auto replay must keep the detected SSH ports and service ports (port 53 is source-restricted separately)"
 grep -q '172.22.0.0/16' "${auto_script}" || fail "auto replay must whitelist the client network"
 grep -q "ExecStart=${auto_script}" "${auto_unit}" || fail "oneshot unit must run the replay script"
 grep -qE 'After=.*nftables.service' "${auto_unit}" || fail "oneshot must be ordered after the host firewall services"

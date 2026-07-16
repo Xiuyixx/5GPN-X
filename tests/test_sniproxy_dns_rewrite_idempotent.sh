@@ -49,14 +49,14 @@ chmod +x "${script}"
 # config (/etc/mosdns, systemctl restart mosdns, ...).
 export G5PNX_BOOTSTRAPPED=1
 PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns \
-  "https://1.1.1.1/dns-query udp://8.8.8.8:53" \
-  "https://223.5.5.5/dns-query udp://119.29.29.29:53"
+  "1.1.1.1 8.8.8.8 9.9.9.9" \
+  "101.226.4.6 218.30.118.6 180.76.76.76 119.29.29.29"
 PATH="${tmp}/bin:${PATH}" bash "${script}" --set-dns \
-  "https://1.1.1.1/dns-query udp://8.8.8.8:53" \
-  "https://223.5.5.5/dns-query udp://119.29.29.29:53"
+  "1.1.1.1 8.8.8.8 9.9.9.9" \
+  "101.226.4.6 218.30.118.6 180.76.76.76 119.29.29.29"
 
-grep -q 'nameserver 1.1.1.1' "${tmp}/sniproxy.conf" || { echo "sniproxy DoH host extraction missing" >&2; exit 1; }
-grep -q 'nameserver 8.8.8.8' "${tmp}/sniproxy.conf" || { echo "sniproxy UDP fallback extraction missing" >&2; exit 1; }
+grep -q 'nameserver 1.1.1.1' "${tmp}/sniproxy.conf" || { echo "sniproxy remote DNS missing" >&2; exit 1; }
+grep -q 'nameserver 8.8.8.8' "${tmp}/sniproxy.conf" || { echo "sniproxy secondary remote DNS missing" >&2; exit 1; }
 grep -q 'mode ipv4_only' "${tmp}/sniproxy.conf" || { echo "sniproxy ipv4_only missing" >&2; exit 1; }
 [[ "$(grep -c '^resolver {$' "${tmp}/sniproxy.conf")" -eq 1 ]] || { echo "resolver block duplicated" >&2; exit 1; }
 

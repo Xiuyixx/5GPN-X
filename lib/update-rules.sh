@@ -12,8 +12,8 @@ GFWLIST_EXTRA_FILE="${BASE_DIR}/gfwlist-extra-local.txt"
 DEFAULT_RULES_FILE="/etc/proxy-gateway/rules-default.conf"
 MOSDNS_TEMPLATE="${BASE_DIR}/config.yaml.template"
 MOSDNS_CONF="${BASE_DIR}/config.yaml"
-DEFAULT_REMOTE_DNS=("https://1.1.1.1/dns-query" "udp://8.8.8.8:53")
-DEFAULT_LOCAL_DNS=("https://223.5.5.5/dns-query" "udp://119.29.29.29:53")
+DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
+DEFAULT_LOCAL_DNS=("101.226.4.6" "218.30.118.6" "180.76.76.76" "119.29.29.29")
 
 normalize_domain() {
     local domain="${1:-}"
@@ -144,28 +144,42 @@ parse_chinalist() {
 
 yaml_upstreams() {
     local input="${1:-}" fallback="${2:-}" mode="${3:-primary}"
-    python3 - "$input" "$fallback" "$mode" <<'PY'
+    local protocol="${4:-udp}"
+    python3 - "$input" "$fallback" "$mode" "$protocol" <<'PY'
 import ipaddress
 import sys
 
 items = list(dict.fromkeys(sys.argv[1].replace(",", " ").split()))
 fallbacks = sys.argv[2].split()
 mode = sys.argv[3]
+protocol = sys.argv[4] if len(sys.argv) > 4 else "udp"
 if mode == "primary":
-    selected = items[:1]
+    selected = items[:1] if items else fallbacks[:1]
+elif mode == "secondary":
+    selected = items[1:] if len(items) > 1 else [next((item for item in fallbacks if item != items[0]), fallbacks[0])] if items else fallbacks[1:]
+elif mode == "all":
+    # Use all items (for China DNS 4-server race).
+    selected = items if items else fallbacks
 else:
-    selected = items[1:]
-    if not selected:
-        selected = [next(item for item in fallbacks if item != items[0])]
+    selected = items if items else fallbacks
+if not selected:
+    selected = fallbacks
 for item in selected:
+    # If it is already a scheme URL, emit as-is.
+    if "://" in item:
+        print(f"        - addr: {item}")
+        continue
     if item.count(":") > 1:
         try:
             ipaddress.ip_address(item)
-            item = f"[{item}]:53"
+            item = f"{protocol}://[{item}]:53"
         except ValueError:
             pass
     elif ":" not in item:
-        item = f"{item}:53"
+        item = f"{protocol}://{item}:53"
+    else:
+        # Already has host:port, prepend protocol.
+        item = f"{protocol}://{item}"
     print(f"        - addr: {item}")
 PY
 }
@@ -179,10 +193,10 @@ render_config() {
     local_dns=$(cat "$BASE_DIR/.local_dns" 2>/dev/null || printf '%s ' "${DEFAULT_LOCAL_DNS[@]}")
     cache_size=$(cat "$BASE_DIR/.cache_size" 2>/dev/null || echo 500000)
     [[ "$cache_size" =~ ^[0-9]+$ ]] || cache_size=500000
-    remote_primary=$(yaml_upstreams "$remote_dns" "1.1.1.1 9.9.9.9" primary)
-    remote_secondary=$(yaml_upstreams "$remote_dns" "9.9.9.9 1.0.0.1" secondary)
-    local_primary=$(yaml_upstreams "$local_dns" "223.5.5.5 119.29.29.29" primary)
-    local_secondary=$(yaml_upstreams "$local_dns" "119.29.29.29 223.5.5.5" secondary)
+    remote_primary=$(yaml_upstreams "$remote_dns" "1.1.1.1 8.8.8.8 9.9.9.9" primary udp)
+    remote_secondary=$(yaml_upstreams "$remote_dns" "9.9.9.9 1.0.0.1" secondary udp)
+    local_primary=$(yaml_upstreams "$local_dns" "101.226.4.6 218.30.118.6 180.76.76.76 119.29.29.29" all udp)
+    local_secondary=$(yaml_upstreams "$local_dns" "101.226.4.6 218.30.118.6 180.76.76.76 119.29.29.29" all tcp)
 
     python3 - "$MOSDNS_TEMPLATE" "$MOSDNS_CONF.tmp" "$server_ip" "$cache_size" \
         "$remote_primary" "$remote_secondary" "$local_primary" "$local_secondary" <<'PY'

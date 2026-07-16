@@ -26,8 +26,8 @@ MIHOMO_ROUTER_GEN="/opt/proxy-gateway/bin/mihomo-router-config.py"
 RULES_IMPORT="/opt/proxy-gateway/bin/rules-import.py"
 MIHOMO_VERSION_DEFAULT="1.19.28"
 MOSDNS_VERSION_DEFAULT="5.3.4"
-DEFAULT_REMOTE_DNS=("https://1.1.1.1/dns-query" "udp://8.8.8.8:53")
-DEFAULT_LOCAL_DNS=("https://223.5.5.5/dns-query" "udp://119.29.29.29:53")
+DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
+DEFAULT_LOCAL_DNS=("101.226.4.6" "218.30.118.6" "180.76.76.76" "119.29.29.29")
 bootstrap_from_repo_if_needed() {
     local required=(
         install.sh
@@ -272,10 +272,7 @@ certbot_diagnostics() {
 configure_dns_upstreams() {
     local remote_selected="${REMOTE_DNS:-${DNS_UPSTREAMS:-${OVERSEAS_DNS:-${PRIVATE_OVERSEAS_DNS:-${SNIPROXY_DNS:-}}}}}"
     local local_selected="${LOCAL_DNS:-}"
-    local remote_explicit=0 local_explicit=0
     local mosdns_dir="${MOSDNS_DIR:-/etc/mosdns}"
-    [[ -n "$remote_selected" ]] && remote_explicit=1
-    [[ -n "$local_selected" ]] && local_explicit=1
     if [[ -z "$remote_selected" ]]; then
         remote_selected=$(cat "${mosdns_dir}/.remote_dns" 2>/dev/null || cat /etc/dnsdist/.remote_dns 2>/dev/null || true)
     fi
@@ -284,20 +281,10 @@ configure_dns_upstreams() {
     fi
     if [[ -z "$remote_selected" && -t 0 ]]; then
         echo ""
-        read -r -p "国际 DNS remote [Cloudflare DoH, Google UDP fallback]: " remote_selected
-        [[ -n "$remote_selected" ]] && remote_explicit=1
+        read -r -p "国际 DNS remote [1.1.1.1,8.8.8.8,9.9.9.9]: " remote_selected
     fi
     if [[ -z "$local_selected" && -t 0 ]]; then
-        read -r -p "国内 DNS local [AliDNS DoH, DNSPod UDP fallback]: " local_selected
-        [[ -n "$local_selected" ]] && local_explicit=1
-    fi
-    if [[ $remote_explicit -eq 0 && "${remote_selected//,/ }" =~ ^1\.1\.1\.1[[:space:]]+8\.8\.8\.8$ ]]; then
-        remote_selected="${DEFAULT_REMOTE_DNS[*]}"
-        info "Migrating legacy international UDP defaults to DoH + UDP fallback"
-    fi
-    if [[ $local_explicit -eq 0 && "${local_selected//,/ }" =~ ^223\.5\.5\.5[[:space:]]+119\.29\.29\.29$ ]]; then
-        local_selected="${DEFAULT_LOCAL_DNS[*]}"
-        info "Migrating legacy domestic UDP defaults to DoH + UDP fallback"
+        read -r -p "国内 DNS local [101.226.4.6,218.30.118.6,180.76.76.76,119.29.29.29]: " local_selected
     fi
     [[ -n "$remote_selected" ]] || remote_selected="${DEFAULT_REMOTE_DNS[*]}"
     [[ -n "$local_selected" ]] || local_selected="${DEFAULT_LOCAL_DNS[*]}"

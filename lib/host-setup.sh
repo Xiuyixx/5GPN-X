@@ -270,20 +270,20 @@ firewall_preserve_hints() {
     local ssh_ports="$1"
     info "FIREWALL_MODE=preserve: leaving the existing host firewall untouched."
     info "Make sure these inbound ports are open (SSH detected on: ${ssh_ports}):"
-    info "  TCP ${ssh_ports} (SSH), 53 (DNS), 853 (DoT), 8111 (iOS profile)"
-    info "  UDP 53 (DNS)"
-    info "  From 172.22.0.0/16 only: TCP 80/443 and UDP 443 (reverse proxy)"
+    info "  TCP ${ssh_ports} (SSH), 853 (DoT), 8111 (iOS profile)"
+    info "  From 172.22.0.0/16 only: TCP/UDP 53 (DNS), TCP 80/443 and UDP 443 (reverse proxy)"
     info "  TCP 80 must be reachable while Let's Encrypt issues/renews the cert."
 }
 firewall_auto_allow() {
     local ssh_ports="$1" p net
-    local tcp_list="${ssh_ports},53,853,8111"
+    local tcp_list="${ssh_ports},853,8111"
     local client_nets="172.22.0.0/16"
     if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
         info "FIREWALL_MODE=auto: adding allow rules to the active UFW profile..."
         for p in ${tcp_list//,/ }; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
-        ufw allow 53/udp >/dev/null 2>&1 || true
         for net in ${client_nets}; do
+            ufw allow from "${net}" to any port 53 proto tcp >/dev/null 2>&1 || true
+            ufw allow from "${net}" to any port 53 proto udp >/dev/null 2>&1 || true
             ufw allow from "${net}" to any port 80,443 proto tcp >/dev/null 2>&1 || true
             ufw allow from "${net}" to any port 443 proto udp >/dev/null 2>&1 || true
         done
@@ -292,8 +292,9 @@ firewall_auto_allow() {
     if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
         info "FIREWALL_MODE=auto: adding ports to the running firewalld zone..."
         for p in ${tcp_list//,/ }; do firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true; done
-        firewall-cmd --permanent --add-port=53/udp >/dev/null 2>&1 || true
         for net in ${client_nets}; do
+            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="53" protocol="tcp" accept' >/dev/null 2>&1 || true
+            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="53" protocol="udp" accept' >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="80" protocol="tcp" accept' >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="443" protocol="tcp" accept' >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="443" protocol="udp" accept' >/dev/null 2>&1 || true
@@ -335,7 +336,7 @@ write_auto_allow_persistence() {
         echo '#!/bin/bash'
         echo '# 5GPN-X auto-mode firewall allow rules. Idempotent; safe to replay.'
         echo '# Managed by the installer (FIREWALL_MODE=auto). Tag: proxy-gateway-auto'
-        printf 'tcp_list="%s,53,853,8111"\n' "$ssh_ports"
+        printf 'tcp_list="%s,853,8111"\n' "$ssh_ports"
         printf 'client_nets="%s"\n' "$client_nets"
         cat <<'AUTO_BODY'
 if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null 2>&1; then
@@ -344,9 +345,11 @@ if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null
         printf '%s' "$have" | grep -qE "tcp dport ${p} .*accept" || \
             nft insert rule inet filter input tcp dport "$p" accept comment '"proxy-gateway-auto"' 2>/dev/null || true
     done
-    printf '%s' "$have" | grep -qE 'udp dport 53 .*accept' || \
-        nft insert rule inet filter input udp dport 53 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
     for net in ${client_nets}; do
+        printf '%s' "$have" | grep -q "${net}.*dport 53" || \
+            nft insert rule inet filter input ip saddr "${net}" tcp dport 53 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
+        printf '%s' "$have" | grep -q "${net}.*udp.*53" || \
+            nft insert rule inet filter input ip saddr "${net}" udp dport 53 accept comment '"proxy-gateway-auto"' 2>/dev/null || true
         printf '%s' "$have" | grep -q "${net} tcp" || \
             nft insert rule inet filter input ip saddr "${net}" tcp dport '{ 80, 443 }' accept comment '"proxy-gateway-auto"' 2>/dev/null || true
         printf '%s' "$have" | grep -q "${net} udp" || \
@@ -357,9 +360,11 @@ elif command -v iptables >/dev/null 2>&1; then
         iptables -C INPUT -p tcp --dport "$p" -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
             iptables -I INPUT -p tcp --dport "$p" -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
     done
-    iptables -C INPUT -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
-        iptables -I INPUT -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
     for net in ${client_nets}; do
+        iptables -C INPUT -s "${net}" -p tcp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p tcp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
+        iptables -C INPUT -s "${net}" -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "${net}" -p udp --dport 53 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
         iptables -C INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
             iptables -I INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || true
         iptables -C INPUT -s "${net}" -p udp --dport 443 -m comment --comment proxy-gateway-auto -j ACCEPT 2>/dev/null || \
@@ -411,9 +416,8 @@ table inet filter {
         iif "lo" accept
         ct state established,related accept
         tcp dport { __TCP_PORTS__ } accept
-        udp dport 53 accept
-        ip saddr 172.22.0.0/16 tcp dport { 80, 443 } accept
-        ip saddr 172.22.0.0/16 udp dport 443 accept
+        ip saddr 172.22.0.0/16 tcp dport { 53, 80, 443 } accept
+        ip saddr 172.22.0.0/16 udp dport { 53, 443 } accept
         # ICMP for basic network health
         ip protocol icmp accept
         ip6 nexthdr icmpv6 accept
@@ -452,9 +456,8 @@ EOF
         iptables -A INPUT -i lo -j ACCEPT
         iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         iptables -A INPUT -p tcp -m multiport --dports "${tcp_ports_ipt}" -j ACCEPT
-        iptables -A INPUT -p udp --dport 53 -j ACCEPT
-        iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT
-        iptables -A INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT
+        iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 53,80,443 -j ACCEPT
+        iptables -A INPUT -s 172.22.0.0/16 -p udp -m multiport --dports 53,443 -j ACCEPT
         iptables -A INPUT -p icmp -j ACCEPT
         iptables -P FORWARD ACCEPT
         iptables -P OUTPUT ACCEPT
@@ -522,7 +525,7 @@ setup_firewall() {
     local mode ssh_ports tcp_ports tcp_ports_ipt
     mode="$(resolve_firewall_mode)"
     ssh_ports="$(detect_ssh_ports)"
-    tcp_ports_ipt="${ssh_ports},53,853,8111"
+    tcp_ports_ipt="${ssh_ports},853,8111"
     tcp_ports="${tcp_ports_ipt//,/, }"
     info "Firewall mode: ${mode} (detected SSH port(s): ${ssh_ports})"
     apply_pgw_exit_rules

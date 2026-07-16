@@ -14,29 +14,33 @@ has "$template" 'client_ip 172.22.0.0/16' \
     "mosdns must identify the gateway client network by source address"
 has "$template" 'exec: goto private_client' \
     "gateway client networks must enter the synthetic proxy policy"
+has "$template" 'exec: goto public_client' \
+    "non-private clients must enter the public resolution policy"
 has "$template" 'exec: goto remote_resolve' \
-    "non-private clients must use normal remote DNS resolution"
+    "public client non-ChinaList domains must use remote resolve"
 has "$template" 'exec: reject 0' \
-    "private-client AAAA queries must receive NOERROR/NODATA"
+    "AAAA queries must be globally rejected (IPv4-only policy)"
 has "$template" 'exec: black_hole __SERVER_IP__' \
     "private overseas A queries must resolve to the gateway"
-[[ "$(grep -c 'exec: accept' "${root}/lib/mosdns.yaml.template")" -eq 2 ]] \
-    || fail "synthetic A responses must terminate the sequence before normal forwarding"
+[[ "$(grep -c 'exec: accept' "${root}/lib/mosdns.yaml.template")" -ge 2 ]] \
+    || fail "sequence responses must terminate before normal forwarding"
 has "$template" 'qname $china_domains' \
     "ChinaList domains must retain domestic resolution"
 
-china_line=$(grep -n 'qname \$china_domains' "${root}/lib/mosdns.yaml.template" | cut -d: -f1)
+china_line=$(grep -n 'qname \$china_domains' "${root}/lib/mosdns.yaml.template" | head -n1 | cut -d: -f1)
 spoof_line=$(grep -n 'exec: black_hole __SERVER_IP__' "${root}/lib/mosdns.yaml.template" | tail -n1 | cut -d: -f1)
 [[ "$china_line" -lt "$spoof_line" ]] || fail "ChinaList matching must run before default private A spoofing"
 
-[[ "$(grep -c 'type: fallback' "${root}/lib/mosdns.yaml.template")" -eq 2 ]] \
-    || fail "remote and local DNS paths must each have a fallback plugin"
-[[ "$(grep -c 'always_standby: true' "${root}/lib/mosdns.yaml.template")" -eq 2 ]] \
-    || fail "both fallback paths must keep the secondary upstream warm"
+[[ "$(grep -c 'type: fallback' "${root}/lib/mosdns.yaml.template")" -ge 2 ]] \
+    || fail "remote and local DNS paths must have fallback plugins"
+[[ "$(grep -c 'always_standby: true' "${root}/lib/mosdns.yaml.template")" -ge 2 ]] \
+    || fail "fallback paths must keep the secondary upstream warm"
 has "$template" 'primary: remote_primary' "remote fallback primary is missing"
 has "$template" 'secondary: remote_secondary' "remote fallback secondary is missing"
-has "$template" 'primary: local_primary' "local fallback primary is missing"
-has "$template" 'secondary: local_secondary' "local fallback secondary is missing"
+has "$template" 'primary: local_udp_tcp_fallback' "China DNS two-tier fallback is missing"
+has "$template" 'secondary: local_overseas_fallback' "China DNS overseas fallback is missing"
+has "$template" 'threshold: 150' "China DNS UDP->TCP threshold must be 150ms"
+has "$template" '22.22.22.22' "overseas fallback must include 22.22.22.22"
 
 has "$template" 'type: udp_server' "UDP/53 listener is missing"
 [[ "$(grep -c 'type: tcp_server' "${root}/lib/mosdns.yaml.template")" -eq 2 ]] \
@@ -44,11 +48,11 @@ has "$template" 'type: udp_server' "UDP/53 listener is missing"
 has "$template" 'cert: /etc/mosdns/certs/fullchain.pem' "DoT certificate is missing"
 
 has "$rules" 'mode == "primary"' "upstream renderer must split primary and fallback servers"
-has "$rules" 'DEFAULT_REMOTE_DNS=("https://1.1.1.1/dns-query" "udp://8.8.8.8:53")' \
-    "international DNS must prefer DoH with an independent UDP fallback"
-has "$rules" 'DEFAULT_LOCAL_DNS=("https://223.5.5.5/dns-query" "udp://119.29.29.29:53")' \
-    "domestic DNS must prefer DoH with an independent UDP fallback"
-has "$rules" 'next(item for item in fallbacks if item != items[0])' \
+has "$rules" 'DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")' \
+    "international DNS must use the 3-server overseas pool"
+has "$rules" 'DEFAULT_LOCAL_DNS=("101.226.4.6" "218.30.118.6" "180.76.76.76" "119.29.29.29")' \
+    "domestic DNS must use the 4-server China race pool"
+has "$rules" 'next((item for item in fallbacks if item != items[0])' \
     "a single configured resolver must still get an independent fallback"
 has "$rules" 'timeout 2 mosdns start -c "$validate_conf"' "generated mosdns config must be validated"
 has "$rules" 'rc -ne 124' "successful timeout-based validation must be accepted"
