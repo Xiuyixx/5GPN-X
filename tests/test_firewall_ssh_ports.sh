@@ -69,20 +69,20 @@ got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${
 got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE=bogus resolve_firewall_mode)"
 [[ "$got" == "preserve" ]] || fail "unknown FIREWALL_MODE must fall back to preserve: got '${got}'"
 
-# our own marker file is the authoritative managed signal, regardless of ruleset shape
+# A historical managed marker must not make a later reinstall destructive.
 printf '' > "${tmp}/marker"
 got="$(PGW_FW_MARK="${tmp}/marker" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
-[[ "$got" == "managed" ]] || fail "managed marker file must force managed mode: got '${got}'"
+[[ "$got" == "preserve" ]] || fail "managed marker must not opt a reinstall into managed mode: got '${got}'"
 
-# upgrade path: a project-written nftables ruleset keeps being managed
+# A legacy project-written nftables ruleset may contain later user additions.
 printf 'flush ruleset\ntable inet pgw_exit {}\n' > "${tmp}/nftables.conf"
 got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/nftables.conf" PGW_IPT_RULES="${tmp}/none" FIREWALL_MODE='' resolve_firewall_mode)"
-[[ "$got" == "managed" ]] || fail "old managed nftables installs must stay managed: got '${got}'"
+[[ "$got" == "preserve" ]] || fail "legacy nftables fingerprint must not opt a reinstall into managed mode: got '${got}'"
 
-# upgrade path: an OLD managed iptables ruleset carries our fingerprint (client net) beside the DROP policy
+# The same rule applies to old project-managed iptables rulesets.
 printf '*filter\n:INPUT DROP [0:0]\n-A INPUT -s 172.22.0.0/16 -p tcp -j ACCEPT\nCOMMIT\n' > "${tmp}/managed.rules"
 got="$(PGW_FW_MARK="${mark_absent}" PGW_NFT_CONF="${tmp}/none" PGW_IPT_RULES="${tmp}/managed.rules" FIREWALL_MODE='' resolve_firewall_mode)"
-[[ "$got" == "managed" ]] || fail "old managed iptables installs (DROP + project rules) must stay managed: got '${got}'"
+[[ "$got" == "preserve" ]] || fail "legacy iptables fingerprint must not opt a reinstall into managed mode: got '${got}'"
 
 # a bare ':INPUT DROP' (iptables-persistent default set by the user, no project rules) must NOT trigger managed
 printf '*filter\n:INPUT DROP [0:0]\n-A INPUT -p tcp --dport 22 -j ACCEPT\nCOMMIT\n' > "${tmp}/user.rules"

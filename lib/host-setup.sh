@@ -210,31 +210,14 @@ resolve_firewall_mode() {
     # auto:               incrementally allow the needed ports in the existing
     #                     firewall (UFW/firewalld/nft/iptables); never flush.
     # managed:            fully own the INPUT firewall (legacy behaviour).
-    local nft_conf="${PGW_NFT_CONF:-/etc/nftables.conf}"
-    local ipt_rules="${PGW_IPT_RULES:-/etc/iptables.rules}"
-    local mark_file="${PGW_FW_MARK:-/etc/proxy-gateway/.firewall-managed}"
     case "${FIREWALL_MODE:-}" in
         preserve|auto|managed) echo "${FIREWALL_MODE}"; return 0 ;;
         "") ;;
         *) warn "Unknown FIREWALL_MODE='${FIREWALL_MODE}'; using preserve"; echo preserve; return 0 ;;
     esac
-    # Authoritative signal: our own marker, dropped only after a successful
-    # managed install. When we know for sure, never guess from ruleset shape.
-    if [[ -f "$mark_file" ]]; then
-        echo managed; return 0
-    fi
-    # Legacy upgrade path (installs predating the marker file). Only claim a host
-    # as managed when the ruleset carries our own fingerprint. A bare
-    # ':INPUT DROP' is a common iptables-persistent default set by the user, so
-    # it must NOT on its own trigger managed mode (which would flush INPUT).
-    if [[ -f "$nft_conf" ]] && grep -q 'pgw_exit' "$nft_conf" 2>/dev/null; then
-        echo managed; return 0
-    fi
-    if [[ -f "$ipt_rules" ]] \
-        && grep -qE '^:INPUT DROP' "$ipt_rules" 2>/dev/null \
-        && grep -qE '172\.22\.0\.0/16|10\.100\.0\.0/16' "$ipt_rules" 2>/dev/null; then
-        echo managed; return 0
-    fi
+    # managed replaces the host INPUT ruleset, so it must be explicitly opted
+    # into on every run. Never infer it from a marker or legacy rule fingerprint:
+    # users may have added their own rules after an earlier managed install.
     echo preserve
 }
 write_pgw_exit_nft() {
@@ -479,9 +462,8 @@ EOF
             iptables-save > /etc/iptables.rules 2>/dev/null || true
         fi
     fi
-    # Record that this host is now project-managed so future runs never have to
-    # guess from ruleset shape (see resolve_firewall_mode). Reached only on a
-    # successful apply; the nft branch returns early on validation failure.
+    # Record that this host has project-managed firewall state so uninstall can
+    # clean up safely. This marker never opts a later install into managed mode.
     local mark_file="${PGW_FW_MARK:-/etc/proxy-gateway/.firewall-managed}"
     mkdir -p "$(dirname "$mark_file")"
     : > "$mark_file"
