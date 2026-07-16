@@ -1366,7 +1366,7 @@ def op_add_rule(line):
 def op_add_ruleset(text):
     parts = (text or "").strip().split(None, 1)
     if len(parts) != 2:
-        return "请发送：<code>规则集URL 目标</code>，目标可为出口名、分类、direct 或 block。"
+        return "请发送规则集 URL。"
     source, target = parts
     if not re.match(r"^https?://\S+$", source):
         return "规则集必须是 http(s) URL。"
@@ -1377,6 +1377,16 @@ def op_add_ruleset(text):
         return "✅ <b>规则集已添加</b>\n<code>%s</code> → <b>%s</b>" % (
             html.escape(source), html.escape(target.strip()))
     return "❌ <b>规则集添加失败</b>\n%s" % html.escape(_reason(out))
+
+
+def validate_ruleset_url(url):
+    """Return error string if invalid, else empty string."""
+    url = (url or "").strip()
+    if not url:
+        return "URL 不能为空。"
+    if not re.match(r"^https?://\S+$", url):
+        return "规则集必须是 http(s) URL。"
+    return ""
 
 
 def op_del_rule_button(index, token):
@@ -1810,11 +1820,19 @@ def handle_message(msg):
         return
     if state and state.get("action") == "rules_addset":
         prompt_mid = state.get("prompt_mid")
-        PENDING.pop(chat_id, None)
-        ruleset_text = text
+        ruleset_url = text.strip()
         background(delete_message, chat_id, msg.get("message_id"))
-        mid = upsert_console(chat_id, "⏳ 正在校验并添加规则集…", message_id=prompt_mid)
-        console_async(chat_id, lambda: op_add_ruleset(ruleset_text), rules_menu(), message_id=mid)
+        err = validate_ruleset_url(ruleset_url)
+        if err:
+            state["prompt_mid"] = upsert_console(chat_id, err, cancel_kb("rules"),
+                                                 message_id=prompt_mid)
+            return
+        mid = upsert_console(
+            chat_id,
+            "请选择目标：<code>%s</code>" % html.escape(ruleset_url),
+            _rule_target_buttons("rsadd"), message_id=prompt_mid)
+        PENDING[chat_id] = {"action": "rules_addset_target",
+                            "ruleset_url": ruleset_url, "prompt_mid": mid}
         return
     if state and state.get("action") == "dot_domain":
         prompt_mid = state.get("prompt_mid")
@@ -1955,13 +1973,27 @@ def handle_callback(cb):
         PENDING[chat_id] = {"action": "rules_addset", "prompt_mid": cb_mid}
         edit(cb,
              "➕ <b>添加规则集</b>\n\n"
-             "发送规则集 URL 和目标出口，用空格分隔。\n\n"
-             "格式：<code>URL 出口</code>\n"
-             "示例：<code>https://example.com/openai.mrs us</code>\n\n"
+             "发送规则集 URL。\n\n"
+             "示例：<code>https://example.com/openai.mrs</code>\n\n"
              "支持格式：mihomo <code>.mrs</code>、Clash YAML、纯文本规则集\n"
-             "目标：出口名 / 分类 / <code>direct</code> / <code>block</code>\n\n"
-             "添加后点「🔄 更新规则」可立即拉取生效。",
+             "下一步选择目标出口。添加后点「🔄 更新规则」可立即拉取生效。",
              cancel_kb("rules"))
+    elif data.startswith("rsadd:"):
+        state = PENDING.get(chat_id) or {}
+        parts = data.split(":", 1)
+        target = parts[1] if len(parts) == 2 else ""
+        ruleset_url = state.get("ruleset_url") or ""
+        valid_targets = set(_targets()) | {"direct", "block"}
+        if state.get("action") != "rules_addset_target" or not ruleset_url:
+            edit(cb, "规则集输入已过期，请重新开始。", back_kb("menu:rules"))
+        elif target not in valid_targets:
+            edit(cb, "目标已变化，请重新选择。", _rule_target_buttons("rsadd"))
+        else:
+            PENDING.pop(chat_id, None)
+            edit(cb, "⏳ 正在添加规则集 <code>%s</code> → <b>%s</b>…"
+                 % (html.escape(ruleset_url), html.escape(target)))
+            edit_async(cb, lambda: op_add_ruleset("%s %s" % (ruleset_url, target)),
+                       back_kb("menu:rules"))
     elif data == "exit_add":
         PENDING[chat_id] = {"action": "add_exit_link", "prompt_mid": cb_mid}
         edit(cb,

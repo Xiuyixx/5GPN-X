@@ -127,8 +127,11 @@ class RulesFlowsTest(unittest.TestCase):
     def test_add_and_delete_ruleset_flow(self):
         self.cb("rules:addset")
         self.assertEqual(bot.PENDING[CHAT_ID]["action"], "rules_addset")
-        self.msg("https://example.com/openai.mrs us")
-        self.assertTrue(self.mgmt_calls)
+        self.msg("https://example.com/openai.mrs")
+        self.assertEqual(bot.PENDING[CHAT_ID]["action"], "rules_addset_target")
+        self.assertEqual(bot.PENDING[CHAT_ID]["ruleset_url"], "https://example.com/openai.mrs")
+        self.cb("rsadd:us")
+        self.assertTrue(any("--add-ruleset" in c for c in self.mgmt_calls[-1]))
         menu = bot.rulesets_del_menu()
         buttons = [b for row in menu for b in row if b["callback_data"].startswith("rulesetdel:")]
         self.assertEqual(len(buttons), 1)
