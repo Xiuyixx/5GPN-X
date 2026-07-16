@@ -1343,14 +1343,14 @@ def op_del_ruleset_button(index, token):
 
 
 def op_set_rules(text):
-    if not (text or "").strip():
-        return "规则不能为空。"
-    # Always goes through --set-rules, so mihomo validates before commit.
-    ok, out = run2(["bash", MGMT, "--set-rules"], inp=text, timeout=180)
+    text = (text or "").strip()
+    # Goes through --set-rules; mihomo validates before commit.
+    ok, out = run2(["bash", MGMT, "--set-rules"], inp=text + "\n" if text else "\n", timeout=180)
     if ok:
         m = re.search(r"\((\d+) rules\)", out)
+        count = m.group(1) if m else "0"
         return ("✅ <b>分流规则已更新</b>（%s 条）\n用「⚡ 启用分流」或在 🌐 出口 选 smart 生效。"
-                % (m.group(1) if m else "?"))
+                % count)
     return "❌ <b>规则设置失败</b>\n%s" % html.escape(_reason(out))
 
 
