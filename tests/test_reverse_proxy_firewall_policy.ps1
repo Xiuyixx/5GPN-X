@@ -17,10 +17,14 @@ function Assert-Contains {
     }
 }
 
-Assert-Contains $install 'ip saddr 172.22.0.0/16 tcp dport { 53, 80, 443 } accept' 'nft TCP reverse proxy + DNS private allow'
-Assert-Contains $install 'ip saddr 172.22.0.0/16 udp dport { 53, 443 } accept' 'nft UDP DNS + reverse proxy private allow'
+Assert-Contains $install 'ip saddr 172.22.0.0/16 tcp dport { 80, 443 } accept' 'nft TCP reverse proxy private allow'
+Assert-Contains $install 'ip saddr 172.22.0.0/16 udp dport 443 accept' 'nft UDP reverse proxy private allow'
+Assert-Contains $install 'tcp dport 853 meter dns_rate_dot' 'nft DoT per-IP QPS rate limit'
+Assert-Contains $install 'meter dns_rate_tcp53' 'nft DNS TCP per-IP QPS rate limit'
+Assert-Contains $install 'meter dns_rate_udp53' 'nft DNS UDP per-IP QPS rate limit'
 Assert-Contains $install 'iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 53,80,443 -j ACCEPT' 'iptables TCP reverse proxy + DNS private allow'
 Assert-Contains $install 'iptables -A INPUT -s 172.22.0.0/16 -p udp -m multiport --dports 53,443 -j ACCEPT' 'iptables UDP DNS + reverse proxy private allow'
+Assert-Contains $install 'hashlimit-name dns_dot' 'iptables DoT per-IP QPS rate limit'
 Assert-Contains $install 'iptables -F INPUT' 'iptables fallback flushes stale public reverse proxy rules'
 Assert-Contains $install '--comment proxy-gateway-cert-http' 'temporary HTTP rule is tagged'
 Assert-Contains $install 'open_cert_http_port()' 'cert flow opens HTTP-01 port temporarily'

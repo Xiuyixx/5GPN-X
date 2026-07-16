@@ -137,17 +137,10 @@ __LOCAL_SECONDARY_UPSTREAMS__
     type: sequence
     args:
       - matches:
-          - qtype 1
-          - qname $gfw_domains
-        exec: black_hole __SERVER_IP__
-      - matches:
-          - has_resp
-        exec: accept
-      - matches:
           - qname $china_domains
         exec: goto local_resolve
       - matches:
-          - qtype 1
+          - qname $gfw_domains
         exec: black_hole __SERVER_IP__
       - matches:
           - has_resp
