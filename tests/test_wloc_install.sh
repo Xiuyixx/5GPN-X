@@ -138,5 +138,39 @@ fi
 [[ "$setup_body" == *'"enabled":false'* ]] || fail "default config must be disabled"
 ok "WLOC defaults to disabled (Apple location direct)"
 
+# --- first-install robustness ----------------------------------------------- #
+# Helper scripts must be installed BEFORE deps so a failed mitmproxy install
+# still leaves a followable --wloc-setup path (the exact bug that shipped a
+# broken server: deps failed, everything after was skipped).
+_deps_line="$(grep -n 'wloc_install_deps' "$SETUP" | grep -v 'wloc_install_deps()' | head -1 | cut -d: -f1)"
+_core_line="$(grep -n 'install -m 0755 .*wloc-core.py' "$SETUP" | head -1 | cut -d: -f1)"
+[[ -n "$_deps_line" && -n "$_core_line" && "$_core_line" -lt "$_deps_line" ]] \
+    || fail "helper scripts must be installed before wloc_install_deps runs"
+ok "helper scripts install before mitmproxy deps (survives a deps failure)"
+
+# deps install must retry transient pip failures.
+[[ "$setup_body" == *'attempt in 1 2 3'* ]] || fail "deps install must retry pip failures"
+# and ensure venv/pip prerequisites on a fresh host.
+[[ "$setup_body" == *'python3-venv python3-pip'* ]] || fail "deps must ensure venv/pip prerequisites"
+ok "mitmproxy install retries + ensures venv/pip prerequisites"
+
+# a health probe must exist and be surfaced by install.sh (no silent skip).
+[[ "$setup_body" == *'wloc_healthcheck()'* ]] || fail "wloc_healthcheck must be defined"
+[[ "$install_body" == *'wloc_healthcheck'* ]] || fail "install.sh summary must run wloc_healthcheck"
+[[ "$install_body" == *'--wloc-setup'* ]] || fail "install must point users at --wloc-setup on failure"
+ok "post-install health probe surfaces incomplete WLOC (no silent skip)"
+
+# the healthcheck must key on the real artifacts (mitmdump + CA profile).
+python3 - <<PY || exit 1
+import re
+body = open("$SETUP", encoding="utf-8").read()
+m = re.search(r"wloc_healthcheck\(\)\s*\{.*?\n\}", body, re.S)
+assert m, "healthcheck body not found"
+h = m.group(0)
+assert "mitmdump" in h.lower() or "wloc_mitmdump_bin" in h, "healthcheck must verify mitmproxy"
+assert "WLOC_CA_PROFILE" in h or "wloc-ca.mobileconfig" in h, "healthcheck must verify CA profile"
+print("ok: healthcheck verifies mitmproxy binary + CA profile")
+PY
+
 rm -rf "$tmp"
 echo "wloc install policy OK"

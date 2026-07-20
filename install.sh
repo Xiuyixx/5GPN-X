@@ -2899,6 +2899,13 @@ main_install() {
     echo "  $0 --set-exit <name|local|smart>"
     echo "  $0 --setup-tgbot                 # 配置/启用 Telegram 控制 Bot"
     echo "  $0 --uninstall"
+    echo ""
+    # WLOC provisioning status (never fatal; make it visible instead of silent).
+    if declare -F wloc_healthcheck >/dev/null 2>&1; then
+        if wloc_healthcheck; then :; else
+            warn "WLOC 未完全就绪，稍后请运行: sudo $0 --wloc-setup"
+        fi
+    fi
     echo "=========================================="
 }
 case "${1:-}" in
@@ -3014,7 +3021,14 @@ case "${1:-}" in
         ;;
     --wloc-setup)
         check_root
-        if declare -F wloc_setup_install >/dev/null 2>&1; then wloc_setup_install; else err "WLOC unavailable"; exit 1; fi
+        if declare -F wloc_setup_install >/dev/null 2>&1; then
+            wloc_setup_install
+            if declare -F wloc_healthcheck >/dev/null 2>&1; then
+                wloc_healthcheck || { err "WLOC 仍未就绪，请检查上方日志"; exit 1; }
+            fi
+        else
+            err "WLOC unavailable"; exit 1
+        fi
         ;;
     --uninstall)
         do_uninstall

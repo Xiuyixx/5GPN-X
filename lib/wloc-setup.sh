@@ -42,6 +42,8 @@ WLOC_HOST_A="gs-loc.apple.com"
 WLOC_HOST_B="gs-loc-cn.apple.com"
 WLOC_MITM_VERSION_PY312="mitmproxy==11.1.3"
 WLOC_MITM_VERSION_PY311="mitmproxy==11.0.2"
+# Set by wloc_setup_install: 0=fully provisioned, 1=needs a follow-up --wloc-setup.
+: "${WLOC_SETUP_INCOMPLETE:=0}"
 
 wloc_info() { echo -e "[INFO] $*"; }
 wloc_warn() { echo -e "[WARN] $*" >&2; }
@@ -71,14 +73,34 @@ wloc_install_deps() {
     # Prefer a distro venv so PEP 668 (externally-managed) does not block us.
     local venv="${BASE_DIR}/wloc-venv" spec
     spec="$(wloc_pick_mitm_version "$py")"
+    # Ensure venv/pip build prerequisites exist. On a brand-new host the venv
+    # module or pip bootstrap may be missing; installing these first is what
+    # makes the very first install.sh run reliable (previously a fresh box
+    # could silently fail here and skip all of WLOC).
+    if ! "$py" -c 'import venv, ensurepip' >/dev/null 2>&1; then
+        apt-get update >/dev/null 2>&1 || true
+        apt-get install -y python3-venv python3-pip >/dev/null 2>&1 || true
+    fi
     wloc_info "Installing ${spec} into ${venv} ..."
-    if ! "$py" -m venv "$venv" >/dev/null 2>&1; then
-        apt-get install -y python3-venv >/dev/null 2>&1 || true
-        "$py" -m venv "$venv" || { wloc_err "cannot create venv for mitmproxy"; return 1; }
+    if [[ ! -x "${venv}/bin/python3" ]]; then
+        if ! "$py" -m venv "$venv" >/dev/null 2>&1; then
+            apt-get install -y python3-venv >/dev/null 2>&1 || true
+            "$py" -m venv "$venv" || { wloc_err "cannot create venv for mitmproxy"; return 1; }
+        fi
     fi
     "${venv}/bin/pip" install --quiet --upgrade pip wheel >/dev/null 2>&1 || true
-    if ! "${venv}/bin/pip" install --quiet "$spec" >/dev/null 2>&1; then
-        wloc_err "pip install ${spec} failed"
+    # pip can fail transiently on a fresh box (network / index warm-up); retry
+    # a couple of times with backoff before giving up.
+    local attempt rc=1
+    for attempt in 1 2 3; do
+        if "${venv}/bin/pip" install --quiet "$spec" >/dev/null 2>&1; then
+            rc=0; break
+        fi
+        wloc_warn "pip install ${spec} failed (attempt ${attempt}/3); retrying..."
+        sleep $(( attempt * 3 ))
+    done
+    if [[ "$rc" -ne 0 ]]; then
+        wloc_err "pip install ${spec} failed after 3 attempts"
         return 1
     fi
     if [[ ! -x "${venv}/bin/mitmdump" ]]; then
@@ -314,17 +336,49 @@ wloc_hijack_disable() {
 # --------------------------------------------------------------------------- #
 wloc_setup_install() {
     wloc_info "Setting up WLOC sidecar (disabled by default) ..."
-    wloc_install_deps || { wloc_warn "WLOC deps not installed; skipping WLOC setup"; return 0; }
+    # Always install the helper scripts + user + config + service unit, even if
+    # mitmproxy could not be installed. These do not depend on mitmproxy, and
+    # having them present means a later `5gpn-ctl --wloc-setup` (once network is
+    # healthy) only needs to fetch mitmproxy + generate the CA -- nothing else.
     wloc_ensure_user
     wloc_ensure_config
     install -m 0755 "${LIB_DIR}/wloc-core.py" "${BASE_DIR}/bin/wloc-core.py"
     install -m 0755 "${LIB_DIR}/wloc-mitm.py" "${BASE_DIR}/bin/wloc-mitm.py"
     install -m 0755 "${LIB_DIR}/wloc-ca-profile.py" "${BASE_DIR}/bin/wloc-ca-profile.py"
-    wloc_ensure_ca || wloc_warn "WLOC CA not ready; enable later via the bot"
+    if ! wloc_install_deps; then
+        wloc_warn "mitmproxy not installed; WLOC left INCOMPLETE."
+        wloc_warn "Re-run once network is healthy:  sudo ${BASE_DIR}/bin/5gpn-ctl --wloc-setup"
+        WLOC_SETUP_INCOMPLETE=1
+        return 0
+    fi
+    if ! wloc_ensure_ca; then
+        wloc_warn "WLOC CA not ready; re-run: sudo ${BASE_DIR}/bin/5gpn-ctl --wloc-setup"
+        WLOC_SETUP_INCOMPLETE=1
+        wloc_install_service
+        return 0
+    fi
     wloc_install_service
     # Default disabled: do NOT hijack, do NOT start the sidecar. Apple location
     # stays direct until the operator enables WLOC.
+    WLOC_SETUP_INCOMPLETE=0
     wloc_info "WLOC ready (disabled). Enable via Telegram bot /wloc."
+}
+
+# Post-install health probe (called from install.sh summary). Prints a single
+# human-readable status line and returns 0 when WLOC is fully provisioned.
+wloc_healthcheck() {
+    local mitm ca ok=1 msg
+    mitm="$(wloc_mitmdump_bin)"
+    ca="$WLOC_CA_PROFILE"
+    if [[ ! -x "$mitm" ]]; then
+        msg="WLOC: mitmproxy MISSING (run: 5gpn-ctl --wloc-setup)"; ok=0
+    elif [[ ! -s "$ca" ]]; then
+        msg="WLOC: CA profile MISSING (run: 5gpn-ctl --wloc-setup)"; ok=0
+    else
+        msg="WLOC: ready (disabled by default; enable via /wloc)"
+    fi
+    echo "$msg"
+    [[ "$ok" -eq 1 ]]
 }
 
 # --------------------------------------------------------------------------- #
