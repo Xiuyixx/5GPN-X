@@ -14,6 +14,7 @@ WWW_DIR = os.environ.get("WWW_DIR", "/opt/5gpn/www")
 
 ROUTES = {
     "/ios-dot.mobileconfig": ("ios-dot.mobileconfig", "application/x-apple-aspen-config"),
+    "/wloc-ca.mobileconfig": ("wloc-ca.mobileconfig", "application/x-apple-aspen-config"),
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
 }

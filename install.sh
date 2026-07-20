@@ -35,6 +35,7 @@ bootstrap_from_repo_if_needed() {
         lib/mosdns.yaml.template lib/update-rules.sh lib/ios-http.py lib/tgbot.py
         lib/wa-shim.py lib/rules-import.py lib/mihomo-exit-config.py
         lib/mihomo-router-config.py lib/rules-default.conf lib/host-setup.sh
+        lib/wloc-core.py lib/wloc-mitm.py lib/wloc-ca-profile.py lib/wloc-setup.sh
     )
     local missing=0 f tmpdir
     for f in "${required[@]}"; do
@@ -1272,6 +1273,17 @@ else
     err "lib/host-setup.sh not found next to this script; run from a full git clone or the documented installer."
     exit 1
 fi
+# WLOC (Apple network-location) helpers. Sourced from the first candidate that
+# exists so both the git-clone installer and the installed /opt/5gpn/bin/5gpn-ctl
+# copy can load it. Optional: absence only disables WLOC, never core features.
+for _wloc_cand in "${LIB_DIR}/wloc-setup.sh" "${BASE_DIR}/bin/lib/wloc-setup.sh"; do
+    if [[ -f "$_wloc_cand" ]]; then
+        # shellcheck source=lib/wloc-setup.sh
+        . "$_wloc_cand"
+        break
+    fi
+done
+unset _wloc_cand
 prepare_certbot_standalone() {
     CERT_STOPPED_SNIPROXY=0
     CERT_STOPPED_WA_SHIM=0
@@ -2370,6 +2382,13 @@ setup_tgbot() {
     fi
     install -m 0755 "${LIB_DIR}/tgbot.py" "${BASE_DIR}/bin/tgbot.py"
     install -m 0755 "${SCRIPT_PATH}" "${BASE_DIR}/bin/5gpn-ctl"
+    # Ship the WLOC lib helper next to the installed ctl so 5gpn-ctl can source
+    # it at runtime (its LIB_DIR resolves to ${BASE_DIR}/bin/lib).
+    if [[ -f "${LIB_DIR}/wloc-setup.sh" ]]; then
+        mkdir -p "${BASE_DIR}/bin/lib"
+        install -m 0755 "${LIB_DIR}/wloc-setup.sh" "${BASE_DIR}/bin/lib/wloc-setup.sh"
+        install -m 0755 "${LIB_DIR}/host-setup.sh" "${BASE_DIR}/bin/lib/host-setup.sh" 2>/dev/null || true
+    fi
     mkdir -p "${CONF_DIR}"
     cat > "${CONF_DIR}/tgbot.env" <<EOF
 TG_BOT_TOKEN=${token}
@@ -2493,6 +2512,9 @@ do_uninstall() {
     warn "This will remove sniproxy, quic-proxy, mosdns configs, and rules."
     read -r -p "Are you sure? [y/N]: " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || { info "Uninstall cancelled"; exit 0; }
+    if declare -F wloc_uninstall >/dev/null 2>&1; then
+        wloc_uninstall "${WLOC_PURGE:-}" || true
+    fi
     set_exit local 2>/dev/null || true
     ip rule del fwmark "${EXIT_MARK}" table "${EXIT_TABLE}" 2>/dev/null || true
     ip route flush table "${EXIT_TABLE}" 2>/dev/null || true
@@ -2505,9 +2527,9 @@ do_uninstall() {
         systemctl stop "5gpn-singbox@$(basename "$f" .type).service" 2>/dev/null || true
     done
     shopt -u nullglob
-    systemctl stop mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 2>/dev/null || true
-    systemctl disable mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 2>/dev/null || true
-    rm -f /etc/systemd/system/{mosdns,sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,5gpn-ios-profile,update-mosdns-rules,5gpn-exit,5gpn-tgbot}.*
+    systemctl stop mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 5gpn-wloc 2>/dev/null || true
+    systemctl disable mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 5gpn-wloc 2>/dev/null || true
+    rm -f /etc/systemd/system/{mosdns,sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,5gpn-ios-profile,update-mosdns-rules,5gpn-exit,5gpn-tgbot,5gpn-wloc}.*
     rm -f /etc/systemd/system/5gpn-ios-profile@.service \
         /etc/systemd/system/5gpn-mihomo@.service \
         /etc/systemd/system/5gpn-singbox@.service
@@ -2842,6 +2864,9 @@ main_install() {
     apply_lowmem_go_limits
     start_services
     setup_schedules
+    if declare -F wloc_setup_install >/dev/null 2>&1; then
+        wloc_setup_install || warn "WLOC setup skipped/failed (non-fatal)"
+    fi
     setup_tgbot
     echo ""
     echo "=========================================="
@@ -2969,6 +2994,27 @@ case "${1:-}" in
     --setup-tgbot)
         check_root
         setup_tgbot
+        ;;
+    --wloc-status)
+        if declare -F wloc_ctl_status >/dev/null 2>&1; then wloc_ctl_status; else echo "enabled=False"; echo "service=unavailable"; fi
+        ;;
+    --wloc-set)
+        check_root
+        if declare -F wloc_ctl_set >/dev/null 2>&1; then wloc_ctl_set "${2:-}" "${3:-}"; else err "WLOC unavailable"; exit 1; fi
+        ;;
+    --wloc-off)
+        check_root
+        if declare -F wloc_ctl_off >/dev/null 2>&1; then wloc_ctl_off; else err "WLOC unavailable"; exit 1; fi
+        ;;
+    --wloc-ca-path)
+        if declare -F wloc_ctl_ca_path >/dev/null 2>&1; then wloc_ctl_ca_path; fi
+        ;;
+    --wloc-ca-url)
+        if declare -F wloc_ctl_ca_url >/dev/null 2>&1; then wloc_ctl_ca_url; fi
+        ;;
+    --wloc-setup)
+        check_root
+        if declare -F wloc_setup_install >/dev/null 2>&1; then wloc_setup_install; else err "WLOC unavailable"; exit 1; fi
         ;;
     --uninstall)
         do_uninstall

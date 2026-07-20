@@ -1539,6 +1539,123 @@ def op_ios_send_inline(cb):
 
 
 # --------------------------------------------------------------------------- #
+# WLOC (Apple network-location rewrite)
+# --------------------------------------------------------------------------- #
+WLOC_PRESETS_PATH = "/etc/5gpn/wloc-presets.json"
+
+
+def _wloc_parse_status(out):
+    """Parse `5gpn-ctl --wloc-status` key=value output into a dict."""
+    d = {}
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if "=" in line:
+            k, v = line.split("=", 1)
+            d[k.strip()] = v.strip()
+    return d
+
+
+def op_wloc_status_text():
+    ok, out = run2(["bash", MGMT, "--wloc-status"], timeout=30)
+    d = _wloc_parse_status(out) if ok else {}
+    enabled = str(d.get("enabled", "False")).lower() in ("true", "1", "yes")
+    lat = d.get("latitude", "") or "—"
+    lon = d.get("longitude", "") or "—"
+    svc = d.get("service", "unknown")
+    ca = d.get("ca_profile", "unknown")
+    state = "✅ 已开启" if enabled else "⛔ 未开启（Apple 定位直连）"
+    lines = [
+        "📡 <b>WLOC 管理</b>（Apple 网络定位改写）",
+        "",
+        "状态：%s" % state,
+        "当前坐标：<code>%s, %s</code>" % (html.escape(str(lat)), html.escape(str(lon))),
+        "服务：<code>%s</code>　CA：<code>%s</code>" % (html.escape(svc), html.escape(ca)),
+        "",
+        "选择预设地点，或手动输入经纬度。改写仅影响 Wi-Fi/基站网络定位，不改 GPS。",
+    ]
+    return "\n".join(lines)
+
+
+def _wloc_presets():
+    """Return a list of valid presets [{id,name,latitude,longitude}], ignoring
+    invalid entries. Never raises."""
+    try:
+        with open(WLOC_PRESETS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    out, seen = [], set()
+    for p in (data.get("presets") or []) if isinstance(data, dict) else []:
+        try:
+            pid = str(p["id"]).strip()
+            name = str(p["name"]).strip()
+            lat = float(p["latitude"])
+            lon = float(p["longitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not pid or pid in seen or len(name) > 40:
+            continue
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            continue
+        seen.add(pid)
+        out.append({"id": pid, "name": name, "latitude": lat, "longitude": lon})
+    return out
+
+
+def _wloc_valid_latlon(text):
+    """Parse a 'lat,lon' string; return (lat, lon) floats or None."""
+    if not isinstance(text, str):
+        return None
+    parts = [p for p in text.replace(",", " ").split() if p]
+    if len(parts) != 2:
+        return None
+    try:
+        lat, lon = float(parts[0]), float(parts[1])
+    except ValueError:
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    return (lat, lon)
+
+
+def op_wloc_set(lat, lon):
+    ok, out = run2(["bash", MGMT, "--wloc-set", repr(float(lat)), repr(float(lon))], timeout=120)
+    if ok:
+        return "✅ 已设置定位：<code>%s, %s</code>\n\n首次使用请确保已安装并【完全信任】WLOC CA，并重启 iPhone 让定位缓存刷新。" % (
+            html.escape(str(lat)), html.escape(str(lon)))
+    return "❌ 设置失败：\n<pre>%s</pre>" % html.escape(_reason(out))
+
+
+def op_wloc_off():
+    ok, out = run2(["bash", MGMT, "--wloc-off"], timeout=120)
+    if ok:
+        return "♻️ 已关闭 WLOC 改写，Apple 定位恢复直连。\nCA 描述文件保留在 iPhone，供下次使用。"
+    return "❌ 关闭失败：\n<pre>%s</pre>" % html.escape(_reason(out))
+
+
+def op_wloc_ca_text():
+    _, url = run2(["bash", MGMT, "--wloc-ca-url"], timeout=20)
+    url = (url or "").strip()
+    lines = [
+        "📜 <b>安装 WLOC CA</b>",
+        "",
+    ]
+    if url:
+        lines.append("下载并安装描述文件：\n<code>%s</code>" % html.escape(url))
+    else:
+        lines.append("未找到 CA 下载地址；请确认已配置 DoT 域名并已生成 CA。")
+    lines += [
+        "",
+        "安装后<b>必须</b>在 iOS：",
+        "设置 → 通用 → 关于本机 → 证书信任设置",
+        "里为 <code>mitmproxy</code> 证书开启【完全信任】，否则改写不生效。",
+        "",
+        "⚠️ 该描述文件仅包含公钥证书，不含私钥。",
+    ]
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
 # Keyboards
 # --------------------------------------------------------------------------- #
 def main_menu():
@@ -1551,6 +1668,26 @@ def main_menu():
          {"text": "🛠 运维", "callback_data": "menu:ops"}],
         [{"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
     ]
+
+
+def wloc_menu():
+    """WLOC page keyboard: preset locations + manual input + off + CA."""
+    rows = []
+    presets = _wloc_presets()
+    row = []
+    for p in presets:
+        row.append({"text": "📍 " + p["name"], "callback_data": "wloc:preset:" + p["id"]})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([{"text": "✍️ 输入经纬度", "callback_data": "wloc:input"},
+                 {"text": "♻️ 恢复真实定位", "callback_data": "wloc:off"}])
+    rows.append([{"text": "📜 获取 CA", "callback_data": "wloc:ca"},
+                 {"text": "🔄 刷新", "callback_data": "menu:wloc"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
+    return rows
 
 
 def ops_menu():
@@ -1768,6 +1905,9 @@ def handle_message(msg):
             console_async(chat_id, exits_overview_text, keyboard_fn=exits_menu, message_id=mid)
         elif text.startswith("/rules"):
             reanchor_console(chat_id, "📑 <b>分流管理</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
+        elif text.startswith("/wloc"):
+            mid = reanchor_console(chat_id, "📡 正在读取 WLOC 状态…")
+            console_async(chat_id, op_wloc_status_text, keyboard=wloc_menu(), message_id=mid)
         else:
             send(chat_id, "未知命令。发送 /menu 打开操作面板。")
         return
@@ -1870,6 +2010,22 @@ def handle_message(msg):
                              message_id=prompt_mid)
         console_async(chat_id, lambda: op_set_dns(kind, dns_text), dot_menu(), message_id=mid)
         return
+    if state and state.get("action") == "wloc_input":
+        prompt_mid = state.get("prompt_mid")
+        latlon = _wloc_valid_latlon(text)
+        background(delete_message, chat_id, msg.get("message_id"))
+        if not latlon:
+            state["prompt_mid"] = upsert_console(
+                chat_id,
+                "❌ 格式错误。请发送 <code>纬度,经度</code>，纬度 -90~90，经度 -180~180。",
+                cancel_kb("wloc"), message_id=prompt_mid)
+            return
+        PENDING.pop(chat_id, None)
+        lat, lon = latlon
+        mid = upsert_console(chat_id, "⏳ 正在设置定位为 <code>%s, %s</code>…"
+                             % (html.escape(str(lat)), html.escape(str(lon))), message_id=prompt_mid)
+        console_async(chat_id, lambda: op_wloc_set(lat, lon), wloc_menu(), message_id=mid)
+        return
 
     send(chat_id, "未知命令。发送 /menu 打开操作面板。")
 
@@ -1902,6 +2058,10 @@ def handle_callback(cb):
     elif data == "cancel:dot":
         PENDING.pop(chat_id, None)
         edit(cb, op_dot_status(), dot_menu())
+    elif data == "cancel:wloc":
+        PENDING.pop(chat_id, None)
+        edit(cb, "📡 正在读取 WLOC 状态…")
+        edit_async(cb, op_wloc_status_text, keyboard=wloc_menu())
     elif data == "menu:main":
         PENDING.pop(chat_id, None)
         edit(cb, "选择一个操作：", main_menu())
@@ -1923,7 +2083,30 @@ def handle_callback(cb):
     elif data == "menu:dot":
         edit(cb, op_dot_status(), dot_menu())
     elif data == "menu:wloc":
-        edit(cb, "📡 <b>WLOC 管理</b>\n功能即将上线。", back_kb("menu:main"))
+        edit(cb, "📡 正在读取 WLOC 状态…")
+        edit_async(cb, op_wloc_status_text, keyboard=wloc_menu())
+    elif data.startswith("wloc:preset:"):
+        pid = data[len("wloc:preset:"):]
+        preset = next((p for p in _wloc_presets() if p["id"] == pid), None)
+        if not preset:
+            edit(cb, "预设已变化，请重新打开。", wloc_menu())
+        else:
+            edit(cb, "⏳ 正在设置定位为 <b>%s</b>…" % html.escape(preset["name"]))
+            edit_async(cb, lambda: op_wloc_set(preset["latitude"], preset["longitude"]),
+                       keyboard=wloc_menu())
+    elif data == "wloc:input":
+        PENDING[chat_id] = {"action": "wloc_input", "prompt_mid": cb_mid}
+        edit(cb,
+             "✍️ <b>输入经纬度</b>\n\n"
+             "发送 WGS84 <code>纬度,经度</code>。\n"
+             "示例：<code>22.303611,114.165</code>\n\n"
+             "纬度 -90~90，经度 -180~180。",
+             cancel_kb("wloc"))
+    elif data == "wloc:off":
+        edit(cb, "⏳ 正在关闭 WLOC 改写…")
+        edit_async(cb, op_wloc_off, keyboard=wloc_menu())
+    elif data == "wloc:ca":
+        edit(cb, op_wloc_ca_text(), back_kb("menu:wloc"))
     elif data == "menu:ops":
         edit(cb, "🛠 <b>运维</b>\n选择一个操作：", ops_menu())
     elif data == "menu:logs":
@@ -2159,6 +2342,7 @@ BOT_COMMANDS = [
     ("status", "查看运行状态"),
     ("exits", "出口管理（切换/添加/删除）"),
     ("rules", "分流管理"),
+    ("wloc", "WLOC 定位管理"),
     ("id", "获取我的 Telegram ID"),
 ]
 

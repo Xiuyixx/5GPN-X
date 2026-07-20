@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: ShellCheck
         run: |
-          shellcheck -x install.sh quick-install.sh lib/update-rules.sh lib/renew-hook.sh
+          shellcheck -x install.sh quick-install.sh lib/update-rules.sh lib/renew-hook.sh lib/host-setup.sh lib/wloc-setup.sh
           shellcheck -x tests/*.sh
       - name: Python compile + ruff
         run: |

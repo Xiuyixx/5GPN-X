@@ -39,25 +39,39 @@ assert bot.ops_menu() == [
 assert bot.services_menu("logs", "menu:ops")[-1][0]["callback_data"] == "menu:ops"
 
 edits = []
+async_edits = []
 bot.authorized = lambda uid: True
 bot.answer_callback_async = lambda cb_id: None
 bot.edit = lambda cb, text, keyboard=None, mono=False: edits.append((text, keyboard))
+# Make async edits synchronous & inspectable; capture the keyboard used.
+bot.edit_async = lambda cb, text_fn, keyboard=None, mono=False: async_edits.append((text_fn, keyboard))
+# WLOC status text calls MGMT; stub it so the page render is deterministic.
+bot.op_wloc_status_text = lambda: "WLOC-STATUS"
 
 def click(data):
     edits.clear()
+    async_edits.clear()
     bot.handle_callback({
         "id": "callback-id",
         "from": {"id": 1},
         "message": {"chat": {"id": 1}, "message_id": 1},
         "data": data,
     })
-    assert len(edits) == 1
-    return edits[0]
 
-assert click("menu:ops") == ("🛠 <b>运维</b>\n选择一个操作：", bot.ops_menu())
-wloc_text, wloc_keyboard = click("menu:wloc")
-assert "WLOC 管理" in wloc_text and "功能即将上线" in wloc_text
-assert wloc_keyboard == bot.back_kb("menu:main")
+click("menu:ops")
+assert edits and edits[0] == ("🛠 <b>运维</b>\n选择一个操作：", bot.ops_menu())
+
+# WLOC page: opens a loading edit, then an async status render with wloc_menu().
+click("menu:wloc")
+assert async_edits and async_edits[-1][1] == bot.wloc_menu(), "menu:wloc must render wloc_menu()"
+assert async_edits[-1][0] is bot.op_wloc_status_text, "menu:wloc must show WLOC status"
+
+# wloc_menu contains manual-input, restore-real-location, and CA controls.
+_wloc_cbs = [b["callback_data"] for row in bot.wloc_menu() for b in row]
+assert "wloc:input" in _wloc_cbs, "wloc menu needs manual coordinate entry"
+assert "wloc:off" in _wloc_cbs, "wloc menu needs restore-real-location"
+assert "wloc:ca" in _wloc_cbs, "wloc menu needs CA download"
+assert "menu:main" in _wloc_cbs, "wloc menu needs a back button"
 PY
 
 # --- authorization must gate every operation --------------------------------
@@ -225,6 +239,6 @@ PY
 [[ "${install_body}" == *'跳过 tgbot'* ]] || fail "install.sh must skip tgbot when no token is provided"
 
 # --- uninstall must remove the bot ------------------------------------------
-[[ "${install_body}" == *'5gpn-tgbot}.*'* ]] || fail "uninstall must remove the tgbot service unit"
+[[ "${install_body}" == *'5gpn-tgbot,5gpn-wloc}.*'* ]] || fail "uninstall must remove the tgbot and wloc service units"
 
 echo "tgbot policy OK"

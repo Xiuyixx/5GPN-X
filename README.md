@@ -152,9 +152,29 @@ sudo ./install.sh --setup-tgbot
 
 不知道自己的数字 ID 时，先启用 Bot 后发送 `/id`，把返回的 ID 写入 `/opt/5gpn/etc/tgbot.env` 并 `sudo systemctl restart 5gpn-tgbot`。
 
-命令：`/start` 打开面板、`/status` 状态、`/exits` 出口、`/rules` 分流、`/cancel` 取消输入、`/id` 查 ID。
+命令：`/start` 打开面板、`/status` 状态、`/exits` 出口、`/rules` 分流、`/wloc` WLOC 定位、`/cancel` 取消输入、`/id` 查 ID。
 
 添加出口：`🌐 出口 -> ➕ 添加出口`，直接粘贴节点链接（`ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://`），备注会自动作为出口名。
+
+## WLOC（iOS 网络定位改写）
+
+对自有 iPhone 的 Apple Wi-Fi/基站网络定位响应做定点改写（不改 GPS 硬件数据；室外强 GPS 时系统仍可能用真实 GPS）。默认关闭，关闭时 Apple 定位直连。
+
+数据路径：`mosdns` 把 `gs-loc.apple.com` / `gs-loc-cn.apple.com` 劫持到网关 IP → 到达网关 443（wa-shim → sniproxy）→ sniproxy 按 SNI 把这两个域名转发到本机 mitmproxy sidecar（reverse 模式，每主机一个监听：`127.0.0.1:9080` / `127.0.0.1:9081`）→ 改写 `/clls/wloc` 的 protobuf 坐标 → 回真实 Apple。sidecar 仅监听回环，不新增公网端口。
+
+使用：
+
+1. Telegram Bot 主菜单点 `📡 WLOC 管理`，或发送 `/wloc`。
+2. 点 `📜 获取 CA`，安装返回的 `wloc-ca.mobileconfig`（仅含公钥证书，不含私钥）。
+3. iOS `设置 → 通用 → 关于本机 → 证书信任设置` 里对 `mitmproxy` 开启完全信任，否则改写不生效。
+4. 点预置地点，或 `✍️ 输入经纬度` 发送 WGS84 `纬度,经度`（纬度 -90~90，经度 -180~180）。
+5. 首次信任 CA 或改坐标后重启 iPhone，让 `locationd` 刷新缓存。
+6. `♻️ 恢复真实定位` 关闭改写，Apple 定位立即回到直连。
+
+预置地点在 `/etc/5gpn/wloc-presets.json`，每次打开页面重新读取；非法坐标、重复 ID、超 40 字名称会被忽略。坐标配置在 `/var/lib/5gpn-wloc/wloc.json`（属主 `5gpn-wloc`，权限 600），CA 私钥仅在 `/var/lib/5gpn-wloc/mitmproxy`（700）。改写仅针对上述两个 Apple 域名的 `/clls/wloc`，异常一律透传（fail-open）；关闭时不劫持这两个域名。
+
+> 说明：WLOC 开启且 sidecar 崩溃的窗口内，这两个域名会短暂不可用；systemd `Restart=always` 会自动拉起。彻底恢复直连请点“恢复真实定位”。
+> 借鉴 Loading886/Home-Location-Endpoint（MIT）与 gibaragibara/privdns-gateway-mihomo（MIT）的思路，未复制其代码。
 
 ## 配置参考
 
