@@ -1547,9 +1547,17 @@ def main_menu():
          {"text": "🌐 出口管理", "callback_data": "menu:exits"}],
         [{"text": "📑 分流管理", "callback_data": "menu:rules"},
          {"text": "🔐 DoT 管理", "callback_data": "menu:dot"}],
+        [{"text": "📡 WLOC 管理", "callback_data": "menu:wloc"},
+         {"text": "🛠 运维", "callback_data": "menu:ops"}],
+        [{"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
+    ]
+
+
+def ops_menu():
+    return [
         [{"text": "♻️ 重启服务", "callback_data": "act:restart"},
          {"text": "📜 日志", "callback_data": "menu:logs"}],
-        [{"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
+        [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
 
 
@@ -1680,9 +1688,9 @@ def dot_menu():
     ]
 
 
-def services_menu(prefix):
+def services_menu(prefix, back_target="menu:main"):
     rows = [[{"text": s, "callback_data": "%s:%s" % (prefix, s)}] for s in SERVICES]
-    rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
+    rows.append([{"text": "« 返回", "callback_data": back_target}])
     return rows
 
 
@@ -1914,8 +1922,12 @@ def handle_callback(cb):
         edit(cb, "选择要删除的出口：", exits_del_menu())
     elif data == "menu:dot":
         edit(cb, op_dot_status(), dot_menu())
+    elif data == "menu:wloc":
+        edit(cb, "📡 <b>WLOC 管理</b>\n功能即将上线。", back_kb("menu:main"))
+    elif data == "menu:ops":
+        edit(cb, "🛠 <b>运维</b>\n选择一个操作：", ops_menu())
     elif data == "menu:logs":
-        edit(cb, "选择要查看日志的服务：", services_menu("logs"))
+        edit(cb, "选择要查看日志的服务：", services_menu("logs", "menu:ops"))
 
     # ---- conversational starts (edit prompt into the same bubble) ----
     elif data == "rules:set":
@@ -2097,7 +2109,7 @@ def handle_callback(cb):
         edit_async(cb, op_renew_cert, back_kb("menu:main"))
     elif data == "act:restart":
         edit(cb, "⏳ 正在重启服务…")
-        edit_async(cb, op_restart_services, back_kb("menu:main"))
+        edit_async(cb, op_restart_services, back_kb("menu:ops"))
     elif data == "rules:enable":
         edit(cb, "⏳ 正在启用智能分流…")
         edit_async(cb, lambda: op_set_exit("smart"), back_kb("menu:rules"))

@@ -14,6 +14,52 @@ fail() { echo "$1" >&2; exit 1; }
 python3 -m py_compile "${bot}" || fail "tgbot.py must compile"
 bot_body="$(cat "${bot}")"
 
+python3 - "${bot}" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("tgbot", sys.argv[1])
+bot = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bot)
+
+assert bot.main_menu() == [
+    [{"text": "📊 状态", "callback_data": "act:status"},
+     {"text": "🌐 出口管理", "callback_data": "menu:exits"}],
+    [{"text": "📑 分流管理", "callback_data": "menu:rules"},
+     {"text": "🔐 DoT 管理", "callback_data": "menu:dot"}],
+    [{"text": "📡 WLOC 管理", "callback_data": "menu:wloc"},
+     {"text": "🛠 运维", "callback_data": "menu:ops"}],
+    [{"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
+]
+assert bot.ops_menu() == [
+    [{"text": "♻️ 重启服务", "callback_data": "act:restart"},
+     {"text": "📜 日志", "callback_data": "menu:logs"}],
+    [{"text": "« 返回", "callback_data": "menu:main"}],
+]
+assert bot.services_menu("logs", "menu:ops")[-1][0]["callback_data"] == "menu:ops"
+
+edits = []
+bot.authorized = lambda uid: True
+bot.answer_callback_async = lambda cb_id: None
+bot.edit = lambda cb, text, keyboard=None, mono=False: edits.append((text, keyboard))
+
+def click(data):
+    edits.clear()
+    bot.handle_callback({
+        "id": "callback-id",
+        "from": {"id": 1},
+        "message": {"chat": {"id": 1}, "message_id": 1},
+        "data": data,
+    })
+    assert len(edits) == 1
+    return edits[0]
+
+assert click("menu:ops") == ("🛠 <b>运维</b>\n选择一个操作：", bot.ops_menu())
+wloc_text, wloc_keyboard = click("menu:wloc")
+assert "WLOC 管理" in wloc_text and "功能即将上线" in wloc_text
+assert wloc_keyboard == bot.back_kb("menu:main")
+PY
+
 # --- authorization must gate every operation --------------------------------
 [[ "${bot_body}" == *'ADMIN_IDS'* ]] || fail "tgbot.py must read an admin allowlist"
 [[ "${bot_body}" == *'def authorized('* ]] || fail "tgbot.py must define an authorization check"
@@ -53,7 +99,12 @@ bot_body="$(cat "${bot}")"
 [[ "${bot_body}" == *'"prompt_mid": cb_mid'* ]] || fail "PENDING flows must remember the prompt message for in-place edits"
 [[ "${bot_body}" == *'def reanchor_console('* ]] || fail "slash commands must re-anchor the console with a fresh visible message"
 [[ "${bot_body}" == *'keyboard_fn=exits_menu'* ]] || fail "add-exit success menu must refresh exits after the new exit is written"
-[[ "${bot_body}" == *'"♻️ 重启服务", "callback_data": "act:restart"'* ]] || fail "restart button must restart services directly"
+[[ "${bot_body}" == *'"📡 WLOC 管理", "callback_data": "menu:wloc"'* ]] || fail "main menu must expose the WLOC management placeholder"
+[[ "${bot_body}" == *'"🛠 运维", "callback_data": "menu:ops"'* ]] || fail "main menu must expose operations management"
+[[ "${bot_body}" == *'def ops_menu('* ]] || fail "tgbot.py must define an operations submenu"
+[[ "${bot_body}" == *'"♻️ 重启服务", "callback_data": "act:restart"'* ]] || fail "operations menu must restart services directly"
+[[ "${bot_body}" == *'services_menu("logs", "menu:ops")'* ]] || fail "log service selection must return to operations"
+[[ "${bot_body}" == *'edit_async(cb, op_restart_services, back_kb("menu:ops"))'* ]] || fail "restart results must return to operations"
 [[ "${bot_body}" == *'def op_restart_services('* ]] || fail "tgbot.py must expose a direct service restart action"
 [[ "${bot_body}" != *'callback_data": "menu:restart"'* ]] || fail "restart button must not enter a second-level service menu"
 [[ "${bot_body}" != *'data.startswith("restart:")'* ]] || fail "restart action must not require selecting an individual service"
