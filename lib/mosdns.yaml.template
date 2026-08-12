@@ -14,6 +14,14 @@ plugins:
       files:
         - /etc/mosdns/chinalist.txt
 
+  # Empty while WLOC is disabled.  Enabling WLOC puts only the two exact
+  # Apple network-location hosts here and restarts mosdns to clear its cache.
+  - tag: wloc_domains
+    type: domain_set
+    args:
+      files:
+        - /etc/mosdns/wloc.txt
+
   - tag: remote_primary
     type: forward
     args:
@@ -159,6 +167,19 @@ __LOCAL_SECONDARY_UPSTREAMS__
     type: sequence
     args:
       - exec: $reject_aaaa
+      - matches:
+          - has_resp
+        exec: accept
+      - matches:
+          - qname $wloc_domains
+          - qtype 65
+        exec: reject 0
+      - matches:
+          - has_resp
+        exec: accept
+      - matches:
+          - qname $wloc_domains
+        exec: black_hole __SERVER_IP__
       - matches:
           - has_resp
         exec: accept

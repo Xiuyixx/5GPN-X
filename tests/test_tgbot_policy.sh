@@ -56,8 +56,10 @@ def click(data):
 
 assert click("menu:ops") == ("🛠 <b>运维</b>\n选择一个操作：", bot.ops_menu())
 wloc_text, wloc_keyboard = click("menu:wloc")
-assert "WLOC 管理" in wloc_text and "功能即将上线" in wloc_text
-assert wloc_keyboard == bot.back_kb("menu:main")
+assert "WLOC 管理" in wloc_text and "功能即将上线" not in wloc_text
+assert any(button["callback_data"] == "wloc:ca"
+           for row in wloc_keyboard for button in row)
+assert wloc_keyboard[-1] == [{"text": "« 返回", "callback_data": "menu:main"}]
 PY
 
 # --- authorization must gate every operation --------------------------------
@@ -99,7 +101,12 @@ PY
 [[ "${bot_body}" == *'"prompt_mid": cb_mid'* ]] || fail "PENDING flows must remember the prompt message for in-place edits"
 [[ "${bot_body}" == *'def reanchor_console('* ]] || fail "slash commands must re-anchor the console with a fresh visible message"
 [[ "${bot_body}" == *'keyboard_fn=exits_menu'* ]] || fail "add-exit success menu must refresh exits after the new exit is written"
-[[ "${bot_body}" == *'"📡 WLOC 管理", "callback_data": "menu:wloc"'* ]] || fail "main menu must expose the WLOC management placeholder"
+[[ "${bot_body}" == *'"📡 WLOC 管理", "callback_data": "menu:wloc"'* ]] || fail "main menu must expose WLOC management"
+[[ "${bot_body}" != *'功能即将上线'* ]] || fail "WLOC must not remain a placeholder"
+[[ "${bot_body}" == *'elif text.startswith("/wloc"):'* ]] || fail "tgbot.py must expose /wloc"
+[[ "${bot_body}" == *'def wloc_menu('* ]] || fail "tgbot.py must define a WLOC management menu"
+[[ "${bot_body}" == *'"--wloc-set"'* ]] || fail "WLOC changes must use the fixed management command"
+[[ "${bot_body}" == *'send_document_bytes('* ]] || fail "WLOC must send the scoped CA profile"
 [[ "${bot_body}" == *'"🛠 运维", "callback_data": "menu:ops"'* ]] || fail "main menu must expose operations management"
 [[ "${bot_body}" == *'def ops_menu('* ]] || fail "tgbot.py must define an operations submenu"
 [[ "${bot_body}" == *'"♻️ 重启服务", "callback_data": "act:restart"'* ]] || fail "operations menu must restart services directly"
@@ -225,6 +232,6 @@ PY
 [[ "${install_body}" == *'跳过 tgbot'* ]] || fail "install.sh must skip tgbot when no token is provided"
 
 # --- uninstall must remove the bot ------------------------------------------
-[[ "${install_body}" == *'5gpn-tgbot}.*'* ]] || fail "uninstall must remove the tgbot service unit"
+[[ "${install_body}" == *'5gpn-tgbot,5gpn-wloc}.*'* ]] || fail "uninstall must remove the tgbot and WLOC service units"
 
 echo "tgbot policy OK"

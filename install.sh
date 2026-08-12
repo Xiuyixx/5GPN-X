@@ -20,6 +20,11 @@ KEEP_FILE="/etc/5gpn/keep-categories"
 DIRECT_FILE="/etc/5gpn/direct-categories"
 RULES_DEFAULT="/etc/5gpn/rules-default.conf"
 RULESET_CACHE="/etc/5gpn/rulesets"
+WLOC_DIR="/var/lib/5gpn-wloc"
+WLOC_STATE="${WLOC_DIR}/state.json"
+WLOC_LOCATIONS="/etc/5gpn/wloc-locations.json"
+WLOC_DOMAINS="/etc/mosdns/wloc.txt"
+WLOC_QUIC_BLOCK="/etc/5gpn/wloc-quic-block.txt"
 MIHOMO_BIN="/opt/5gpn/bin/mihomo"
 MIHOMO_CFG_GEN="/opt/5gpn/bin/mihomo-exit-config.py"
 MIHOMO_ROUTER_GEN="/opt/5gpn/bin/mihomo-router-config.py"
@@ -35,6 +40,8 @@ bootstrap_from_repo_if_needed() {
         lib/mosdns.yaml.template lib/update-rules.sh lib/ios-http.py lib/tgbot.py
         lib/wa-shim.py lib/rules-import.py lib/mihomo-exit-config.py
         lib/mihomo-router-config.py lib/rules-default.conf lib/host-setup.sh
+        lib/wloc-proxy.py lib/wloc-admin.py lib/wloc-locations.json
+        lib/5gpn-wloc.service.template
     )
     local missing=0 f tmpdir
     for f in "${required[@]}"; do
@@ -355,6 +362,11 @@ Options:
                  TG_ADMIN_IDS env vars, or prompts interactively).
   --setup-whatsapp
                  Install/repair the iOS WhatsApp no-SNI TCP/443 shim.
+  --wloc-set <latitude> <longitude> [label]
+                 Enable WLOC or hot-switch its WGS84 target.
+  --wloc-off     Disable WLOC and restore original Apple location routing.
+  --wloc-ensure-ca
+                 Generate the private WLOC CA and scoped leaf certificates.
   --uninstall    Remove all installed components
   -ios          Regenerate iOS DoT profile and QR code
   -h, --help     Show this help
@@ -1037,7 +1049,9 @@ EOF
 }
 install_quic_proxy() {
     ensure_proxy_user
-    if [[ ! -x "${BASE_DIR}/bin/quic-proxy" ]]; then
+    if [[ ! -x "${BASE_DIR}/bin/quic-proxy" \
+          || ! -f "${SRC_DIR}/quic-proxy.go" ]] \
+          || ! cmp -s "${LIB_DIR}/quic-proxy.go" "${SRC_DIR}/quic-proxy.go"; then
         info "Compiling quic-proxy (UDP/QUIC SNI proxy)..."
         mkdir -p "${BASE_DIR}/bin"
         mkdir -p "${SRC_DIR}"
@@ -1046,7 +1060,7 @@ install_quic_proxy() {
         export PATH=$PATH:/usr/local/go/bin
         go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" quic-proxy.go
     else
-        info "quic-proxy already compiled"
+        info "quic-proxy source unchanged; keeping the existing binary"
     fi
     cat > /etc/systemd/system/quic-proxy.service <<'EOF'
 [Unit]
@@ -1087,7 +1101,8 @@ install_mosdns() {
     echo "$REMOTE_DNS" > /etc/mosdns/.overseas_public_dns
     echo "$REMOTE_DNS" > /etc/mosdns/.sniproxy_dns
     echo "${PACKET_CACHE_SIZE:-500000}" > /etc/mosdns/.cache_size
-    touch /etc/mosdns/gfwlist.txt /etc/mosdns/chinalist.txt /etc/mosdns/gfwlist-extra-local.txt
+    touch /etc/mosdns/gfwlist.txt /etc/mosdns/chinalist.txt /etc/mosdns/gfwlist-extra-local.txt \
+        "${WLOC_DOMAINS}"
     chown -R mosdns:mosdns /etc/mosdns
     chmod 0750 /etc/mosdns /etc/mosdns/certs
     cat > /etc/systemd/system/mosdns.service <<'EOF'
@@ -2345,6 +2360,235 @@ show_rules() {
         info "No routing rules set. Add them with: $0 --set-rules <file>"
     fi
 }
+
+install_wloc_runtime() {
+    local source="${LIB_DIR}/wloc-proxy.py"
+    ensure_proxy_user
+    if [[ "${LIB_DIR}" != "${BASE_DIR}/bin/lib" ]]; then
+        install -d -m 0755 "${BASE_DIR}/bin/lib"
+        install -m 0755 "${LIB_DIR}"/{wloc-proxy,wloc-admin}.py "${BASE_DIR}/bin/lib/"
+        install -m 0644 "${LIB_DIR}"/{wloc-locations.json,5gpn-wloc.service.template} "${BASE_DIR}/bin/lib/"
+    fi
+    if [[ ! -f "$source" ]]; then
+        source="${BASE_DIR}/bin/wloc-proxy.py"
+    fi
+    [[ -f "$source" ]] || { err "wloc-proxy.py not found; rerun from the complete repository"; return 1; }
+    install -d -m 0755 "${BASE_DIR}/bin"
+    if [[ "$source" != "${BASE_DIR}/bin/wloc-proxy.py" ]]; then
+        install -m 0755 "$source" "${BASE_DIR}/bin/wloc-proxy.py"
+    fi
+    if [[ -f "${LIB_DIR}/wloc-admin.py" ]]; then
+        install -m 0755 "${LIB_DIR}/wloc-admin.py" "${BASE_DIR}/bin/wloc-admin.py"
+    fi
+    # The sidecar runs as EXIT_USER and atomically replaces its privacy-safe
+    # status file in this directory.  Keep the CA private in its own 0700 dir.
+    install -d -m 0770 -o root -g "${EXIT_USER}" "${WLOC_DIR}"
+    install -d -m 0700 -o root -g root "${WLOC_DIR}/ca"
+    install -d -m 0750 -o root -g "${EXIT_USER}" "${WLOC_DIR}/tls"
+    mkdir -p /etc/5gpn /etc/mosdns
+    if [[ ! -f "${WLOC_STATE}" ]]; then
+        cat > "${WLOC_STATE}" <<'EOF'
+{"enabled":false,"latitude":null,"longitude":null,"label":null,"generation":0,"updated_at":null}
+EOF
+        chown root:"${EXIT_USER}" "${WLOC_STATE}"
+        chmod 0640 "${WLOC_STATE}"
+    fi
+    if [[ ! -f "${WLOC_LOCATIONS}" ]]; then
+        install -m 0644 "${LIB_DIR}/wloc-locations.json" "${WLOC_LOCATIONS}"
+        chmod 0644 "${WLOC_LOCATIONS}"
+    fi
+    touch "${WLOC_DOMAINS}" "${WLOC_QUIC_BLOCK}"
+    chmod 0644 "${WLOC_DOMAINS}" "${WLOC_QUIC_BLOCK}"
+    sed -e "s|__EXIT_USER__|${EXIT_USER}|g" -e "s|__BASE_DIR__|${BASE_DIR}|g" \
+        -e "s|__WLOC_DIR__|${WLOC_DIR}|g" "${LIB_DIR}/5gpn-wloc.service.template" \
+        > /etc/systemd/system/5gpn-wloc.service
+    systemctl daemon-reload
+}
+
+wloc_ensure_ca() {
+    local ca_dir="${WLOC_DIR}/ca" tls_dir="${WLOC_DIR}/tls" tmp host
+    install_wloc_runtime
+    if [[ -s "${ca_dir}/ca.crt" && -s "${ca_dir}/ca.key" \
+          && -s "${tls_dir}/gs-loc.apple.com.crt" && -s "${tls_dir}/gs-loc.apple.com.key" \
+          && -s "${tls_dir}/gs-loc-cn.apple.com.crt" && -s "${tls_dir}/gs-loc-cn.apple.com.key" ]]; then
+        return 0
+    fi
+    tmp="$(mktemp -d "${WLOC_DIR}/ca-build.XXXXXX")"
+    trap 'rm -rf "$tmp"' RETURN
+    if [[ -s "${ca_dir}/ca.crt" && -s "${ca_dir}/ca.key" ]]; then
+        cp "${ca_dir}/ca.crt" "${tmp}/ca.crt"
+        cp "${ca_dir}/ca.key" "${tmp}/ca.key"
+    else
+        openssl ecparam -name prime256v1 -genkey -noout -out "${tmp}/ca.key"
+        openssl req -x509 -new -key "${tmp}/ca.key" -sha256 -days 3650 \
+            -out "${tmp}/ca.crt" -subj "/CN=5GPN-X WLOC CA" \
+            -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+    fi
+    for host in gs-loc.apple.com gs-loc-cn.apple.com; do
+        openssl ecparam -name prime256v1 -genkey -noout -out "${tmp}/${host}.key"
+        openssl req -new -key "${tmp}/${host}.key" -subj "/CN=${host}" \
+            -out "${tmp}/${host}.csr"
+        cat > "${tmp}/${host}.ext" <<EOF
+subjectAltName=DNS:${host}
+extendedKeyUsage=serverAuth
+keyUsage=digitalSignature,keyEncipherment
+basicConstraints=CA:FALSE
+EOF
+        openssl x509 -req -in "${tmp}/${host}.csr" -CA "${tmp}/ca.crt" \
+            -CAkey "${tmp}/ca.key" -set_serial "0x$(openssl rand -hex 16)" \
+            -days 825 -sha256 -extfile "${tmp}/${host}.ext" -out "${tmp}/${host}.crt"
+    done
+    install -m 0600 -o root -g root "${tmp}/ca.key" "${ca_dir}/ca.key"
+    install -m 0644 -o root -g root "${tmp}/ca.crt" "${ca_dir}/ca.crt"
+    for host in gs-loc.apple.com gs-loc-cn.apple.com; do
+        install -m 0640 -o root -g "${EXIT_USER}" "${tmp}/${host}.key" "${tls_dir}/${host}.key"
+        install -m 0644 -o root -g "${EXIT_USER}" "${tmp}/${host}.crt" "${tls_dir}/${host}.crt"
+    done
+    trap - RETURN
+    rm -rf "$tmp"
+}
+
+wloc_state_enabled() {
+    python3 "${BASE_DIR}/bin/wloc-admin.py" state-enabled "${WLOC_STATE}"
+}
+
+wloc_write_state() {
+    local enabled="$1" latitude="${2:-}" longitude="${3:-}" label="${4:-}"
+    python3 "${BASE_DIR}/bin/wloc-admin.py" write-state "${WLOC_STATE}" \
+        "${EXIT_USER}" "$enabled" "$latitude" "$longitude" "$label"
+}
+
+wloc_write_domains() {
+    local enabled="$1" tmp="${WLOC_DOMAINS}.tmp"
+    if [[ "$enabled" == "1" ]]; then
+        printf '%s\n' gs-loc.apple.com gs-loc-cn.apple.com > "$tmp"
+    else
+        : > "$tmp"
+    fi
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "${WLOC_DOMAINS}"
+}
+
+wloc_write_quic_block() {
+    local enabled="$1" tmp="${WLOC_QUIC_BLOCK}.tmp"
+    if [[ "$enabled" == "1" ]]; then
+        printf '%s\n' gs-loc.apple.com gs-loc-cn.apple.com > "$tmp"
+    else
+        : > "$tmp"
+    fi
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "${WLOC_QUIC_BLOCK}"
+}
+
+wloc_update_sniproxy() {
+    local enabled="$1" conf="/etc/sniproxy.conf" backup
+    [[ -f "$conf" ]] || { err "sniproxy config not found"; return 1; }
+    backup="$(mktemp)"
+    cp -a "$conf" "$backup"
+    if ! python3 "${BASE_DIR}/bin/wloc-admin.py" update-sniproxy "$conf" "$enabled"
+    then
+        cp -a "$backup" "$conf"
+        rm -f "$backup"
+        return 1
+    fi
+    if ! systemctl reload sniproxy || ! systemctl is-active --quiet sniproxy; then
+        cp -a "$backup" "$conf"
+        systemctl restart sniproxy 2>/dev/null || true
+        rm -f "$backup"
+        err "sniproxy WLOC route reload failed; previous config restored"
+        return 1
+    fi
+    rm -f "$backup"
+}
+
+wloc_set() {
+    local latitude="${1:-}" longitude="${2:-}" label="${3:-}" was_enabled
+    [[ -n "$latitude" && -n "$longitude" ]] || {
+        err "Usage: $0 --wloc-set <latitude> <longitude> [label]"; return 1; }
+    install_wloc_runtime
+    wloc_ensure_ca
+    was_enabled="$(wloc_state_enabled)"
+    systemctl enable --now 5gpn-wloc
+    systemctl is-active --quiet 5gpn-wloc || { err "5gpn-wloc failed to start"; return 1; }
+    wloc_write_state 1 "$latitude" "$longitude" "$label"
+    if [[ "$was_enabled" == "1" ]]; then
+        ok "WLOC target updated without restarting DNS, sniproxy, or the sidecar"
+        return 0
+    fi
+    if ! wloc_update_sniproxy 1; then
+        wloc_write_state 0
+        systemctl disable --now 5gpn-wloc 2>/dev/null || true
+        return 1
+    fi
+    wloc_write_quic_block 1
+    if ! systemctl restart quic-proxy || ! systemctl is-active --quiet quic-proxy; then
+        wloc_write_quic_block 0
+        systemctl restart quic-proxy 2>/dev/null || true
+        wloc_update_sniproxy 0 2>/dev/null || true
+        wloc_write_state 0
+        systemctl disable --now 5gpn-wloc 2>/dev/null || true
+        err "quic-proxy failed while enabling WLOC; runtime rolled back"
+        return 1
+    fi
+    wloc_write_domains 1
+    if ! systemctl restart mosdns || ! systemctl is-active --quiet mosdns; then
+        wloc_write_domains 0
+        wloc_write_quic_block 0
+        systemctl restart quic-proxy 2>/dev/null || true
+        wloc_update_sniproxy 0 2>/dev/null || true
+        wloc_write_state 0
+        systemctl disable --now 5gpn-wloc 2>/dev/null || true
+        err "mosdns failed while enabling WLOC; runtime rolled back"
+        return 1
+    fi
+    ok "WLOC enabled for gs-loc.apple.com and gs-loc-cn.apple.com"
+}
+
+wloc_off() {
+    local was_enabled
+    was_enabled="$(wloc_state_enabled)"
+    [[ "$was_enabled" == "1" ]] || { ok "WLOC is already disabled"; return 0; }
+    wloc_write_state 0
+    wloc_write_domains 0
+    if ! systemctl restart mosdns || ! systemctl is-active --quiet mosdns; then
+        wloc_write_state 1
+        wloc_write_domains 1
+        systemctl restart mosdns 2>/dev/null || true
+        err "mosdns failed while disabling WLOC; previous state restored"
+        return 1
+    fi
+    if ! wloc_update_sniproxy 0; then
+        wloc_write_state 1
+        wloc_write_domains 1
+        systemctl restart mosdns 2>/dev/null || true
+        return 1
+    fi
+    wloc_write_quic_block 0
+    if ! systemctl restart quic-proxy || ! systemctl is-active --quiet quic-proxy; then
+        wloc_write_quic_block 1
+        systemctl restart quic-proxy 2>/dev/null || true
+        wloc_update_sniproxy 1 2>/dev/null || true
+        wloc_write_domains 1
+        systemctl restart mosdns 2>/dev/null || true
+        wloc_write_state 1
+        err "quic-proxy failed while disabling WLOC; previous state restored"
+        return 1
+    fi
+    systemctl disable --now 5gpn-wloc 2>/dev/null || true
+    ok "WLOC disabled; Apple network location restored"
+}
+
+wloc_restore_if_enabled() {
+    [[ "$(wloc_state_enabled)" == "1" ]] || return 0
+    wloc_ensure_ca
+    wloc_write_domains 1
+    wloc_write_quic_block 1
+    systemctl start sniproxy
+    wloc_update_sniproxy 1
+    systemctl enable --now 5gpn-wloc
+}
+
 setup_tgbot() {
     local token="${TG_BOT_TOKEN:-}"
     local ids="${TG_ADMIN_IDS:-}"
@@ -2362,6 +2606,7 @@ setup_tgbot() {
     fi
     ids="$(printf '%s' "$ids" | tr ', ' '\n' | grep -E '^[0-9]+$' | paste -sd ',' - 2>/dev/null || true)"
     local py; py="$(command -v python3 || echo /usr/bin/python3)"
+    install_wloc_runtime
     info "Installing Telegram control bot..."
     mkdir -p "${BASE_DIR}/bin"
     if [[ ! -f "${LIB_DIR}/tgbot.py" ]]; then
@@ -2505,16 +2750,17 @@ do_uninstall() {
         systemctl stop "5gpn-singbox@$(basename "$f" .type).service" 2>/dev/null || true
     done
     shopt -u nullglob
-    systemctl stop mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 2>/dev/null || true
-    systemctl disable mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 2>/dev/null || true
-    rm -f /etc/systemd/system/{mosdns,sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,5gpn-ios-profile,update-mosdns-rules,5gpn-exit,5gpn-tgbot}.*
+    systemctl stop mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 5gpn-wloc 2>/dev/null || true
+    systemctl disable mosdns dnsdist sniproxy wa-shim quic-proxy china-dns-race-proxy 5gpn-ios-profile.socket 5gpn-ios-profile 5gpn-exit 5gpn-tgbot 5gpn-wloc 2>/dev/null || true
+    rm -f /etc/systemd/system/{mosdns,sniproxy,wa-shim,quic-proxy,china-dns-race-proxy,5gpn-ios-profile,update-mosdns-rules,5gpn-exit,5gpn-tgbot,5gpn-wloc}.*
     rm -f /etc/systemd/system/5gpn-ios-profile@.service \
         /etc/systemd/system/5gpn-mihomo@.service \
         /etc/systemd/system/5gpn-singbox@.service
     rm -rf /etc/systemd/system/quic-proxy.service.d /etc/systemd/system/mosdns.service.d \
         /etc/systemd/system/dnsdist.service.d /etc/systemd/system/china-dns-race-proxy.service.d
     systemctl daemon-reload
-    rm -rf "$BASE_DIR" /etc/sniproxy.conf /etc/mosdns /etc/dnsdist /usr/local/bin/update-mosdns-rules.sh
+    rm -rf "$BASE_DIR" /etc/sniproxy.conf /etc/mosdns /etc/dnsdist /usr/local/bin/update-mosdns-rules.sh \
+        "${WLOC_DIR}"
     rm -f /usr/local/bin/update-dnsdist-rules.sh /usr/local/bin/mosdns
     rm -f /usr/local/sbin/sniproxy
     rm -f /usr/local/bin/5gpn-apply-exit.sh
@@ -2834,6 +3080,8 @@ main_install() {
     install_whatsapp_shim
     install_quic_proxy
     install_mosdns
+    install_wloc_runtime
+    wloc_restore_if_enabled
     init_rules
     system_tuning
     setup_firewall
@@ -2905,6 +3153,19 @@ case "${1:-}" in
         ensure_proxy_user
         install_whatsapp_shim
         systemctl restart sniproxy wa-shim
+        ;;
+    --wloc-set)
+        check_root
+        wloc_set "${2:-}" "${3:-}" "${4:-}"
+        ;;
+    --wloc-off)
+        check_root
+        wloc_off
+        ;;
+    --wloc-ensure-ca)
+        check_root
+        wloc_ensure_ca
+        echo "${WLOC_DIR}/ca/ca.crt"
         ;;
     --list-exits)
         list_exits

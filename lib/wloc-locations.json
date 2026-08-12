@@ -1,0 +1,7 @@
+{
+  "locations": [
+    {"name": "香港西九龙站", "latitude": 22.303611, "longitude": 114.165, "builtin": true},
+    {"name": "东京涩谷站", "latitude": 35.658514, "longitude": 139.70133, "builtin": true},
+    {"name": "日本横滨站", "latitude": 35.46583, "longitude": 139.62278, "builtin": true}
+  ]
+}

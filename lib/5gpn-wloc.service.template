@@ -1,0 +1,28 @@
+[Unit]
+Description=5GPN-X scoped Apple WLOC reverse proxy
+After=network-online.target sniproxy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__EXIT_USER__
+Group=__EXIT_USER__
+ExecStart=/usr/bin/python3 __BASE_DIR__/bin/wloc-proxy.py
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=__WLOC_DIR__
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

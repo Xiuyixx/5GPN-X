@@ -152,9 +152,19 @@ sudo ./install.sh --setup-tgbot
 
 不知道自己的数字 ID 时，先启用 Bot 后发送 `/id`，把返回的 ID 写入 `/opt/5gpn/etc/tgbot.env` 并 `sudo systemctl restart 5gpn-tgbot`。
 
-命令：`/start` 打开面板、`/status` 状态、`/exits` 出口、`/rules` 分流、`/cancel` 取消输入、`/id` 查 ID。
+命令：`/start` 打开面板、`/status` 状态、`/exits` 出口、`/rules` 分流、`/wloc` 虚拟定位、`/cancel` 取消输入、`/id` 查 ID。
 
 添加出口：`🌐 出口 -> ➕ 添加出口`，直接粘贴节点链接（`ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://`），备注会自动作为出口名。
+
+### WLOC 虚拟定位
+
+主菜单已有的 `📡 WLOC 管理` 和 `/wloc` 共用同一套界面，可选择内置地点、输入 WGS84 坐标、保存或删除自定义地点，以及一键恢复真实网络定位。坐标切换会热更新，不重启 DNS、sniproxy 或 WLOC 服务。
+
+首次使用时，在 WLOC 菜单下载并安装 `5GPN-X WLOC CA` 描述文件，然后前往 iOS 的“设置 → 通用 → 关于本机 → 证书信任设置”开启完全信任。该 CA 只为 `gs-loc.apple.com` 与 `gs-loc-cn.apple.com` 签发服务端证书；私钥保留在服务器。WLOC 只改写 Apple Wi-Fi/基站网络定位响应中的经纬度，不修改 GPS 硬件数据，也不会记录 BSSID 或响应正文。
+
+启用后，mosdns 只将上述两个精确域名指向网关，sniproxy 只把它们送到回环监听端口 `9080/9081`，quic-proxy 同时阻止这两个域名的新 QUIC 会话以确保回退到 TLS/TCP。关闭 WLOC 会按事务顺序撤销这些路由并恢复 Apple 原始定位；共享 CA 会保留，以便以后再次启用。
+
+若切换地点后仍显示缓存位置，请重启 iPhone。安装私有 CA 会赋予服务器解密这两个定位域名流量的能力，只应在自己管理且可信的服务器上使用；不再使用时可从 iOS 删除该描述文件。
 
 ## 配置参考
 
@@ -175,6 +185,9 @@ tests/            # 策略测试
 | `/opt/5gpn` | 运行时主目录（含 `bin/5gpn-ctl`、`bin/tgbot.py`、`bin/mihomo` 等） |
 | `/opt/5gpn/etc/current-exit` | 当前出口 |
 | `/opt/5gpn/etc/tgbot.env` | Bot Token 和管理员 ID（权限 600） |
+| `/var/lib/5gpn-wloc/state.json` | WLOC 开关、目标坐标与热更新代数 |
+| `/var/lib/5gpn-wloc/ca/ca.crt` | WLOC 私有 CA 公钥证书（私钥仅 root 可读） |
+| `/etc/5gpn/wloc-locations.json` | WLOC 内置及自定义地点 |
 | `/etc/mosdns/config.yaml` | mosdns 实际配置 |
 | `/etc/mosdns/gfwlist-extra-local.txt` | 本地补充 GFWList 域名 |
 | `/etc/sniproxy.conf` | sniproxy 配置（resolver 强制 `ipv4_only`） |

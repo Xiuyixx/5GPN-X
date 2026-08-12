@@ -26,8 +26,10 @@ import http.client
 import ipaddress
 import json
 import os
+import plistlib
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -37,6 +39,7 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
 import urllib.request
+import uuid
 
 TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
 ADMIN_IDS = {
@@ -53,6 +56,7 @@ SERVICES = [
     "quic-proxy",
     "5gpn-ios-profile",
     "5gpn-tgbot",
+    "5gpn-wloc",
 ]
 RESTART_SERVICES = [
     "mosdns",
@@ -67,6 +71,14 @@ DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\
 DNS_LIST_RE = re.compile(r"^[0-9A-Fa-f:.,\s]+$")
 DNS_UPSTREAM_SCHEMES = {"https", "tls", "udp", "tcp"}
 WWW_DIR = "/opt/5gpn/www"
+WLOC_STATE = "/var/lib/5gpn-wloc/state.json"
+WLOC_STATUS = "/var/lib/5gpn-wloc/status.json"
+WLOC_CA = "/var/lib/5gpn-wloc/ca/ca.crt"
+WLOC_LOCATIONS = "/etc/5gpn/wloc-locations.json"
+WLOC_COORD_RE = re.compile(
+    r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:[,，]|\s+)\s*"
+    r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*$"
+)
 
 # Per-chat conversational state for multi-step flows (e.g. add-exit).
 PENDING = {}
@@ -340,12 +352,14 @@ def _busy_key_from_cb(cb):
     return (chat_id, mid)
 
 
-def edit_async(cb, text_fn, keyboard=None, mono=False):
+def edit_async(cb, text_fn, keyboard=None, mono=False, keyboard_fn=None):
     key = _busy_key_from_cb(cb)
 
     def go():
         try:
-            edit(cb, text_fn(), keyboard, mono)
+            text = text_fn()
+            kb = keyboard_fn() if keyboard_fn else keyboard
+            edit(cb, text, kb, mono)
         finally:
             BUSY.discard(key)
 
@@ -416,6 +430,33 @@ def send_photo(chat_id, path, caption=""):
         # The caller falls back to a text-only URL reply, but without this
         # log we'd have zero forensic trail for "why did the QR disappear?".
         print("[warn] send_photo failed: %s" % e, file=sys.stderr)
+        return False
+
+
+def send_document_bytes(chat_id, filename, data, caption=""):
+    """Upload an in-memory document without leaving a sensitive temp file."""
+    boundary = "----pgwDocumentBoundary4f1c9d"
+
+    def _field(name, value):
+        return ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
+                % (boundary, name, value)).encode("utf-8")
+
+    body = _field("chat_id", str(chat_id))
+    if caption:
+        body += _field("caption", caption) + _field("parse_mode", "HTML")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", filename) or "document.bin"
+    body += ("--%s\r\nContent-Disposition: form-data; name=\"document\"; "
+             "filename=\"%s\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+             % (boundary, safe_name)).encode("utf-8")
+    body += bytes(data) + b"\r\n" + ("--%s--\r\n" % boundary).encode("utf-8")
+    request = urllib.request.Request(
+        API + "sendDocument", data=body,
+        headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8")).get("ok", False)
+    except Exception as exc:
+        print("[warn] send_document_bytes failed: %s" % exc, file=sys.stderr)
         return False
 
 
@@ -1243,6 +1284,247 @@ def op_set_dns(kind, text):
     return "❌ <b>DNS 上游更新失败</b>\n%s" % html.escape(_reason(out))
 
 
+def _wloc_parse_coordinates(text):
+    match = WLOC_COORD_RE.fullmatch(text or "")
+    if not match:
+        raise ValueError("格式应为：纬度,经度")
+    latitude, longitude = float(match.group(1)), float(match.group(2))
+    if not -90 <= latitude <= 90:
+        raise ValueError("纬度需在 -90~90")
+    if not -180 <= longitude <= 180:
+        raise ValueError("经度需在 -180~180")
+    return latitude, longitude
+
+
+def _wloc_state():
+    default = {"enabled": False, "latitude": None, "longitude": None,
+               "label": None, "generation": 0, "updated_at": None}
+    try:
+        with open(WLOC_STATE, encoding="utf-8") as source:
+            value = json.load(source)
+        if isinstance(value, dict):
+            default.update(value)
+    except (OSError, ValueError, TypeError):
+        pass
+    default["enabled"] = bool(default.get("enabled"))
+    return default
+
+
+def _valid_wloc_location(item):
+    if not isinstance(item, dict):
+        return None
+    name = " ".join(str(item.get("name") or "").split())
+    if not name or len(name) > 40:
+        return None
+    try:
+        latitude, longitude = _wloc_parse_coordinates(
+            "%s,%s" % (item.get("latitude"), item.get("longitude")))
+    except ValueError:
+        return None
+    return {"name": name, "latitude": latitude, "longitude": longitude,
+            "builtin": bool(item.get("builtin"))}
+
+
+def _wloc_locations():
+    try:
+        with open(WLOC_LOCATIONS, encoding="utf-8") as source:
+            document = json.load(source)
+        items = document.get("locations", []) if isinstance(document, dict) else []
+    except (OSError, ValueError, TypeError):
+        items = []
+    result = []
+    seen = set()
+    for item in items:
+        location = _valid_wloc_location(item)
+        if location and location["name"].casefold() not in seen:
+            seen.add(location["name"].casefold())
+            result.append(location)
+    return result[:30]
+
+
+def _wloc_save_locations(locations):
+    directory = os.path.dirname(WLOC_LOCATIONS)
+    os.makedirs(directory, mode=0o755, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="wloc-locations.", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as target:
+            json.dump({"locations": locations}, target, ensure_ascii=False, indent=2)
+            target.flush()
+            os.fsync(target.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, WLOC_LOCATIONS)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _wloc_location_token(location):
+    raw = "%s|%.8f|%.8f" % (
+        location["name"], location["latitude"], location["longitude"])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+
+
+def _wloc_location_at(index, token):
+    locations = _wloc_locations()
+    if 0 <= index < len(locations) and _wloc_location_token(locations[index]) == token:
+        return locations[index]
+    return None
+
+
+def _wloc_last_hit_line(state):
+    try:
+        with open(WLOC_STATUS, encoding="utf-8") as source:
+            status = json.load(source)
+        received = float(status.get("received_at"))
+        age = max(0, int(time.time() - received))
+        generation = int(status.get("generation") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return "最近请求：<code>尚未命中</code>"
+    if generation != int(state.get("generation") or 0):
+        return "最近请求：<code>当前目标尚未命中</code>"
+    if age < 60:
+        ago = "%d 秒前" % age
+    elif age < 3600:
+        ago = "%d 分钟前" % (age // 60)
+    else:
+        ago = "%d 小时前" % (age // 3600)
+    result = "✅ 已改写" if status.get("patched") else "⚠️ 未改写"
+    return "最近请求：%s（%s）" % (result, ago)
+
+
+def wloc_overview_text():
+    state = _wloc_state()
+    if state.get("latitude") is None or state.get("longitude") is None:
+        target = "未设置"
+    else:
+        label = str(state.get("label") or "").strip()
+        coords = "%.6f, %.6f" % (float(state["latitude"]), float(state["longitude"]))
+        target = (("<b>%s</b> · " % html.escape(label)) if label else "") + "<code>%s</code>" % coords
+    service = _is_active("5gpn-wloc") == "active"
+    ca_ready = os.path.isfile(WLOC_CA) and os.path.getsize(WLOC_CA) > 0
+    lines = [
+        "📡 <b>WLOC 管理</b>",
+        "仅改写 Apple 的两个网络定位域名，不修改 GPS 硬件数据。",
+        "",
+        "状态：<b>%s</b>" % ("已开启" if state["enabled"] else "已关闭"),
+        "代理：%s" % ("🟢 运行中" if service else "⚪ 未运行"),
+        "共享 CA：%s" % ("✅ 已生成" if ca_ready else "未生成"),
+        "目标：%s" % target,
+    ]
+    if state["enabled"]:
+        lines.append(_wloc_last_hit_line(state))
+    lines.extend([
+        "",
+        "首次使用先安装 CA 描述文件，并在 iOS 的“证书信任设置”中对 <b>5GPN-X WLOC CA</b> 开启完全信任。",
+        "首次启用、换点或恢复后若仍显示缓存位置，请重启 iPhone。",
+    ])
+    return "\n".join(lines)
+
+
+def op_wloc_set(latitude, longitude, label=""):
+    try:
+        latitude, longitude = _wloc_parse_coordinates("%s,%s" % (latitude, longitude))
+    except ValueError as exc:
+        return "坐标无效：%s" % html.escape(str(exc))
+    label = " ".join((label or "").split())[:40]
+    argv = ["bash", MGMT, "--wloc-set", "%.8f" % latitude, "%.8f" % longitude]
+    if label:
+        argv.append(label)
+    ok, output = run2(argv, timeout=180)
+    if not ok:
+        return "❌ <b>WLOC 设置失败</b>\n%s" % html.escape(_reason(output))
+    return ("✅ <b>WLOC 已开启</b>\n目标：%s<code>%.6f, %.6f</code>"
+            % (("<b>%s</b> · " % html.escape(label)) if label else "",
+               latitude, longitude))
+
+
+def op_wloc_off():
+    ok, output = run2(["bash", MGMT, "--wloc-off"], timeout=180)
+    if not ok:
+        return "❌ <b>恢复真实定位失败</b>\n%s" % html.escape(_reason(output))
+    return "✅ <b>WLOC 已关闭</b>，Apple 网络定位已恢复原始路由。"
+
+
+def _wloc_ca_profile():
+    with open(WLOC_CA, encoding="ascii") as source:
+        der = ssl.PEM_cert_to_DER_cert(source.read())
+    payload_uuid = str(uuid.uuid4()).upper()
+    profile_uuid = str(uuid.uuid4()).upper()
+    return plistlib.dumps({
+        "PayloadContent": [{
+            "PayloadCertificateFileName": "5GPN-X-WLOC-CA.cer",
+            "PayloadContent": der,
+            "PayloadDescription": "5GPN-X WLOC scoped interception CA",
+            "PayloadDisplayName": "5GPN-X WLOC CA",
+            "PayloadIdentifier": "com.5gpnx.wloc.ca",
+            "PayloadType": "com.apple.security.root",
+            "PayloadUUID": payload_uuid,
+            "PayloadVersion": 1,
+        }],
+        "PayloadDescription": "Installs the CA used only for Apple WLOC response rewriting.",
+        "PayloadDisplayName": "5GPN-X WLOC CA",
+        "PayloadIdentifier": "com.5gpnx.wloc",
+        "PayloadOrganization": "5GPN-X",
+        "PayloadRemovalDisallowed": False,
+        "PayloadType": "Configuration",
+        "PayloadUUID": profile_uuid,
+        "PayloadVersion": 1,
+    })
+
+
+def op_wloc_send_ca(chat_id):
+    ok, output = run2(["bash", MGMT, "--wloc-ensure-ca"], timeout=120)
+    if not ok:
+        return "❌ <b>CA 生成失败</b>\n%s" % html.escape(_reason(output))
+    try:
+        profile = _wloc_ca_profile()
+        with open(WLOC_CA, encoding="ascii") as source:
+            certificate = ssl.PEM_cert_to_DER_cert(source.read())
+        fingerprint = hashlib.sha256(certificate).hexdigest().upper()
+    except (OSError, ValueError, ssl.SSLError) as exc:
+        return "❌ CA 描述文件生成失败：%s" % html.escape(str(exc))
+    caption = ("📜 <b>5GPN-X WLOC CA</b>\nSHA-256：<code>%s</code>\n\n"
+               "安装后还需到 设置 → 通用 → 关于本机 → 证书信任设置，开启完全信任。"
+               % fingerprint)
+    if not send_document_bytes(chat_id, "5GPN-X-WLOC-CA.mobileconfig", profile, caption):
+        return "❌ CA 描述文件发送失败，请稍后重试。"
+    return "✅ CA 描述文件已发送；已安装同一指纹时无需重复安装。"
+
+
+def op_wloc_add_location(name, latitude, longitude):
+    name = " ".join((name or "").split())
+    if not name or len(name) > 40:
+        return "地点名称需为 1-40 个字符。"
+    try:
+        latitude, longitude = _wloc_parse_coordinates("%s,%s" % (latitude, longitude))
+    except ValueError as exc:
+        return "坐标无效：%s" % html.escape(str(exc))
+    locations = _wloc_locations()
+    if any(item["name"].casefold() == name.casefold() for item in locations):
+        return "地点名称已存在。"
+    if len(locations) >= 30:
+        return "最多保存 30 个地点。"
+    locations.append({"name": name, "latitude": latitude, "longitude": longitude,
+                      "builtin": False})
+    _wloc_save_locations(locations)
+    return "✅ 已保存地点 <b>%s</b>。" % html.escape(name)
+
+
+def op_wloc_delete_location(index, token):
+    locations = _wloc_locations()
+    if not 0 <= index < len(locations) or _wloc_location_token(locations[index]) != token:
+        return "地点列表已经变化，请重新打开。"
+    location = locations[index]
+    if location.get("builtin"):
+        return "内置地点不能删除。"
+    del locations[index]
+    _wloc_save_locations(locations)
+    return "✅ 已删除地点 <b>%s</b>。" % html.escape(location["name"])
+
+
 def op_restart_services():
     results = []
     failed = False
@@ -1688,6 +1970,52 @@ def dot_menu():
     ]
 
 
+def wloc_menu():
+    state = _wloc_state()
+    rows = [[{"text": "📜 安装共享 CA", "callback_data": "wloc:ca"}]]
+    location_row = []
+    for index, location in enumerate(_wloc_locations()):
+        try:
+            active = (state.get("enabled") and state.get("label") == location["name"]
+                      and abs(float(state.get("latitude")) - location["latitude"]) < 1e-7
+                      and abs(float(state.get("longitude")) - location["longitude"]) < 1e-7)
+        except (TypeError, ValueError):
+            active = False
+        location_row.append({
+            "text": ("✅ " if active else "📍 ") + location["name"],
+            "callback_data": "wloc:set:%d:%s" % (index, _wloc_location_token(location)),
+        })
+        if len(location_row) == 2:
+            rows.append(location_row)
+            location_row = []
+    if location_row:
+        rows.append(location_row)
+    rows.append([{"text": "✍️ 自定义坐标", "callback_data": "wloc:coords"},
+                 {"text": "➕ 保存地点", "callback_data": "wloc:add"}])
+    if any(not item.get("builtin") for item in _wloc_locations()):
+        rows.append([{"text": "🗑 删除地点", "callback_data": "menu:wloc_del"}])
+    if state.get("enabled"):
+        rows.append([{"text": "♻️ 恢复真实定位", "callback_data": "wloc:off"}])
+    rows.append([{"text": "🔄 刷新状态", "callback_data": "menu:wloc"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
+    return rows
+
+
+def wloc_delete_menu():
+    rows = []
+    for index, location in enumerate(_wloc_locations()):
+        if location.get("builtin"):
+            continue
+        rows.append([{
+            "text": "🗑 " + location["name"],
+            "callback_data": "wloc:del:%d:%s" % (index, _wloc_location_token(location)),
+        }])
+    if not rows:
+        rows.append([{"text": "（没有可删除的地点）", "callback_data": "menu:wloc"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:wloc"}])
+    return rows
+
+
 def services_menu(prefix, back_target="menu:main"):
     rows = [[{"text": s, "callback_data": "%s:%s" % (prefix, s)}] for s in SERVICES]
     rows.append([{"text": "« 返回", "callback_data": back_target}])
@@ -1768,6 +2096,8 @@ def handle_message(msg):
             console_async(chat_id, exits_overview_text, keyboard_fn=exits_menu, message_id=mid)
         elif text.startswith("/rules"):
             reanchor_console(chat_id, "📑 <b>分流管理</b>：按域名分流到不同出口 / 直连 / 拒绝。", rules_menu())
+        elif text.startswith("/wloc"):
+            reanchor_console(chat_id, wloc_overview_text(), wloc_menu())
         else:
             send(chat_id, "未知命令。发送 /menu 打开操作面板。")
         return
@@ -1870,6 +2200,54 @@ def handle_message(msg):
                              message_id=prompt_mid)
         console_async(chat_id, lambda: op_set_dns(kind, dns_text), dot_menu(), message_id=mid)
         return
+    if state and state.get("action") == "wloc_coords":
+        prompt_mid = state.get("prompt_mid")
+        try:
+            latitude, longitude = _wloc_parse_coordinates(text)
+        except ValueError as exc:
+            state["prompt_mid"] = upsert_console(
+                chat_id, "坐标无效：%s\n请重新发送 WGS84 <code>纬度,经度</code>。"
+                % html.escape(str(exc)), cancel_kb("wloc"), message_id=prompt_mid)
+            return
+        PENDING.pop(chat_id, None)
+        background(delete_message, chat_id, msg.get("message_id"))
+        mid = upsert_console(chat_id, "⏳ 正在应用 WLOC 坐标…", message_id=prompt_mid)
+        console_async(chat_id, lambda: op_wloc_set(latitude, longitude, "自定义"),
+                      keyboard_fn=wloc_menu, message_id=mid)
+        return
+    if state and state.get("action") == "wloc_add_name":
+        name = " ".join(text.split())
+        prompt_mid = state.get("prompt_mid")
+        background(delete_message, chat_id, msg.get("message_id"))
+        if (not name or len(name) > 40
+                or any(item["name"].casefold() == name.casefold()
+                       for item in _wloc_locations())):
+            state["prompt_mid"] = upsert_console(
+                chat_id, "名称无效或已存在。请发送 1-40 个字符的唯一地点名称。",
+                cancel_kb("wloc"), message_id=prompt_mid)
+            return
+        PENDING[chat_id] = {"action": "wloc_add_coords", "name": name,
+                            "prompt_mid": prompt_mid}
+        upsert_console(chat_id, "➕ <b>保存地点</b>\n名称：<b>%s</b>\n\n"
+                       "请发送 WGS84 <code>纬度,经度</code>。" % html.escape(name),
+                       cancel_kb("wloc"), message_id=prompt_mid)
+        return
+    if state and state.get("action") == "wloc_add_coords":
+        prompt_mid = state.get("prompt_mid")
+        name = state.get("name") or ""
+        try:
+            latitude, longitude = _wloc_parse_coordinates(text)
+        except ValueError as exc:
+            state["prompt_mid"] = upsert_console(
+                chat_id, "坐标无效：%s\n请重新发送 WGS84 <code>纬度,经度</code>。"
+                % html.escape(str(exc)), cancel_kb("wloc"), message_id=prompt_mid)
+            return
+        PENDING.pop(chat_id, None)
+        background(delete_message, chat_id, msg.get("message_id"))
+        result = op_wloc_add_location(name, latitude, longitude)
+        upsert_console(chat_id, result + "\n\n" + wloc_overview_text(), wloc_menu(),
+                       message_id=prompt_mid)
+        return
 
     send(chat_id, "未知命令。发送 /menu 打开操作面板。")
 
@@ -1902,6 +2280,9 @@ def handle_callback(cb):
     elif data == "cancel:dot":
         PENDING.pop(chat_id, None)
         edit(cb, op_dot_status(), dot_menu())
+    elif data == "cancel:wloc":
+        PENDING.pop(chat_id, None)
+        edit(cb, wloc_overview_text(), wloc_menu())
     elif data == "menu:main":
         PENDING.pop(chat_id, None)
         edit(cb, "选择一个操作：", main_menu())
@@ -1923,11 +2304,61 @@ def handle_callback(cb):
     elif data == "menu:dot":
         edit(cb, op_dot_status(), dot_menu())
     elif data == "menu:wloc":
-        edit(cb, "📡 <b>WLOC 管理</b>\n功能即将上线。", back_kb("menu:main"))
+        PENDING.pop(chat_id, None)
+        edit(cb, wloc_overview_text(), wloc_menu())
+    elif data == "menu:wloc_del":
+        edit(cb, "选择要删除的自定义地点：", wloc_delete_menu())
     elif data == "menu:ops":
         edit(cb, "🛠 <b>运维</b>\n选择一个操作：", ops_menu())
     elif data == "menu:logs":
         edit(cb, "选择要查看日志的服务：", services_menu("logs", "menu:ops"))
+
+    # ---- WLOC management ----
+    elif data == "wloc:coords":
+        PENDING[chat_id] = {"action": "wloc_coords", "prompt_mid": cb_mid}
+        edit(cb, "✍️ <b>自定义 WLOC 坐标</b>\n\n"
+             "请发送 WGS84 <code>纬度,经度</code>，例如 "
+             "<code>22.303611,114.165</code>。", cancel_kb("wloc"))
+    elif data == "wloc:add":
+        PENDING[chat_id] = {"action": "wloc_add_name", "prompt_mid": cb_mid}
+        edit(cb, "➕ <b>保存地点</b>\n\n请发送 1-40 个字符的地点名称。",
+             cancel_kb("wloc"))
+    elif data == "wloc:ca":
+        edit(cb, "⏳ 正在生成并发送 WLOC CA 描述文件…")
+        edit_async(cb, lambda: op_wloc_send_ca(chat_id), keyboard_fn=wloc_menu)
+    elif data == "wloc:off":
+        edit(cb, "确认关闭 WLOC 并恢复 Apple 原始网络定位？\n\n"
+             "共享 CA 会保留，方便以后重新启用。",
+             [[{"text": "确认恢复真实定位", "callback_data": "wloc:off_yes"}],
+              [{"text": "取消", "callback_data": "menu:wloc"}]])
+    elif data == "wloc:off_yes":
+        edit(cb, "⏳ 正在安全撤销 WLOC 路由…")
+        edit_async(cb, lambda: op_wloc_off() + "\n\n" + wloc_overview_text(),
+                   keyboard_fn=wloc_menu)
+    elif data.startswith("wloc:set:"):
+        parts = data.split(":")
+        try:
+            location = _wloc_location_at(int(parts[2]), parts[3])
+        except (IndexError, ValueError):
+            location = None
+        if not location:
+            edit(cb, "地点列表已经变化，请重新打开。", wloc_menu())
+        else:
+            edit(cb, "⏳ 正在切换到 <b>%s</b>…" % html.escape(location["name"]))
+            edit_async(
+                cb,
+                lambda loc=location: op_wloc_set(
+                    loc["latitude"], loc["longitude"], loc["name"])
+                + "\n\n" + wloc_overview_text(),
+                keyboard_fn=wloc_menu,
+            )
+    elif data.startswith("wloc:del:"):
+        parts = data.split(":")
+        try:
+            result = op_wloc_delete_location(int(parts[2]), parts[3])
+        except (IndexError, ValueError, OSError) as exc:
+            result = "删除失败：%s" % html.escape(str(exc))
+        edit(cb, result + "\n\n" + wloc_overview_text(), wloc_menu())
 
     # ---- conversational starts (edit prompt into the same bubble) ----
     elif data == "rules:set":
@@ -2159,6 +2590,7 @@ BOT_COMMANDS = [
     ("status", "查看运行状态"),
     ("exits", "出口管理（切换/添加/删除）"),
     ("rules", "分流管理"),
+    ("wloc", "WLOC 虚拟定位管理"),
     ("id", "获取我的 Telegram ID"),
 ]
 

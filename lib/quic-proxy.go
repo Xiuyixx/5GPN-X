@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,9 +32,11 @@ const (
 )
 
 var (
-	listenAddr  = flag.String("l", ":443", "Listen address (UDP)")
-	idleTimeout = flag.Duration("idle-timeout", 300*time.Second, "UDP session idle timeout")
-	debug       = flag.Bool("debug", false, "Enable debug logging")
+	listenAddr   = flag.String("l", ":443", "Listen address (UDP)")
+	idleTimeout  = flag.Duration("idle-timeout", 300*time.Second, "UDP session idle timeout")
+	debug        = flag.Bool("debug", false, "Enable debug logging")
+	blockSNIFile = flag.String("block-sni-file", "/etc/5gpn/wloc-quic-block.txt",
+		"Drop new QUIC sessions whose exact SNI is listed in this file")
 )
 
 type Session struct {
@@ -117,6 +120,12 @@ func (m *SessionManager) handleNewSession(data []byte, clientAddr *net.UDPAddr) 
 		}
 		return
 	}
+	if isBlockedSNI(sni, *blockSNIFile) {
+		if *debug {
+			log.Printf("[%s] QUIC blocked for managed TLS interception host %s", key, sni)
+		}
+		return
+	}
 
 	// Resolve SNI
 	ips, err := net.LookupIP(sni)
@@ -172,6 +181,24 @@ func (m *SessionManager) handleNewSession(data []byte, clientAddr *net.UDPAddr) 
 	if *debug {
 		log.Printf("[%s] New session to %s (%s)", key, sni, backendIP)
 	}
+}
+
+func isBlockedSNI(sni, path string) bool {
+	if path == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(sni), "."))
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(line), "."))
+		if line != "" && !strings.HasPrefix(line, "#") && line == want {
+			return true
+		}
+	}
+	return false
 }
 
 func selectBackendIPv4(ips []net.IP) (net.IP, bool) {

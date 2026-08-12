@@ -4,9 +4,27 @@ import (
 	"bytes"
 	"encoding/hex"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestIsBlockedSNIUsesExactCaseInsensitiveMatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocked.txt")
+	if err := os.WriteFile(path, []byte("# managed\ngs-loc.apple.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !isBlockedSNI("GS-LOC.APPLE.COM.", path) {
+		t.Fatal("exact WLOC host was not blocked")
+	}
+	if isBlockedSNI("sub.gs-loc.apple.com", path) {
+		t.Fatal("subdomain must not match an exact WLOC host")
+	}
+	if isBlockedSNI("gs-loc.apple.com", filepath.Join(t.TempDir(), "missing")) {
+		t.Fatal("missing block file must fail open")
+	}
+}
 
 func TestSelectBackendIPv4RejectsIPv6OnlyResults(t *testing.T) {
 	backendIP, ok := selectBackendIPv4([]net.IP{
