@@ -85,100 +85,76 @@ generate_domain() {
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
 }
 
-collect_domain_dns_confirmation() {
-    if [[ -t 0 ]]; then
-        local confirm=""
-        read -r -p "A 记录 $DOMAIN -> $PUBLIC_IP 已配置？[Enter=验证/s=跳过]: " confirm
-        [[ "$confirm" =~ ^([Ss]|skip)$ ]] && SKIP_DOMAIN_DNS_CHECK=1
+validate_domain_dns() {
+    local resolved confirm=""
+    resolved="$(resolve_domain_a_records "$DOMAIN" | head -n1 || true)"
+    if [[ -z "$resolved" ]]; then
+        err "域名 $DOMAIN 无法解析。请先添加 A 记录指向本机（Cloudflare 须使用仅 DNS/灰云）。"
+        return 1
     fi
-}
-
-verify_domain_dns() {
-    info "域名: $DOMAIN（需解析 A 记录 -> $PUBLIC_IP）"
-    if [[ "${SKIP_DOMAIN_DNS_CHECK:-0}" == "1" ]]; then
-        warn "已跳过域名解析验证，请确保 A 记录已正确配置"
-        mkdir -p "$CONF_DIR"
-        echo "$DOMAIN" > "${CONF_DIR}/.domain"
-        return
-    fi
-    info "等待 DNS 解析生效（最多 120 秒）..."
-    local waited=0 resolved=""
-    while [[ $waited -lt 120 ]]; do
-        resolved=$(resolve_domain_a_records "$DOMAIN" | paste -sd',' - || true)
-        if domain_resolves_to_public_ip "$DOMAIN" "$PUBLIC_IP"; then
-            ok "DNS 解析验证通过: $DOMAIN -> $PUBLIC_IP"
-            mkdir -p "$CONF_DIR"
-            echo "$DOMAIN" > "${CONF_DIR}/.domain"
-            return
+    if ! domain_resolves_to_public_ip "$DOMAIN" "$PUBLIC_IP"; then
+        warn "域名解析到 $resolved，与本机 $PUBLIC_IP 不一致。"
+        warn "若使用 Cloudflare，请确认已关闭橙云代理。"
+        if [[ -t 0 ]]; then
+            read -r -p "仍要继续？[y/N]: " confirm
+            [[ "$confirm" =~ ^[Yy]$ ]] || { err "安装已取消。"; return 1; }
         fi
-        sleep 5
-        waited=$((waited + 5))
-        echo -n "."
-    done
-    echo ""
-    warn "DNS 解析未在 120 秒内生效（当前解析: ${resolved:-无}）。"
-    warn "将继续安装；如后续 Let's Encrypt 证书申请失败，请确认 $DOMAIN 的 A 记录已指向 $PUBLIC_IP。"
-    mkdir -p "$CONF_DIR"
-    echo "$DOMAIN" > "${CONF_DIR}/.domain"
+    else
+        ok "域名 $DOMAIN -> $PUBLIC_IP"
+    fi
 }
 
 install_cert() {
-    local certbot_cmd certbot_cmd_force
+    local certbot_cmd cert_live_dir
     ensure_mosdns_user
     CERTBOT_LAST_OUTPUT=""
     install_certbot_firewall_hooks
+    cert_live_dir="/etc/letsencrypt/live/${DOMAIN}"
     certbot_cmd=(certbot certonly --standalone -d "$DOMAIN" \
-        --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
+        --agree-tos -n --keep-until-expiring -m "${EMAIL:-admin@${DOMAIN}}" \
         --pre-hook /usr/local/bin/5gpn-open-cert-http.sh \
         --post-hook /usr/local/bin/5gpn-restore-firewall.sh)
-    certbot_cmd_force=(certbot certonly --standalone -d "$DOMAIN" --force-renewal \
-        --agree-tos -n -m "${EMAIL:-admin@${DOMAIN}}" \
-        --pre-hook /usr/local/bin/5gpn-open-cert-http.sh \
-        --post-hook /usr/local/bin/5gpn-restore-firewall.sh)
-    local cb_cmd=()
-    if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
-        info "Let's Encrypt certificate already exists for $DOMAIN, forcing renewal..."
-        cb_cmd=("${certbot_cmd_force[@]}")
+    local cb_cmd=("${certbot_cmd[@]}")
+    if [[ -s "${cert_live_dir}/fullchain.pem" && -s "${cert_live_dir}/privkey.pem" ]]; then
+        info "已存在证书，跳过签发。"
     else
         info "申请 Let's Encrypt 证书 for $DOMAIN..."
-        cb_cmd=("${certbot_cmd[@]}")
-    fi
-    run_certbot() {
-        prepare_certbot_standalone
-        trap cleanup_certbot_standalone RETURN
-        local out retry_out rc
-        if out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
-        CERTBOT_LAST_OUTPUT="$out"
-        [[ -z "${INSTALL_LOG:-}" ]] || printf '%s\n' "$out" >> "$INSTALL_LOG"
-        if [[ $rc -eq 0 ]]; then
-            return 0
+        run_certbot() {
+            prepare_certbot_standalone
+            trap cleanup_certbot_standalone RETURN
+            local out retry_out rc
+            if out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
+            CERTBOT_LAST_OUTPUT="$out"
+            [[ -z "${INSTALL_LOG:-}" ]] || printf '%s\n' "$out" >> "$INSTALL_LOG"
+            if [[ $rc -eq 0 ]]; then
+                return 0
+            fi
+            if grep -q "AttributeError" <<<"$out"; then
+                warn "Certbot compatibility error detected. Attempting to fix Python dependencies..."
+                pip3 install --upgrade --break-system-packages certbot josepy cryptography >/dev/null 2>&1 || \
+                    pip3 install --upgrade certbot josepy cryptography >/dev/null 2>&1 || true
+                info "Retrying certificate request..."
+                if retry_out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
+                CERTBOT_LAST_OUTPUT="$retry_out"
+                [[ -z "${INSTALL_LOG:-}" ]] || printf '%s\n' "$retry_out" >> "$INSTALL_LOG"
+                return $rc
+            fi
+            return 1
+        }
+        if ! run_certbot; then
+            err "证书申请失败。请检查:"
+            err "  1. 域名 $DOMAIN 是否正确解析到本机 ($PUBLIC_IP)"
+            err "  2. 端口 80 是否被占用"
+            err "  3. 防火墙是否放行 80"
+            err "  4. 是否触发了 Let's Encrypt 速率限制 (同一域名 7 天内限 5 次)"
+            if [[ -n "${CERTBOT_LAST_OUTPUT:-}" ]]; then
+                err "certbot 最后输出:"
+                printf '%s\n' "$CERTBOT_LAST_OUTPUT" | tail -n 30 >&2
+            fi
+            exit 1
         fi
-        if grep -q "AttributeError" <<<"$out"; then
-            warn "Certbot compatibility error detected. Attempting to fix Python dependencies..."
-            pip3 install --upgrade --break-system-packages certbot josepy cryptography >/dev/null 2>&1 || \
-                pip3 install --upgrade certbot josepy cryptography >/dev/null 2>&1 || true
-            info "Retrying certificate request..."
-            if retry_out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
-            CERTBOT_LAST_OUTPUT="$retry_out"
-            [[ -z "${INSTALL_LOG:-}" ]] || printf '%s\n' "$retry_out" >> "$INSTALL_LOG"
-            return $rc
-        fi
-        return 1
-    }
-    if ! run_certbot; then
-        err "证书申请失败。请检查:"
-        err "  1. 域名 $DOMAIN 是否正确解析到本机 ($PUBLIC_IP)"
-        err "  2. 端口 80 是否被占用"
-        err "  3. 防火墙是否放行 80"
-        err "  4. 是否触发了 Let's Encrypt 速率限制 (同一域名 7 天内限 5 次)"
-        if [[ -n "${CERTBOT_LAST_OUTPUT:-}" ]]; then
-            err "certbot 最后输出:"
-            printf '%s\n' "$CERTBOT_LAST_OUTPUT" | tail -n 30 >&2
-        fi
-        exit 1
     fi
     info "Copying certificates to /etc/mosdns/certs/ ..."
-    local cert_live_dir="/etc/letsencrypt/live/${DOMAIN}"
     if [[ -d "$cert_live_dir" ]]; then
         mkdir -p /etc/mosdns/certs
         cp "${cert_live_dir}/fullchain.pem" /etc/mosdns/certs/fullchain.pem

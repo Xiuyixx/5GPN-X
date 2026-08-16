@@ -33,7 +33,10 @@ Assert-Contains 'echo "$DOMAIN" > "${CONF_DIR}/.domain"' 'preconfigured domain p
 # Non-interactive installs without DOMAIN must fail fast instead of hanging on a read.
 Assert-Contains 'Set the DOMAIN environment variable' 'noninteractive missing-domain guard'
 # The custom-domain flow must verify the operator's own A record.
-Assert-Contains 'verify_domain_dns' 'custom domain DNS verification'
+Assert-Contains 'validate_domain_dns' 'automatic custom-domain DNS verification'
+Assert-NotContains 'collect_domain_dns_confirmation' 'redundant A-record confirmation prompt'
+Assert-Contains '--keep-until-expiring' 'certificate reuse mode'
+Assert-Contains '已存在证书，跳过签发。' 'existing certificate reuse'
 
 # The ClouDNS public free-domain flow must be fully removed.
 Assert-NotContains 'cloudns.net' 'ClouDNS API endpoint'

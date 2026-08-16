@@ -40,6 +40,8 @@ done
 [[ "$cert_body" != *'info "=================================================="'* ]] || fail "verbose DNS separator must stay removed"
 [[ "$cert_body" != *'info "   TTL:'* ]] || fail "verbose DNS instruction block must stay removed"
 [[ "$cert_body" != *'echo "  请输入你自己的域名"'* ]] || fail "legacy domain-entry banner must stay removed"
+[[ "$cert_body" != *"collect_domain_dns_confirmation()"* ]] || fail "A-record confirmation prompt must stay removed"
+[[ "$install_body" == *"validate_domain_dns"* ]] || fail "domain DNS must be validated automatically"
 # shellcheck disable=SC2016 # Match the literal variable reference in dns.sh.
 [[ "$dns_body" == *'"${PROMPT_DNS:-0}" == "1"'* ]] || fail "DNS prompts must be opt-in during installation"
 [[ "$services_body" == *'read -r -p "Telegram Bot Token'* ]] || fail "Telegram token input must remain visible"

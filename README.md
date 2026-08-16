@@ -54,7 +54,7 @@ export EMAIL="admin@example.com"
 sudo ./install.sh
 ```
 
-安装前请先把域名 A 记录指向服务器公网 IP；脚本在申请 Let's Encrypt 证书前会验证解析（最长等待 120 秒）。
+安装前请先把域名 A 记录指向服务器公网 IP；脚本输入域名后会自动验证解析，无需额外确认。已有证书会直接复用，没有证书时才申请 Let's Encrypt 证书。
 
 安装终端仅显示阶段状态和必要交互；完整命令输出写入 `/var/log/5gpn-install.log`。
 
