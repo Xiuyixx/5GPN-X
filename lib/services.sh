@@ -130,16 +130,26 @@ install_sniproxy() {
     ensure_proxy_user
     if ! command -v sniproxy >/dev/null 2>&1; then
         info "Compiling sniproxy (TCP SNI proxy)..."
-        mkdir -p "$SRC_DIR"
-        cd "$SRC_DIR"
-        if [[ ! -d sniproxy ]]; then
-            git clone --depth=1 https://github.com/dlundquist/sniproxy.git
+        local build_log
+        build_log="$(mktemp /tmp/5gpn-sniproxy-build.XXXXXX.log)"
+        if ! (
+            set -e
+            mkdir -p "$SRC_DIR"
+            cd "$SRC_DIR"
+            if [[ ! -d sniproxy ]]; then
+                git clone --quiet --depth=1 https://github.com/dlundquist/sniproxy.git
+            fi
+            cd sniproxy
+            DEBEMAIL="root@localhost" DEBFULLNAME="root" ./autogen.sh
+            ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns
+            make -j"${MAKE_JOBS:-$(nproc)}"
+            make install
+        ) >"$build_log" 2>&1; then
+            err "sniproxy 编译失败。构建日志: $build_log"
+            tail -n 20 "$build_log" | sed 's/^/  /' >&2 || true
+            exit 1
         fi
-        cd sniproxy
-        DEBEMAIL="root@localhost" DEBFULLNAME="root" ./autogen.sh >/dev/null
-        ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns >/dev/null
-        make -j"${MAKE_JOBS:-$(nproc)}" >/dev/null
-        make install >/dev/null
+        rm -f "$build_log"
     else
         info "sniproxy already installed"
     fi
@@ -176,7 +186,7 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable sniproxy
+    systemctl enable --quiet sniproxy
     ok "sniproxy installed"
 }
 
@@ -238,12 +248,18 @@ install_quic_proxy() {
     ensure_proxy_user
     if [[ ! -x "${BASE_DIR}/bin/quic-proxy" ]]; then
         info "Compiling quic-proxy (UDP/QUIC SNI proxy)..."
+        local build_log
+        build_log="$(mktemp /tmp/5gpn-quicproxy-build.XXXXXX.log)"
         mkdir -p "${BASE_DIR}/bin"
         mkdir -p "${SRC_DIR}"
         cp "${LIB_DIR}/quic-proxy.go" "${SRC_DIR}/quic-proxy.go"
-        cd "${SRC_DIR}"
         export PATH=$PATH:/usr/local/go/bin
-        go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" quic-proxy.go
+        if ! (cd "${SRC_DIR}" && go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" quic-proxy.go) >"$build_log" 2>&1; then
+            err "quic-proxy 编译失败。构建日志: $build_log"
+            tail -n 20 "$build_log" | sed 's/^/  /' >&2 || true
+            exit 1
+        fi
+        rm -f "$build_log"
     else
         info "quic-proxy already compiled"
     fi
@@ -266,7 +282,7 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable quic-proxy
+    systemctl enable --quiet quic-proxy
     ok "quic-proxy installed"
 }
 

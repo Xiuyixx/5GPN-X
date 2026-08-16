@@ -164,7 +164,6 @@ install_cert() {
         local out retry_out rc
         if out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
         CERTBOT_LAST_OUTPUT="$out"
-        printf '%s\n' "$out"
         if [[ $rc -eq 0 ]]; then
             return 0
         fi
@@ -175,7 +174,6 @@ install_cert() {
             info "Retrying certificate request..."
             if retry_out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
             CERTBOT_LAST_OUTPUT="$retry_out"
-            printf '%s\n' "$retry_out"
             return $rc
         fi
         return 1

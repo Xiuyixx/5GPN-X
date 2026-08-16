@@ -573,7 +573,6 @@ close_cert_http_port() {
     fi
 }
 restore_reverse_proxy_firewall() {
-    info "Restoring reverse proxy firewall whitelist..."
     close_cert_http_port
     setup_firewall >/dev/null 2>&1 || true
 }

@@ -191,7 +191,7 @@ configure_dns_upstreams() {
     echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_private_dns"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_public_dns"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.sniproxy_dns"
-    info "DNS 设置: remote=$REMOTE_DNS local=$LOCAL_DNS"
+    info "DNS: remote=$REMOTE_DNS local=$LOCAL_DNS"
 }
 
 configure_overseas_dns() { configure_dns_upstreams; }
