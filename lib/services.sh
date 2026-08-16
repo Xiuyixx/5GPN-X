@@ -9,14 +9,15 @@
 
 install_deps() {
     info "Installing system dependencies..."
-    local pcre_dev_pkg="libpcre3-dev"
+    local pcre_dev_pkg="libpcre3-dev" pkg_log package_install_ok=0
+    pkg_log="$(mktemp /tmp/5gpn-packages.XXXXXX.log)"
     if [[ "${OS:-}" == "debian" && "${VER%%.*}" -ge 13 ]]; then
         pcre_dev_pkg="libpcre2-dev"
     fi
     case "$PKG_MGR" in
         apt-get)
             export DEBIAN_FRONTEND=noninteractive
-            if ! apt-get update -qq; then
+            if ! apt-get update -qq >"$pkg_log" 2>&1; then
                 warn "apt update failed; trying a direct public DNS path for Debian mirrors..."
                 if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
                     sed -i 's/^URIs: .*/URIs: http:\/\/deb.debian.org\/debian/' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
@@ -24,26 +25,41 @@ install_deps() {
                 if [[ -f /etc/apt/sources.list ]]; then
                     sed -i 's|^[[:space:]]*deb[[:space:]]\+mirror+file:/etc/apt/mirrors/.*|deb http://deb.debian.org/debian trixie main|g' /etc/apt/sources.list 2>/dev/null || true
                 fi
-                apt-get update -qq
+                if ! apt-get update -qq >"$pkg_log" 2>&1; then
+                    err "apt update failed. Package-manager log: $pkg_log"
+                    grep -Ei '(^E:|^Error:|error|failed)' "$pkg_log" | tail -n 8 | sed 's/^/  /' >&2 || true
+                    return 1
+                fi
             fi
-            apt-get install -y -qq \
+            if apt-get install -y -qq \
                 build-essential git wget curl ca-certificates \
                 libev-dev "${pcre_dev_pkg}" libudns-dev libssl-dev \
                 autoconf automake libtool pkg-config \
                 certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap2-bin \
-                nftables qrencode wireguard-tools || true
+                nftables qrencode wireguard-tools >>"$pkg_log" 2>&1; then
+                package_install_ok=1
+            else
+                warn "Some system packages could not be installed; continuing with required-tool checks."
+                info "Package-manager log: $pkg_log"
+            fi
             ;;
         dnf|yum)
-            $PKG_MGR install -y -q \
+            if "$PKG_MGR" install -y -q \
                 gcc gcc-c++ make git wget curl ca-certificates \
                 libev-devel pcre-devel openssl-devel \
                 autoconf automake libtool pkgconfig \
                 certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap-ng-utils \
-                nftables qrencode wireguard-tools || true
+                nftables qrencode wireguard-tools >"$pkg_log" 2>&1; then
+                package_install_ok=1
+            else
+                warn "Some system packages could not be installed; continuing with required-tool checks."
+                info "Package-manager log: $pkg_log"
+            fi
             ;;
     esac
+    [[ "$package_install_ok" -eq 1 ]] && ok "System packages installed"
     if ! command -v go >/dev/null 2>&1; then
         info "Installing Go compiler..."
         GO_VER="1.22.4"
@@ -71,9 +87,10 @@ install_deps() {
     fi
     if ! command -v certbot >/dev/null 2>&1; then
         err "Required package 'certbot' was not installed successfully."
-        err "Please check your package manager output above."
+        err "Please check the package-manager log: $pkg_log"
         exit 1
     fi
+    [[ "$package_install_ok" -eq 1 ]] && rm -f "$pkg_log"
 }
 
 install_mosdns_binary() {
@@ -593,4 +610,3 @@ show_status() {
     fi
     echo "=========================================="
 }
-
