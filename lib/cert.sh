@@ -97,7 +97,7 @@ validate_domain_dns() {
         warn "若使用 Cloudflare，请确认已关闭橙云代理。"
         if [[ -t 0 ]]; then
             read -r -p "仍要继续？[y/N]: " confirm
-            [[ "$confirm" =~ ^[Yy]$ ]] || { err "安装已取消。"; return 1; }
+            [[ "$confirm" =~ ^[Yy]$ ]] || { warn "已取消使用该域名。"; return 1; }
         fi
     else
         ok "域名 $DOMAIN -> $PUBLIC_IP"

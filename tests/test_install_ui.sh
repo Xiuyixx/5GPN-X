@@ -42,6 +42,10 @@ done
 [[ "$cert_body" != *'echo "  请输入你自己的域名"'* ]] || fail "legacy domain-entry banner must stay removed"
 [[ "$cert_body" != *"collect_domain_dns_confirmation()"* ]] || fail "A-record confirmation prompt must stay removed"
 [[ "$install_body" == *"validate_domain_dns"* ]] || fail "domain DNS must be validated automatically"
+[[ "$install_body" == *'if run_install_step "配置域名与 TLS 证书" install_stage_certificate; then'* ]] || fail "certificate failures must be handled by the interactive domain loop"
+[[ "$install_body" == *'证书配置失败，请重新输入域名（Ctrl+C 退出）。'* ]] || fail "certificate failures must ask for another domain"
+[[ "$install_body" == *'[[ -t 0 ]] || return 1'* ]] || fail "noninteractive certificate failures must not loop forever"
+[[ "$install_body" == *'DOMAIN=""'* ]] || fail "failed domain attempts must be cleared before retry"
 # shellcheck disable=SC2016 # Match the literal variable reference in dns.sh.
 [[ "$dns_body" == *'"${PROMPT_DNS:-0}" == "1"'* ]] || fail "DNS prompts must be opt-in during installation"
 [[ "$services_body" == *'read -r -p "Telegram Bot Token'* ]] || fail "Telegram token input must remain visible"
