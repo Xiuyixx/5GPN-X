@@ -24,6 +24,34 @@ init_install_log() {
     printf '[%s] 5GPN-X installation started\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$INSTALL_LOG"
 }
 
+install_error_summary_from_log() {
+    local log_file="$1" window detail retry_after
+    window="$(tail -n 80 "$log_file" 2>/dev/null | sed $'s/\033\\[[0-9;]*m//g' || true)"
+
+    detail="$(printf '%s\n' "$window" | \
+        grep -Ei 'too many certificates.*retry after|rate limit.*retry after' | tail -n 1 || true)"
+    if [[ -n "$detail" ]]; then
+        retry_after="$(printf '%s\n' "$detail" | \
+            sed -nE 's/.*retry after ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} UTC).*/\1/p')"
+        if [[ -n "$retry_after" ]]; then
+            printf "Let's Encrypt 签发频率已达上限，可重试时间：%s\n" "$retry_after"
+        else
+            printf "Let's Encrypt 签发频率已达上限：%s\n" "$detail"
+        fi
+        return
+    fi
+
+    if grep -Eqi 'some challenges have failed|challenge.*failed' <<<"$window"; then
+        printf '域名验证失败：请确认 A 记录指向本机、Cloudflare 使用灰云，并放行公网 TCP/80。\n'
+        return
+    fi
+
+    detail="$(printf '%s\n' "$window" | \
+        grep -Ei '(error|failed|failure|cannot|missing|invalid|失败|错误|无法|不存在)' | tail -n 1 || true)"
+    [[ -n "$detail" ]] || detail="$(printf '%s\n' "$window" | tail -n 1)"
+    printf '%s\n' "$detail"
+}
+
 run_install_step() {
     local label="$1" rc last_error had_errexit=0
     shift
@@ -46,12 +74,7 @@ run_install_step() {
         printf '\r\033[2K'
     fi
     printf '  %b✗%b %s\n' "${RED:-}" "${NC:-}" "$label" >&2
-    last_error="$(tail -n 80 "$INSTALL_LOG" 2>/dev/null | \
-        sed $'s/\033\\[[0-9;]*m//g' | \
-        grep -Ei '(error|failed|failure|cannot|missing|invalid|失败|错误|无法|不存在)' | tail -n 1 || true)"
-    if [[ -z "$last_error" ]]; then
-        last_error="$(tail -n 1 "$INSTALL_LOG" 2>/dev/null | sed $'s/\033\\[[0-9;]*m//g' || true)"
-    fi
+    last_error="$(install_error_summary_from_log "$INSTALL_LOG")"
     [[ -n "$last_error" ]] && printf '      %s\n' "$last_error" >&2
     printf '      详细日志: %s\n' "$INSTALL_LOG" >&2
     return "$rc"
