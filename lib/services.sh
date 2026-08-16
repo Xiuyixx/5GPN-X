@@ -9,15 +9,20 @@
 
 install_deps() {
     info "Installing system dependencies..."
-    local pcre_dev_pkg="libpcre3-dev" pkg_log package_install_ok=0
-    pkg_log="$(mktemp /tmp/5gpn-packages.XXXXXX.log)"
+    local pcre_dev_pkg="libpcre3-dev" pkg_log package_install_ok=0 temporary_pkg_log=0
+    if [[ -n "${INSTALL_LOG:-}" ]]; then
+        pkg_log="$INSTALL_LOG"
+    else
+        pkg_log="$(mktemp /tmp/5gpn-packages.XXXXXX.log)"
+        temporary_pkg_log=1
+    fi
     if [[ "${OS:-}" == "debian" && "${VER%%.*}" -ge 13 ]]; then
         pcre_dev_pkg="libpcre2-dev"
     fi
     case "$PKG_MGR" in
         apt-get)
             export DEBIAN_FRONTEND=noninteractive
-            if ! apt-get update -qq >"$pkg_log" 2>&1; then
+            if ! apt-get update -qq >>"$pkg_log" 2>&1; then
                 warn "apt update failed; trying a direct public DNS path for Debian mirrors..."
                 if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
                     sed -i 's/^URIs: .*/URIs: http:\/\/deb.debian.org\/debian/' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
@@ -25,7 +30,7 @@ install_deps() {
                 if [[ -f /etc/apt/sources.list ]]; then
                     sed -i 's|^[[:space:]]*deb[[:space:]]\+mirror+file:/etc/apt/mirrors/.*|deb http://deb.debian.org/debian trixie main|g' /etc/apt/sources.list 2>/dev/null || true
                 fi
-                if ! apt-get update -qq >"$pkg_log" 2>&1; then
+                if ! apt-get update -qq >>"$pkg_log" 2>&1; then
                     err "apt update failed. Package-manager log: $pkg_log"
                     grep -Ei '(^E:|^Error:|error|failed)' "$pkg_log" | tail -n 8 | sed 's/^/  /' >&2 || true
                     return 1
@@ -51,7 +56,7 @@ install_deps() {
                 autoconf automake libtool pkgconfig \
                 certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap-ng-utils \
-                nftables qrencode wireguard-tools >"$pkg_log" 2>&1; then
+                nftables qrencode wireguard-tools >>"$pkg_log" 2>&1; then
                 package_install_ok=1
             else
                 warn "Some system packages could not be installed; continuing with required-tool checks."
@@ -90,7 +95,7 @@ install_deps() {
         err "Please check the package-manager log: $pkg_log"
         exit 1
     fi
-    [[ "$package_install_ok" -eq 1 ]] && rm -f "$pkg_log"
+    [[ "$package_install_ok" -eq 1 && "$temporary_pkg_log" -eq 1 ]] && rm -f "$pkg_log"
 }
 
 install_mosdns_binary() {
@@ -130,8 +135,13 @@ install_sniproxy() {
     ensure_proxy_user
     if ! command -v sniproxy >/dev/null 2>&1; then
         info "Compiling sniproxy (TCP SNI proxy)..."
-        local build_log
-        build_log="$(mktemp /tmp/5gpn-sniproxy-build.XXXXXX.log)"
+        local build_log temporary_build_log=0
+        if [[ -n "${INSTALL_LOG:-}" ]]; then
+            build_log="$INSTALL_LOG"
+        else
+            build_log="$(mktemp /tmp/5gpn-sniproxy-build.XXXXXX.log)"
+            temporary_build_log=1
+        fi
         if ! (
             set -e
             mkdir -p "$SRC_DIR"
@@ -144,12 +154,12 @@ install_sniproxy() {
             ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns
             make -j"${MAKE_JOBS:-$(nproc)}"
             make install
-        ) >"$build_log" 2>&1; then
+        ) >>"$build_log" 2>&1; then
             err "sniproxy 编译失败。构建日志: $build_log"
             tail -n 20 "$build_log" | sed 's/^/  /' >&2 || true
             exit 1
         fi
-        rm -f "$build_log"
+        [[ "$temporary_build_log" -eq 1 ]] && rm -f "$build_log"
     else
         info "sniproxy already installed"
     fi
@@ -248,18 +258,23 @@ install_quic_proxy() {
     ensure_proxy_user
     if [[ ! -x "${BASE_DIR}/bin/quic-proxy" ]]; then
         info "Compiling quic-proxy (UDP/QUIC SNI proxy)..."
-        local build_log
-        build_log="$(mktemp /tmp/5gpn-quicproxy-build.XXXXXX.log)"
+        local build_log temporary_build_log=0
+        if [[ -n "${INSTALL_LOG:-}" ]]; then
+            build_log="$INSTALL_LOG"
+        else
+            build_log="$(mktemp /tmp/5gpn-quicproxy-build.XXXXXX.log)"
+            temporary_build_log=1
+        fi
         mkdir -p "${BASE_DIR}/bin"
         mkdir -p "${SRC_DIR}"
         cp "${LIB_DIR}/quic-proxy.go" "${SRC_DIR}/quic-proxy.go"
         export PATH=$PATH:/usr/local/go/bin
-        if ! (cd "${SRC_DIR}" && go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" quic-proxy.go) >"$build_log" 2>&1; then
+        if ! (cd "${SRC_DIR}" && go build -ldflags="-s -w" -o "${BASE_DIR}/bin/quic-proxy" quic-proxy.go) >>"$build_log" 2>&1; then
             err "quic-proxy 编译失败。构建日志: $build_log"
             tail -n 20 "$build_log" | sed 's/^/  /' >&2 || true
             exit 1
         fi
-        rm -f "$build_log"
+        [[ "$temporary_build_log" -eq 1 ]] && rm -f "$build_log"
     else
         info "quic-proxy already compiled"
     fi
@@ -495,7 +510,7 @@ regenerate_ios_profile() {
     generate_ios_profile
 }
 
-setup_tgbot() {
+collect_tgbot_settings() {
     local token="${TG_BOT_TOKEN:-}"
     local ids="${TG_ADMIN_IDS:-}"
     if [[ -z "$token" && -t 0 ]]; then
@@ -504,13 +519,28 @@ setup_tgbot() {
         read -r -p "Telegram Bot Token (留空跳过): " token
     fi
     if [[ -z "$token" ]]; then
-        info "未提供 Telegram Bot Token，跳过 tgbot。以后可运行: $0 --setup-tgbot"
+        TG_BOT_TOKEN=""
+        TG_ADMIN_IDS=""
+        TG_BOT_SETTINGS_COLLECTED=1
         return 0
     fi
     if [[ -z "$ids" && -t 0 ]]; then
         read -r -p "授权的 Telegram 数字 ID（逗号分隔，可留空，稍后用 /id 获取再填）: " ids
     fi
     ids="$(printf '%s' "$ids" | tr ', ' '\n' | grep -E '^[0-9]+$' | paste -sd ',' - 2>/dev/null || true)"
+    TG_BOT_TOKEN="$token"
+    TG_ADMIN_IDS="$ids"
+    TG_BOT_SETTINGS_COLLECTED=1
+}
+
+setup_tgbot() {
+    [[ "${TG_BOT_SETTINGS_COLLECTED:-0}" == "1" ]] || collect_tgbot_settings
+    local token="${TG_BOT_TOKEN:-}"
+    local ids="${TG_ADMIN_IDS:-}"
+    if [[ -z "$token" ]]; then
+        info "未提供 Telegram Bot Token，跳过 tgbot。以后可运行: $0 --setup-tgbot"
+        return 0
+    fi
     local py; py="$(command -v python3 || echo /usr/bin/python3)"
     info "Installing Telegram control bot..."
     mkdir -p "${BASE_DIR}/bin"

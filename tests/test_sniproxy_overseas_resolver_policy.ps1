@@ -25,10 +25,15 @@ if (-not $mainInstallMatch.Success) {
 
 $mainInstall = $mainInstallMatch.Value
 $configureIndex = $mainInstall.IndexOf("configure_dns_upstreams")
-$installSniproxyIndex = $mainInstall.IndexOf("install_sniproxy")
+$servicesIndex = $mainInstall.IndexOf('run_install_step "部署代理与 DNS 服务"')
 
-if ($configureIndex -lt 0 -or $installSniproxyIndex -lt 0 -or $configureIndex -gt $installSniproxyIndex) {
+if ($configureIndex -lt 0 -or $servicesIndex -lt 0 -or $configureIndex -gt $servicesIndex) {
     throw "configure_dns_upstreams must run before install_sniproxy so sniproxy resolver uses custom remote DNS"
+}
+
+$servicesStageMatch = [regex]::Match($install, '(?s)install_stage_services\(\) \{.*?\n\}')
+if (-not $servicesStageMatch.Success -or -not $servicesStageMatch.Value.Contains("install_sniproxy")) {
+    throw "install_stage_services must install sniproxy"
 }
 
 Assert-Contains $sniproxy 'resolver {' 'resolver stanza'

@@ -16,7 +16,43 @@ warn()  { printf '%b!%b %s\n' "${YELLOW:-}" "${NC:-}" "$*"; }
 
 err()   { printf '%b✗%b %s\n' "${RED:-}" "${NC:-}" "$*" >&2; }
 
-step()  { printf '\n%b==>%b %s\n' "${GREEN:-}" "${NC:-}" "$*"; }
+init_install_log() {
+    INSTALL_LOG="${INSTALL_LOG:-/var/log/5gpn-install.log}"
+    mkdir -p "$(dirname "$INSTALL_LOG")"
+    : > "$INSTALL_LOG"
+    chmod 0600 "$INSTALL_LOG"
+    printf '[%s] 5GPN-X installation started\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$INSTALL_LOG"
+}
+
+run_install_step() {
+    local label="$1" rc last_error had_errexit=0
+    shift
+    if [[ -t 1 ]]; then
+        printf '  ... %s' "$label"
+    fi
+    [[ $- == *e* ]] && had_errexit=1
+    set +e
+    (set -e; "$@") >>"$INSTALL_LOG" 2>&1
+    rc=$?
+    [[ "$had_errexit" -eq 0 ]] || set -e
+    if [[ "$rc" -eq 0 ]]; then
+        if [[ -t 1 ]]; then
+            printf '\r\033[2K'
+        fi
+        printf '  %b✓%b %s\n' "${GREEN:-}" "${NC:-}" "$label"
+        return 0
+    fi
+    if [[ -t 1 ]]; then
+        printf '\r\033[2K'
+    fi
+    printf '  %b✗%b %s\n' "${RED:-}" "${NC:-}" "$label" >&2
+    last_error="$(tail -n 80 "$INSTALL_LOG" 2>/dev/null | \
+        sed $'s/\033\\[[0-9;]*m//g' | \
+        grep -Ei '(error|failed|failure|cannot|missing|invalid|失败|错误|无法|不存在)' | tail -n 1 || true)"
+    [[ -n "$last_error" ]] && printf '      %s\n' "$last_error" >&2
+    printf '      详细日志: %s\n' "$INSTALL_LOG" >&2
+    return "$rc"
+}
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -73,6 +109,19 @@ detect_memory_profile() {
         MAKE_JOBS="$(nproc 2>/dev/null || echo 2)"
         PACKET_CACHE_SIZE=500000
         info "Standard memory mode (RAM: ${MEM_TOTAL_MB}MB)."
+    fi
+}
+
+collect_swap_preferences() {
+    [[ "${LOWMEM:-0}" == "1" ]] || return 0
+    [[ "$(wc -l < /proc/swaps 2>/dev/null || echo 1)" -le 1 ]] || return 0
+    [[ ! -e /swapfile ]] || return 0
+    if [[ -z "${SWAP_ENABLE:-}" && -t 0 ]]; then
+        read -r -p "检测到低内存且没有 swap，创建 swap？[y/N]: " SWAP_ENABLE || true
+    fi
+    if [[ "${SWAP_ENABLE^^}" =~ ^(Y|YES)$ && -z "${SWAP_SIZE:-}" && -t 0 ]]; then
+        read -r -p "Swap 大小 [1G]: " SWAP_SIZE || true
+        SWAP_SIZE="${SWAP_SIZE:-1G}"
     fi
 }
 
@@ -353,4 +402,3 @@ wait_for_port53_free() {
     done
     [[ -z "$(port53_pids)" ]]
 }
-

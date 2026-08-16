@@ -6,14 +6,10 @@
 
 init_rules() {
     info "Initializing GFWList and ChinaList..."
-    local rules_log
-    rules_log="$(mktemp /tmp/5gpn-rules.XXXXXX.log)"
-    if /usr/local/bin/update-mosdns-rules.sh >"$rules_log" 2>&1; then
-        rm -f "$rules_log"
+    if /usr/local/bin/update-mosdns-rules.sh; then
         ok "Routing rules initialized"
     else
-        warn "Rule update failed; the previous rules remain active. Log: $rules_log"
-        tail -n 10 "$rules_log" | sed 's/^/  /' >&2 || true
+        warn "Rule update failed; the previous rules remain active."
     fi
 }
 

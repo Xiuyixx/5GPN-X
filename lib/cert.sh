@@ -86,18 +86,22 @@ generate_domain() {
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
 }
 
-verify_domain_dns() {
-    info "域名: $DOMAIN（需解析 A 记录 -> $PUBLIC_IP）"
+collect_domain_dns_confirmation() {
+    info "请确认 A 记录: $DOMAIN -> $PUBLIC_IP"
     if [[ -t 0 ]]; then
-        info "请在 DNS 服务商处添加 A 记录: ${DOMAIN%%.*} -> $PUBLIC_IP（TTL 尽量低）"
         local confirm=""
         read -r -p "完成后按 Enter 继续（或输入 'skip' 跳过验证）: " confirm
-        if [[ "$confirm" == "skip" ]]; then
-            warn "已跳过域名解析验证，请确保 A 记录已正确配置"
-            mkdir -p "$CONF_DIR"
-            echo "$DOMAIN" > "${CONF_DIR}/.domain"
-            return
-        fi
+        [[ "$confirm" == "skip" ]] && SKIP_DOMAIN_DNS_CHECK=1
+    fi
+}
+
+verify_domain_dns() {
+    info "域名: $DOMAIN（需解析 A 记录 -> $PUBLIC_IP）"
+    if [[ "${SKIP_DOMAIN_DNS_CHECK:-0}" == "1" ]]; then
+        warn "已跳过域名解析验证，请确保 A 记录已正确配置"
+        mkdir -p "$CONF_DIR"
+        echo "$DOMAIN" > "${CONF_DIR}/.domain"
+        return
     fi
     info "等待 DNS 解析生效（最多 120 秒）..."
     local waited=0 resolved=""
@@ -147,6 +151,7 @@ install_cert() {
         local out retry_out rc
         if out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
         CERTBOT_LAST_OUTPUT="$out"
+        [[ -z "${INSTALL_LOG:-}" ]] || printf '%s\n' "$out" >> "$INSTALL_LOG"
         if [[ $rc -eq 0 ]]; then
             return 0
         fi
@@ -157,6 +162,7 @@ install_cert() {
             info "Retrying certificate request..."
             if retry_out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
             CERTBOT_LAST_OUTPUT="$retry_out"
+            [[ -z "${INSTALL_LOG:-}" ]] || printf '%s\n' "$retry_out" >> "$INSTALL_LOG"
             return $rc
         fi
         return 1
