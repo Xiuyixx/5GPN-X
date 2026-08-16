@@ -1137,7 +1137,7 @@ def op_dot_status():
                   _read_file("/etc/mosdns/.overseas_dns") or "?")
     local_dns = (_read_file("/etc/mosdns/.local_dns") or "?")
     lines = [
-        "🔐 <b>DoT 管理</b>",
+        "🛠️ <b>5GPN 管理</b>",
         "当前域名：<code>%s</code>" % html.escape(domain),
     ]
     lines.extend([
@@ -1546,9 +1546,7 @@ def main_menu():
         [{"text": "📊 状态", "callback_data": "act:status"},
          {"text": "🌐 出口管理", "callback_data": "menu:exits"}],
         [{"text": "📑 分流管理", "callback_data": "menu:rules"},
-         {"text": "🔐 DoT 管理", "callback_data": "menu:dot"}],
-        [{"text": "♻️ 重启服务", "callback_data": "act:restart"},
-         {"text": "📜 日志", "callback_data": "menu:logs"}],
+         {"text": "🛠️ 5GPN 管理", "callback_data": "menu:dot"}],
         [{"text": "📱 iOS 二维码", "callback_data": "act:ios"}],
     ]
 
@@ -1676,13 +1674,15 @@ def dot_menu():
         [{"text": "🌍 更改国际 DNS", "callback_data": "dot:dns_remote"}],
         [{"text": "🇨🇳 更改国内 DNS", "callback_data": "dot:dns_local"}],
         [{"text": "🔄 续期证书", "callback_data": "act:renew"}],
+        [{"text": "♻️ 重启服务", "callback_data": "act:restart"},
+         {"text": "📜 日志", "callback_data": "menu:logs"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
 
 
 def services_menu(prefix):
     rows = [[{"text": s, "callback_data": "%s:%s" % (prefix, s)}] for s in SERVICES]
-    rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
+    rows.append([{"text": "« 返回", "callback_data": "menu:dot"}])
     return rows
 
 
@@ -2094,10 +2094,10 @@ def handle_callback(cb):
         edit_async(cb, op_update_rules, back_kb("menu:rules"))
     elif data == "act:renew":
         edit(cb, "⏳ 正在续期证书，请稍候…")
-        edit_async(cb, op_renew_cert, back_kb("menu:main"))
+        edit_async(cb, op_renew_cert, back_kb("menu:dot"))
     elif data == "act:restart":
         edit(cb, "⏳ 正在重启服务…")
-        edit_async(cb, op_restart_services, back_kb("menu:main"))
+        edit_async(cb, op_restart_services, back_kb("menu:dot"))
     elif data == "rules:enable":
         edit(cb, "⏳ 正在启用智能分流…")
         edit_async(cb, lambda: op_set_exit("smart"), back_kb("menu:rules"))
