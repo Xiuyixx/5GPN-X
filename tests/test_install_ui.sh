@@ -41,7 +41,7 @@ done
 [[ "$cert_body" != *'echo "  请输入你自己的域名"'* ]] || fail "legacy domain-entry banner must stay removed"
 # shellcheck disable=SC2016 # Match the literal variable reference in dns.sh.
 [[ "$dns_body" == *'"${PROMPT_DNS:-0}" == "1"'* ]] || fail "DNS prompts must be opt-in during installation"
-[[ "$services_body" == *'read -r -s -p "Telegram Bot Token'* ]] || fail "Telegram token input must stay hidden"
+[[ "$services_body" == *'read -r -p "Telegram Bot Token'* ]] || fail "Telegram token input must remain visible"
 
 # shellcheck disable=SC1091 # Source path is resolved dynamically from the test location.
 . "${root}/lib/common.sh"

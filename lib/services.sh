@@ -517,8 +517,7 @@ collect_tgbot_settings() {
     local token="${TG_BOT_TOKEN:-}"
     local ids="${TG_ADMIN_IDS:-}"
     if [[ -z "$token" && -t 0 ]]; then
-        read -r -s -p "Telegram Bot Token（留空跳过）: " token
-        echo ""
+        read -r -p "Telegram Bot Token（留空跳过）: " token
     fi
     if [[ -z "$token" ]]; then
         TG_BOT_TOKEN=""
