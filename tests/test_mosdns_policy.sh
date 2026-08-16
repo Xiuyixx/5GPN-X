@@ -42,9 +42,12 @@ has "$template" 'secondary: local_overseas_fallback' "China DNS overseas fallbac
 has "$template" 'threshold: 150' "China DNS UDP->TCP threshold must be 150ms"
 has "$template" '22.22.22.22' "overseas fallback must include 22.22.22.22"
 
-has "$template" 'type: udp_server' "UDP/53 listener is missing"
-[[ "$(grep -c 'type: tcp_server' "${root}/lib/mosdns.yaml.template")" -eq 2 ]] \
-    || fail "TCP/53 and DoT/853 listeners must both be configured"
+[[ "$template" != *'listen: "0.0.0.0:53"'* ]] \
+    || fail "mosdns must not bind plain DNS port 53"
+[[ "$template" != *'type: udp_server'* ]] \
+    || fail "mosdns must expose DoT only, without a UDP/53 listener"
+[[ "$(grep -c 'type: tcp_server' "${root}/lib/mosdns.yaml.template")" -eq 1 ]] \
+    || fail "only the DoT/853 TCP listener must be configured"
 has "$template" 'cert: /etc/mosdns/certs/fullchain.pem' "DoT certificate is missing"
 
 has "$rules" 'mode == "primary"' "upstream renderer must split primary and fallback servers"

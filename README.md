@@ -20,7 +20,7 @@
 
 ## 主要功能
 
-- DNS + DoT：客户端通过 TCP/UDP 53（仅 `172.22.0.0/16`）或 DoT 853（所有来源）接入；来源 IP 按段区分解析策略，海外 DNS 池 `1.1.1.1`、`8.8.8.8`、`9.9.9.9`，ChinaList 查询携带 ECS `139.226.48.0/24`，全局不返回 AAAA。
+- 加密 DNS：客户端统一通过 DoT 853 接入；mosdns 不监听本机 53，因此不会与 `systemd-resolved` 冲突。来源 IP 按段区分解析策略，海外 DNS 池 `1.1.1.1`、`8.8.8.8`、`9.9.9.9`，ChinaList 查询携带 ECS `139.226.48.0/24`，全局不返回 AAAA。
 - iOS WhatsApp Patch：wa-shim 监听 TCP 443，仅分流客户端网段内 `ED`/`WA` 开头的无 SNI Noise 连接，其余 fail-open 交给 sniproxy。
 - 智能分流：mihomo `smart` 出口按域名 / IP / GEOSITE / GEOIP / RULE-SET 分流，远程规则集自动更新。
 - Telegram Bot：状态、出口管理、分流规则、DNS/DoT 设置、日志、iOS 二维码。
@@ -185,7 +185,6 @@ tests/            # 策略测试
 
 | 端口 | 协议 | 范围 | 用途 |
 | --- | --- | --- | --- |
-| 53 | TCP/UDP | `172.22.0.0/16` | DNS |
 | 80 | TCP | 私网（ACME 时临时公网） | HTTP 透明代理 / HTTP-01 |
 | 443 | TCP | `172.22.0.0/16` | wa-shim（无 SNI / HTTPS fail-open 到 sniproxy 回环 8443） |
 | 443 | UDP | `172.22.0.0/16` | QUIC 透明代理 |

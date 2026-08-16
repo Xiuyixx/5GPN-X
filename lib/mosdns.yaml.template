@@ -167,18 +167,6 @@ __LOCAL_SECONDARY_UPSTREAMS__
         exec: goto private_client
       - exec: goto public_client
 
-  - tag: udp_53
-    type: udp_server
-    args:
-      entry: main_sequence
-      listen: "0.0.0.0:53"
-
-  - tag: tcp_53
-    type: tcp_server
-    args:
-      entry: main_sequence
-      listen: "0.0.0.0:53"
-
   - tag: dot_853
     type: tcp_server
     args:

@@ -18,13 +18,25 @@ function Assert-Contains {
     }
 }
 
+function Assert-NotContains {
+    param(
+        [string]$Haystack,
+        [string]$Needle,
+        [string]$Description
+    )
+
+    if ($Haystack.Contains($Needle)) {
+        throw "Unexpected reverse proxy firewall marker: $Description ($Needle)"
+    }
+}
+
 Assert-Contains $install 'ip saddr 172.22.0.0/16 tcp dport { 80, 443 } accept' 'nft TCP reverse proxy private allow'
 Assert-Contains $install 'ip saddr 172.22.0.0/16 udp dport 443 accept' 'nft UDP reverse proxy private allow'
 Assert-Contains $install 'tcp dport 853 meter dns_rate_dot' 'nft DoT per-IP QPS rate limit'
-Assert-Contains $install 'meter dns_rate_tcp53' 'nft DNS TCP per-IP QPS rate limit'
-Assert-Contains $install 'meter dns_rate_udp53' 'nft DNS UDP per-IP QPS rate limit'
-Assert-Contains $install 'iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 53,80,443 -j ACCEPT' 'iptables TCP reverse proxy + DNS private allow'
-Assert-Contains $install 'iptables -A INPUT -s 172.22.0.0/16 -p udp -m multiport --dports 53,443 -j ACCEPT' 'iptables UDP DNS + reverse proxy private allow'
+Assert-NotContains $install 'meter dns_rate_tcp53' 'obsolete nft DNS TCP/53 rate limit'
+Assert-NotContains $install 'meter dns_rate_udp53' 'obsolete nft DNS UDP/53 rate limit'
+Assert-Contains $install 'iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT' 'iptables TCP reverse proxy private allow'
+Assert-Contains $install 'iptables -A INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT' 'iptables UDP reverse proxy private allow'
 Assert-Contains $install 'hashlimit-name dns_dot' 'iptables DoT per-IP QPS rate limit'
 Assert-Contains $install 'iptables -F INPUT' 'iptables fallback flushes stale public reverse proxy rules'
 Assert-Contains $install '--comment 5gpn-cert-http' 'temporary HTTP rule is tagged'

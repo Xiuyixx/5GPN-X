@@ -271,8 +271,8 @@ firewall_preserve_hints() {
     info "FIREWALL_MODE=preserve: leaving the existing host firewall untouched."
     info "Make sure these inbound ports are open (SSH detected on: ${ssh_ports}):"
     info "  TCP ${ssh_ports} (SSH), 853 (DoT), 8111 (iOS profile)"
-    info "  From 172.22.0.0/16 only: TCP/UDP 53 (DNS), TCP 80/443 and UDP 443 (reverse proxy)"
-    info "  Recommended: per-IP rate limit 10000 qps on DNS/DoT ports"
+    info "  From 172.22.0.0/16 only: TCP 80/443 and UDP 443 (reverse proxy)"
+    info "  Recommended: per-IP rate limit 10000 qps on DoT 853"
     info "  TCP 80 must be reachable while Let's Encrypt issues/renews the cert."
 }
 firewall_auto_allow() {
@@ -283,8 +283,6 @@ firewall_auto_allow() {
         info "FIREWALL_MODE=auto: adding allow rules to the active UFW profile..."
         for p in ${tcp_list//,/ }; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
         for net in ${client_nets}; do
-            ufw allow from "${net}" to any port 53 proto tcp >/dev/null 2>&1 || true
-            ufw allow from "${net}" to any port 53 proto udp >/dev/null 2>&1 || true
             ufw allow from "${net}" to any port 80,443 proto tcp >/dev/null 2>&1 || true
             ufw allow from "${net}" to any port 443 proto udp >/dev/null 2>&1 || true
         done
@@ -294,8 +292,6 @@ firewall_auto_allow() {
         info "FIREWALL_MODE=auto: adding ports to the running firewalld zone..."
         for p in ${tcp_list//,/ }; do firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true; done
         for net in ${client_nets}; do
-            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="53" protocol="tcp" accept' >/dev/null 2>&1 || true
-            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="53" protocol="udp" accept' >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="80" protocol="tcp" accept' >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="443" protocol="tcp" accept' >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="'"${net}"'" port port="443" protocol="udp" accept' >/dev/null 2>&1 || true
@@ -328,7 +324,7 @@ PGW_AUTO_ALLOW_UNIT_DEFAULT="/etc/systemd/system/5gpn-firewall-allow.service"
 write_auto_allow_persistence() {
     # auto mode adds rules to the *running* firewall, which is lost on reboot.
     # Persist an idempotent replay script + a oneshot unit ordered after the
-    # host firewall services so 53/853/8111 and the client nets stay open.
+    # host firewall services so 853/8111 and the client nets stay open.
     local ssh_ports="$1" client_nets="$2"
     local script="${PGW_AUTO_ALLOW_SCRIPT:-${PGW_AUTO_ALLOW_SCRIPT_DEFAULT}}"
     local unit="${PGW_AUTO_ALLOW_UNIT:-${PGW_AUTO_ALLOW_UNIT_DEFAULT}}"
@@ -347,10 +343,6 @@ if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null
             nft insert rule inet filter input tcp dport "$p" accept comment '"5gpn-auto"' 2>/dev/null || true
     done
     for net in ${client_nets}; do
-        printf '%s' "$have" | grep -q "${net}.*dport 53" || \
-            nft insert rule inet filter input ip saddr "${net}" tcp dport 53 accept comment '"5gpn-auto"' 2>/dev/null || true
-        printf '%s' "$have" | grep -q "${net}.*udp.*53" || \
-            nft insert rule inet filter input ip saddr "${net}" udp dport 53 accept comment '"5gpn-auto"' 2>/dev/null || true
         printf '%s' "$have" | grep -q "${net} tcp" || \
             nft insert rule inet filter input ip saddr "${net}" tcp dport '{ 80, 443 }' accept comment '"5gpn-auto"' 2>/dev/null || true
         printf '%s' "$have" | grep -q "${net} udp" || \
@@ -362,10 +354,6 @@ elif command -v iptables >/dev/null 2>&1; then
             iptables -I INPUT -p tcp --dport "$p" -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
     done
     for net in ${client_nets}; do
-        iptables -C INPUT -s "${net}" -p tcp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s "${net}" -p tcp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
-        iptables -C INPUT -s "${net}" -p udp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
-            iptables -I INPUT -s "${net}" -p udp --dport 53 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
         iptables -C INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
             iptables -I INPUT -s "${net}" -p tcp -m multiport --dports 80,443 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || true
         iptables -C INPUT -s "${net}" -p udp --dport 443 -m comment --comment 5gpn-auto -j ACCEPT 2>/dev/null || \
@@ -422,11 +410,6 @@ table inet filter {
         tcp dport 853 accept
         ip saddr 172.22.0.0/16 tcp dport { 80, 443 } accept
         ip saddr 172.22.0.0/16 udp dport 443 accept
-        # DNS 53 — source-restricted + per-IP QPS 10000 then accept.
-        ip saddr 172.22.0.0/16 tcp dport 53 meter dns_rate_tcp53 { ip saddr limit rate over 10000/second } drop
-        ip saddr 172.22.0.0/16 udp dport 53 meter dns_rate_udp53 { ip saddr limit rate over 10000/second } drop
-        ip saddr 172.22.0.0/16 tcp dport 53 accept
-        ip saddr 172.22.0.0/16 udp dport 53 accept
         # ICMP for basic network health
         ip protocol icmp accept
         ip6 nexthdr icmpv6 accept
@@ -468,11 +451,8 @@ EOF
         # DoT 853 — per-IP QPS 10000 then accept.
         iptables -A INPUT -p tcp --dport 853 -m hashlimit --hashlimit-above 10000/sec --hashlimit-burst 10000 --hashlimit-mode srcip --hashlimit-name dns_dot -j DROP
         iptables -A INPUT -p tcp --dport 853 -j ACCEPT
-        # DNS 53 — source-restricted + per-IP QPS 10000.
-        iptables -A INPUT -s 172.22.0.0/16 -p tcp --dport 53 -m hashlimit --hashlimit-above 10000/sec --hashlimit-burst 10000 --hashlimit-mode srcip --hashlimit-name dns_tcp53 -j DROP
-        iptables -A INPUT -s 172.22.0.0/16 -p udp --dport 53 -m hashlimit --hashlimit-above 10000/sec --hashlimit-burst 10000 --hashlimit-mode srcip --hashlimit-name dns_udp53 -j DROP
-        iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 53,80,443 -j ACCEPT
-        iptables -A INPUT -s 172.22.0.0/16 -p udp -m multiport --dports 53,443 -j ACCEPT
+        iptables -A INPUT -s 172.22.0.0/16 -p tcp -m multiport --dports 80,443 -j ACCEPT
+        iptables -A INPUT -s 172.22.0.0/16 -p udp --dport 443 -j ACCEPT
         iptables -A INPUT -p icmp -j ACCEPT
         iptables -P FORWARD ACCEPT
         iptables -P OUTPUT ACCEPT

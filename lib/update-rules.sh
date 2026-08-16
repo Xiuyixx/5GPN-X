@@ -223,8 +223,7 @@ PY
         local validate_conf validate_log rc=0
         validate_conf=$(mktemp "${BASE_DIR}/config.validate.XXXXXX.yaml")
         validate_log=$(mktemp "${BASE_DIR}/config.validate.XXXXXX.log")
-        sed -e 's/"0.0.0.0:53"/"127.0.0.1:0"/g' \
-            -e 's/"0.0.0.0:853"/"127.0.0.1:0"/g' "$MOSDNS_CONF.tmp" > "$validate_conf"
+        sed -e 's/"0.0.0.0:853"/"127.0.0.1:0"/g' "$MOSDNS_CONF.tmp" > "$validate_conf"
         timeout 2 mosdns start -c "$validate_conf" > "$validate_log" 2>&1 || rc=$?
         if [[ $rc -ne 0 && $rc -ne 124 ]]; then
             cat "$validate_log" >&2
