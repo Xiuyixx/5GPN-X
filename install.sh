@@ -36,8 +36,10 @@ DEFAULT_LOCAL_DNS=("101.226.4.6" "218.30.118.6" "180.76.76.76" "119.29.29.29")
 bootstrap_err() { printf 'Error: %s\n' "$*" >&2; }
 
 bootstrap_from_repo_if_needed() {
+    # install.sh itself is always present (it is the running script, and the
+    # installed CLI is copied to ${BASE_DIR}/bin/5gpn-ctl). Only the sourced
+    # lib/* payload can be missing, so validate those next to this script.
     local required=(
-        install.sh
         lib/common.sh lib/dns.sh lib/cert.sh lib/services.sh
         lib/exits.sh lib/rules.sh lib/uninstall.sh
         lib/renew-hook.sh lib/sniproxy.conf lib/quic-proxy.go

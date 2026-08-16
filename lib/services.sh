@@ -534,6 +534,34 @@ collect_tgbot_settings() {
     TG_BOT_SETTINGS_COLLECTED=1
 }
 
+install_ctl_entrypoint() {
+    # The modular refactor split install.sh into lib/*.sh. The installed
+    # `5gpn-ctl` re-runs install.sh for subcommands (--set-exit, --del-exit,
+    # --check-exits, ...), so it must find every module next to itself; otherwise
+    # bootstrap_from_repo_if_needed falls back to `git clone`, which fails on
+    # offline hosts and breaks all runtime management. Ship the entrypoint and
+    # its libraries together under ${BASE_DIR}/bin so the CLI stays self-contained.
+    local ctl_dir="${BASE_DIR}/bin"
+    local ctl_lib="${ctl_dir}/lib"
+    local libs=(
+        common.sh dns.sh cert.sh services.sh exits.sh rules.sh uninstall.sh
+        renew-hook.sh sniproxy.conf quic-proxy.go mosdns.yaml.template
+        update-rules.sh ios-http.py tgbot.py wa-shim.py rules-import.py
+        mihomo-exit-config.py mihomo-router-config.py rules-default.conf
+        host-setup.sh
+    )
+    mkdir -p "${ctl_lib}"
+    local f
+    for f in "${libs[@]}"; do
+        if [[ ! -f "${LIB_DIR}/${f}" ]]; then
+            err "lib/${f} not found in ${LIB_DIR}; cannot build a self-contained 5gpn-ctl"
+            return 1
+        fi
+        install -m 0644 "${LIB_DIR}/${f}" "${ctl_lib}/${f}"
+    done
+    install -m 0755 "${SCRIPT_PATH}" "${ctl_dir}/5gpn-ctl"
+}
+
 setup_tgbot() {
     [[ "${TG_BOT_SETTINGS_COLLECTED:-0}" == "1" ]] || collect_tgbot_settings
     local token="${TG_BOT_TOKEN:-}"
@@ -550,7 +578,7 @@ setup_tgbot() {
         return 1
     fi
     install -m 0755 "${LIB_DIR}/tgbot.py" "${BASE_DIR}/bin/tgbot.py"
-    install -m 0755 "${SCRIPT_PATH}" "${BASE_DIR}/bin/5gpn-ctl"
+    install_ctl_entrypoint
     mkdir -p "${CONF_DIR}"
     cat > "${CONF_DIR}/tgbot.env" <<EOF
 TG_BOT_TOKEN=${token}
