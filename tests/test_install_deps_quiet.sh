@@ -60,4 +60,19 @@ grep -q '^install -y -qq .*libpcre2-dev' "$MOCK_CALLS" || {
     exit 1
 }
 
+INSTALL_LOG="${tmp}/persistent-install.log"
+if ! persistent_output="$(install_deps 2>&1)"; then
+    echo "dependency installation must succeed when using the persistent install log" >&2
+    printf '%s\n' "$persistent_output" >&2
+    exit 1
+fi
+[[ "$persistent_output" != *'Setting up jq'* ]] || {
+    echo "persistent logging must not leak apt output to the terminal" >&2
+    exit 1
+}
+grep -q 'Setting up jq' "$INSTALL_LOG" || {
+    echo "persistent install log must retain apt output" >&2
+    exit 1
+}
+
 echo "quiet dependency installation OK"

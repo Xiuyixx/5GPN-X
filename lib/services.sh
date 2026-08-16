@@ -95,7 +95,10 @@ install_deps() {
         err "Please check the package-manager log: $pkg_log"
         exit 1
     fi
-    [[ "$package_install_ok" -eq 1 && "$temporary_pkg_log" -eq 1 ]] && rm -f "$pkg_log"
+    if [[ "$package_install_ok" -eq 1 && "$temporary_pkg_log" -eq 1 ]]; then
+        rm -f "$pkg_log"
+    fi
+    return 0
 }
 
 install_mosdns_binary() {

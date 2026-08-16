@@ -49,6 +49,9 @@ run_install_step() {
     last_error="$(tail -n 80 "$INSTALL_LOG" 2>/dev/null | \
         sed $'s/\033\\[[0-9;]*m//g' | \
         grep -Ei '(error|failed|failure|cannot|missing|invalid|失败|错误|无法|不存在)' | tail -n 1 || true)"
+    if [[ -z "$last_error" ]]; then
+        last_error="$(tail -n 1 "$INSTALL_LOG" 2>/dev/null | sed $'s/\033\\[[0-9;]*m//g' || true)"
+    fi
     [[ -n "$last_error" ]] && printf '      %s\n' "$last_error" >&2
     printf '      详细日志: %s\n' "$INSTALL_LOG" >&2
     return "$rc"
