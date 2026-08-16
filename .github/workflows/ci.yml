@@ -17,7 +17,7 @@ jobs:
       - name: Python compile + ruff
         run: |
           python3 -m py_compile lib/*.py
-          pipx run ruff check lib/ tests/
+          pipx run ruff==0.15.20 check lib/ tests/
 
   shell-python-tests:
     runs-on: ubuntu-latest
