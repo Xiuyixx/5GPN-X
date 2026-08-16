@@ -37,7 +37,7 @@ regen_smart() {
     [[ $count -gt 1 ]]
 }
 
-eval "$(awk '/^rename_exit\(\) \{/{copy=1} copy{if ($0 ~ /^set_exit\(\) \{$/) exit; print}' "${root}/install.sh")"
+eval "$(awk '/^rename_exit\(\) \{/{copy=1} copy{if ($0 ~ /^set_exit\(\) \{$/) exit; print}' "${root}/lib/exits.sh")"
 
 if (rename_exit old new); then
     echo "rename must fail when the first smart rebuild fails" >&2

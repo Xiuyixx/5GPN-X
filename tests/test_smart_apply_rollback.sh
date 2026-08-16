@@ -52,7 +52,7 @@ systemctl() {
     return 0
 }
 
-eval "$(awk '/^regen_smart\(\) \{/{copy=1} copy{if ($0 ~ /^set_rules\(\) \{$/) exit; print}' "${root}/install.sh")"
+eval "$(awk '/^regen_smart\(\) \{/{copy=1} copy{if ($0 ~ /^set_rules\(\) \{$/) exit; print}' "${root}/lib/rules.sh")"
 
 # A failed mihomo -t preflight must not touch the installed config or service.
 export FAIL_PREFLIGHT=1

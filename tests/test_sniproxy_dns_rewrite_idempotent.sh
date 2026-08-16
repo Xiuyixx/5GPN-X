@@ -33,14 +33,29 @@ EOF
 chmod +x "${tmp}/update-mosdns-rules.sh"
 
 script="${tmp}/install-wrapper.sh"
-# install.sh sources lib/host-setup.sh relative to its own directory.
-ln -s "${root}/lib" "${tmp}/lib"
-sed \
-  -e "s#/etc/sniproxy.conf#${tmp}/sniproxy.conf#g" \
-  -e "s#/etc/mosdns#${tmp}/etc/mosdns#g" \
-  -e "s#/opt/5gpn/etc#${tmp}/opt/etc#g" \
-  -e "s#/usr/local/bin/update-mosdns-rules.sh#${tmp}/update-mosdns-rules.sh#g" \
-  "${root}/install.sh" > "${script}"
+# install.sh sources lib/*.sh relative to its own directory. The DNS-mutating
+# functions now live in lib/dns.sh (and helpers in the other modules), so the
+# path-redirecting sed below must be applied to the modules too, not only to
+# install.sh. We therefore build a rewritten lib/ next to the wrapper instead of
+# symlinking the pristine repo lib/.
+mkdir -p "${tmp}/lib"
+sed_redirect() {
+  sed \
+    -e "s#/etc/sniproxy.conf#${tmp}/sniproxy.conf#g" \
+    -e "s#/etc/mosdns#${tmp}/etc/mosdns#g" \
+    -e "s#/opt/5gpn/etc#${tmp}/opt/etc#g" \
+    -e "s#/usr/local/bin/update-mosdns-rules.sh#${tmp}/update-mosdns-rules.sh#g" \
+    "$1"
+}
+for _m in "${root}"/lib/*; do
+  base="$(basename "${_m}")"
+  [[ -d "${_m}" ]] && continue
+  case "${base}" in
+    *.sh) sed_redirect "${_m}" > "${tmp}/lib/${base}" ;;
+    *)    cp "${_m}" "${tmp}/lib/${base}" ;;
+  esac
+done
+sed_redirect "${root}/install.sh" > "${script}"
 chmod +x "${script}"
 
 # G5PNX_BOOTSTRAPPED prevents the wrapper (which lives outside the repo and has

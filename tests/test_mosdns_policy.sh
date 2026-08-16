@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 template="$(cat "${root}/lib/mosdns.yaml.template")"
 rules="$(cat "${root}/lib/update-rules.sh")"
-install="$(cat "${root}/install.sh")"
+install="$(cat "${root}/install.sh" "${root}/lib/common.sh" "${root}/lib/dns.sh" "${root}/lib/cert.sh" "${root}/lib/services.sh" "${root}/lib/exits.sh" "${root}/lib/rules.sh" "${root}/lib/uninstall.sh")"
 
 fail() { echo "$1" >&2; exit 1; }
 has() { [[ "$1" == *"$2"* ]] || fail "$3"; }

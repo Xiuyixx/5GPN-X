@@ -4,7 +4,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
-install_body="$(cat "${install}")"
+install_body="$(cat "${install}" "${root}/lib/common.sh" "${root}/lib/dns.sh" "${root}/lib/cert.sh" "${root}/lib/services.sh" "${root}/lib/exits.sh" "${root}/lib/rules.sh" "${root}/lib/uninstall.sh")"
 
 if [[ ! -x "${install}" ]]; then
     echo "install.sh must be executable after cloning the repository." >&2

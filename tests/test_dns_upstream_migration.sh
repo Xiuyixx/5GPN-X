@@ -17,8 +17,8 @@ CONF_DIR="${tmp}/conf"
 MOSDNS_DIR="$CONF_DIR"
 mkdir -p "$CONF_DIR"
 
-eval "$(sed -n '/^normalize_dns_upstreams() {/,/^}/p' "$install")"
-eval "$(sed -n '/^configure_dns_upstreams() {/,/^}/p' "$install")"
+eval "$(sed -n '/^normalize_dns_upstreams() {/,/^}/p' "${root}/lib/dns.sh")"
+eval "$(sed -n '/^configure_dns_upstreams() {/,/^}/p' "${root}/lib/dns.sh")"
 
 # 1. Empty config -> use defaults (4 China servers, 3 overseas).
 unset REMOTE_DNS LOCAL_DNS DNS_UPSTREAMS OVERSEAS_DNS PRIVATE_OVERSEAS_DNS SNIPROXY_DNS

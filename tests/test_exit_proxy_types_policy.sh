@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install="${root}/install.sh"
 gen="${root}/lib/mihomo-exit-config.py"
-install_body="$(cat "${install}")"
+install_body="$(cat "${install}" "${root}/lib/common.sh" "${root}/lib/dns.sh" "${root}/lib/cert.sh" "${root}/lib/services.sh" "${root}/lib/exits.sh" "${root}/lib/rules.sh" "${root}/lib/uninstall.sh")"
 
 fail() { echo "$1" >&2; exit 1; }
 
@@ -42,7 +42,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 WG_DIR="${tmpdir}/wg"
 EXITS_DIR="${tmpdir}/exits"
 mkdir -p "$WG_DIR" "$EXITS_DIR"
-eval "$(awk '/^exit_conf_path\(\)/{copy=1} copy{if ($0 ~ /^ensure_mihomo\(\)/) exit; print}' "${install}")"
+eval "$(awk '/^exit_conf_path\(\)/{copy=1} copy{if ($0 ~ /^ensure_mihomo\(\)/) exit; print}' "${root}/lib/exits.sh")"
 printf '{"tun":{"device":"pgw-%s"}}\n' "$name" > "${EXITS_DIR}/${name}.yaml"
 ensure_mihomo_exit_iface "$name"
 python3 - "$name" "${EXITS_DIR}/${name}.yaml" <<'PY'
