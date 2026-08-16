@@ -8,13 +8,15 @@
 # original single-file install.sh made obvious. Behaviour is unchanged.
 # shellcheck disable=SC2034
 
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
+info()  { printf '%b  %s%b\n' "${DIM:-}" "$*" "${NC:-}"; }
 
-ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
+ok()    { printf '%b✓%b %s\n' "${GREEN:-}" "${NC:-}" "$*"; }
 
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+warn()  { printf '%b!%b %s\n' "${YELLOW:-}" "${NC:-}" "$*"; }
 
-err()   { echo -e "${RED}[ERR]${NC}  $*" >&2; }
+err()   { printf '%b✗%b %s\n' "${RED:-}" "${NC:-}" "$*" >&2; }
+
+step()  { printf '\n%b==>%b %s\n' "${GREEN:-}" "${NC:-}" "$*"; }
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then

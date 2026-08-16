@@ -67,14 +67,7 @@ generate_domain() {
         err "No domain provided. Set the DOMAIN environment variable (e.g. DOMAIN=dns.example.com) for non-interactive installs."
         exit 1
     fi
-    echo ""
-    echo "=================================================="
-    echo "  请输入你自己的域名"
-    echo "=================================================="
-    echo "  示例: dns.example.com 或 example.com"
-    echo "  该域名需要你能管理其 DNS（添加一条 A 记录指向本机）"
-    echo "=================================================="
-    echo ""
+    info "请输入你能管理 DNS 的域名（例如 dns.example.com）"
     local input=""
     while true; do
         read -r -p "请输入域名: " input
@@ -94,23 +87,13 @@ generate_domain() {
 }
 
 verify_domain_dns() {
-    info "DNS 解析检查"
-    info "=================================================="
-    info "域名: $DOMAIN"
-    info "需要的 A 记录值: $PUBLIC_IP"
-    info "=================================================="
-    info ""
-    info "请在你自己的 DNS 服务商处添加（或确认已存在）一条 A 记录:"
-    info "   Host:  ${DOMAIN%%.*}  (若是裸域则填 @ 或留空)"
-    info "   Type:  A"
-    info "   Value: $PUBLIC_IP"
-    info "   TTL:   尽量低 (如 60-300)，便于快速生效"
-    info ""
+    info "域名: $DOMAIN（需解析 A 记录 -> $PUBLIC_IP）"
     if [[ -t 0 ]]; then
+        info "请在 DNS 服务商处添加 A 记录: ${DOMAIN%%.*} -> $PUBLIC_IP（TTL 尽量低）"
         local confirm=""
-        read -r -p "完成配置后按 Enter 继续（或输入 'skip' 跳过解析验证）: " confirm
+        read -r -p "完成后按 Enter 继续（或输入 'skip' 跳过验证）: " confirm
         if [[ "$confirm" == "skip" ]]; then
-            warn "跳过域名解析验证，请确保 A 记录已正确配置"
+            warn "已跳过域名解析验证，请确保 A 记录已正确配置"
             mkdir -p "$CONF_DIR"
             echo "$DOMAIN" > "${CONF_DIR}/.domain"
             return
@@ -169,8 +152,8 @@ install_cert() {
         fi
         if grep -q "AttributeError" <<<"$out"; then
             warn "Certbot compatibility error detected. Attempting to fix Python dependencies..."
-            pip3 install --upgrade --break-system-packages certbot josepy cryptography 2>/dev/null || \
-                pip3 install --upgrade certbot josepy cryptography 2>/dev/null || true
+            pip3 install --upgrade --break-system-packages certbot josepy cryptography >/dev/null 2>&1 || \
+                pip3 install --upgrade certbot josepy cryptography >/dev/null 2>&1 || true
             info "Retrying certificate request..."
             if retry_out="$("${cb_cmd[@]}" 2>&1)"; then rc=0; else rc=$?; fi
             CERTBOT_LAST_OUTPUT="$retry_out"
@@ -351,4 +334,3 @@ force_renew_cert() {
         systemctl start mosdns && ok "Certificate renewed and mosdns started"
     fi
 }
-

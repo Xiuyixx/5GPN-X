@@ -6,10 +6,6 @@
 # shellcheck disable=SC2034
 set -euo pipefail
 REPO_URL="https://github.com/Xiuyixx/5GPN-X.git"
-# The globals below are shared configuration consumed by the sourced lib/*.sh
-# modules. Per-file shellcheck cannot see that cross-module use (the original
-# single-file install.sh made it obvious), so SC2034 is suppressed here only.
-# shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "$0")"
 LIB_DIR="${SCRIPT_DIR}/lib"
@@ -37,6 +33,8 @@ MIHOMO_VERSION_DEFAULT="1.19.28"
 MOSDNS_VERSION_DEFAULT="5.3.4"
 DEFAULT_REMOTE_DNS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
 DEFAULT_LOCAL_DNS=("101.226.4.6" "218.30.118.6" "180.76.76.76" "119.29.29.29")
+bootstrap_err() { printf 'Error: %s\n' "$*" >&2; }
+
 bootstrap_from_repo_if_needed() {
     local required=(
         install.sh
@@ -62,19 +60,15 @@ bootstrap_from_repo_if_needed() {
         export G5PNX_BOOTSTRAPPED=1
         exec bash "$tmpdir/install.sh" "$@"
     fi
-    echo "[ERR]  无法自动获取完整源码树。请用 git clone 后再运行 install.sh。" >&2
+    bootstrap_err "无法自动获取完整源码树。请用 git clone 后再运行 install.sh。"
     exit 1
 }
 bootstrap_from_repo_if_needed "$@"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()   { echo -e "${RED}[ERR]${NC}  $*" >&2; }
 
 # ---------------------------------------------------------------------------
 # Modular library sourcing. install.sh stays the single entrypoint; feature
@@ -88,7 +82,7 @@ for _mod in common dns cert services exits rules uninstall; do
         # shellcheck source=/dev/null
         . "${_modf}"
     else
-        err "lib/${_mod}.sh not found next to this script; run from a full git clone or the documented installer."
+        bootstrap_err "lib/${_mod}.sh not found next to this script; run from a full git clone or the documented installer."
         exit 1
     fi
 done
@@ -100,9 +94,10 @@ if [[ -f "${LIB_DIR}/host-setup.sh" ]]; then
     # shellcheck source=lib/host-setup.sh
     . "${LIB_DIR}/host-setup.sh"
 else
-    err "lib/host-setup.sh not found next to this script; run from a full git clone or the documented installer."
+    bootstrap_err "lib/host-setup.sh not found next to this script; run from a full git clone or the documented installer."
     exit 1
 fi
+unset -f bootstrap_err
 
 usage() {
     cat <<EOF
@@ -190,68 +185,74 @@ EOF
 }
 
 main_install() {
+    step "检查运行环境"
     check_root
     detect_os
     detect_memory_profile
     ensure_swap
     get_public_ip
-    echo ""
-    echo "=========================================="
-    echo "  高性能反代系统一键部署"
-    echo "=========================================="
-    echo ""
+
+    step "安装系统依赖"
     install_deps
     check_port_53
+
+    step "配置域名、证书与 DNS"
     generate_domain
     verify_domain_dns
     ensure_mosdns_user
     install_cert
     configure_dns_upstreams
+
+    step "部署代理与 DNS 服务"
     install_sniproxy
     install_whatsapp_shim
     install_quic_proxy
     install_mosdns
+
+    step "配置分流与系统网络"
     init_rules
     system_tuning
     setup_firewall
     setup_exit_switching
+
+    step "生成客户端配置"
     generate_ios_profile
     apply_lowmem_go_limits
+
+    step "启动服务并完成自检"
     start_services
+
+    step "配置自动维护与管理"
     setup_schedules
     setup_tgbot
-    echo ""
-    echo "=========================================="
-    echo "         部署完成！"
-    echo "=========================================="
-    echo ""
-    echo "DoT 地址:  tls://${DOMAIN}:853"
-    echo "TCP 代理:  ${PUBLIC_IP}:80, ${PUBLIC_IP}:443 (sniproxy)"
-    echo "UDP 代理:  ${PUBLIC_IP}:443 (quic-proxy)"
-    echo "DNS 查询:  ${PUBLIC_IP}:53"
-    echo "iOS 描述文件: http://${DOMAIN}:${IOS_PROFILE_PORT}/ios-dot.mobileconfig"
-    echo ""
-    echo "客户端配置示例 (Android 私人 DNS):"
-    echo "  ${DOMAIN}"
-    echo "iOS 扫码安装:"
-    if [[ -f "${WWW_DIR}/ios-dot.qr.txt" ]]; then
-        cat "${WWW_DIR}/ios-dot.qr.txt"
-    fi
-    echo ""
-    echo "出口 (Exit): local (直出，当前服务器公网 IP)"
-    echo ""
-    echo "管理命令:"
-    echo "  $0 --status"
-    echo "  $0 --update-rules"
-    echo "  $0 --renew-cert"
-    echo "  $0 -ios"
-    echo "  $0 --list-exits"
-    echo "  $0 --add-exit <name> <wg.conf|proxy-uri>"
-    echo "  $0 --rename-exit <old> <new>"
-    echo "  $0 --set-exit <name|local|smart>"
-    echo "  $0 --setup-tgbot                 # 配置/启用 Telegram 控制 Bot"
-    echo "  $0 --uninstall"
-    echo "=========================================="
+
+    printf '\n%b%s%b\n\n' "$GREEN" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" "$NC"
+    cat <<EOF
+  安装完成
+
+  Android 私人 DNS
+    ${DOMAIN}
+
+  iPhone / iPad
+    http://${DOMAIN}:${IOS_PROFILE_PORT}/ios-dot.mobileconfig
+
+  服务入口
+    DoT          tls://${DOMAIN}:853
+    TCP 代理     ${PUBLIC_IP}:80 / ${PUBLIC_IP}:443
+    UDP 代理     ${PUBLIC_IP}:443
+    DNS 查询     ${PUBLIC_IP}:53
+    默认出口     local（本机直出）
+
+  常用命令
+    $0 --status              查看服务状态
+    $0 --list-exits          查看出口
+    $0 --set-exit <name>     切换出口
+    $0 --update-rules        更新分流规则
+    $0 --renew-cert          续期证书
+    $0 --setup-tgbot         配置 Telegram Bot
+    $0 --uninstall           卸载
+EOF
+    printf '\n%b%s%b\n\n' "$GREEN" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" "$NC"
 }
 
 case "${1:-}" in

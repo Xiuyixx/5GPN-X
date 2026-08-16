@@ -81,8 +81,8 @@ install_deps() {
     if command -v certbot >/dev/null 2>&1; then
         if ! certbot --version >/dev/null 2>&1; then
             warn "Certbot has compatibility issues with the current Python version. Attempting to fix..."
-            pip3 install --upgrade --break-system-packages certbot josepy cryptography 2>/dev/null || \
-                pip3 install --upgrade certbot josepy cryptography 2>/dev/null || true
+            pip3 install --upgrade --break-system-packages certbot josepy cryptography >>"$pkg_log" 2>&1 || \
+                pip3 install --upgrade certbot josepy cryptography >>"$pkg_log" 2>&1 || true
         fi
     fi
     if ! command -v certbot >/dev/null 2>&1; then
@@ -108,7 +108,7 @@ install_mosdns_binary() {
     asset="mosdns-linux-${arch}.zip"
     url="https://github.com/IrineSistiana/mosdns/releases/download/v${version}/${asset}"
     tmpdir=$(mktemp -d /tmp/mosdns.XXXXXX)
-    curl -fL --retry 3 --connect-timeout 15 "$url" -o "${tmpdir}/${asset}"
+    curl -fsSL --retry 3 --connect-timeout 15 "$url" -o "${tmpdir}/${asset}"
     python3 - "${tmpdir}/${asset}" "$tmpdir" <<'PYEOF'
 import sys
 import zipfile
@@ -339,7 +339,7 @@ EOF
         /etc/letsencrypt/renewal-hooks/deploy/99-reload-dnsdist.sh \
         "${BASE_DIR}/bin/china-dns-race-proxy"
     systemctl daemon-reload
-    systemctl enable mosdns
+    systemctl enable --quiet mosdns
     ok "mosdns configured"
 }
 
@@ -467,10 +467,10 @@ StandardError=journal
 User=root
 EOF
     systemctl daemon-reload
-    systemctl enable --now 5gpn-ios-profile.socket
+    systemctl enable --quiet --now 5gpn-ios-profile.socket
     echo "$profile_url" > "${WWW_DIR}/ios-profile-url.txt"
     if command -v qrencode >/dev/null 2>&1; then
-        qrencode -t ANSIUTF8 "$profile_url" | tee "${WWW_DIR}/ios-dot.qr.txt"
+        qrencode -t ANSIUTF8 "$profile_url" > "${WWW_DIR}/ios-dot.qr.txt"
     else
         warn "qrencode is not installed; QR code skipped. Profile URL: $profile_url"
     fi
@@ -545,7 +545,7 @@ User=root
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now 5gpn-tgbot.service
+    systemctl enable --quiet --now 5gpn-tgbot.service
     if [[ -z "$ids" ]]; then
         warn "尚未设置授权 ID。给 Bot 发送 /id 获取数字 ID，填入 ${CONF_DIR}/tgbot.env 的 TG_ADMIN_IDS，然后:"
         warn "  systemctl restart 5gpn-tgbot"
@@ -584,7 +584,7 @@ Type=oneshot
 ExecStart=/usr/local/bin/update-mosdns-rules.sh
 EOF
     systemctl daemon-reload
-    systemctl enable --now update-mosdns-rules.timer
+    systemctl enable --quiet --now update-mosdns-rules.timer
     install_certbot_firewall_hooks
     systemctl enable --now certbot.timer 2>/dev/null || true
     ok "Schedules configured (rules: weekly, cert: auto)"
