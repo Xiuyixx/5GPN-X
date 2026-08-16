@@ -5,6 +5,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install_body="$(cat "${root}/install.sh")"
 common_body="$(cat "${root}/lib/common.sh")"
 cert_body="$(cat "${root}/lib/cert.sh")"
+dns_body="$(cat "${root}/lib/dns.sh")"
+services_body="$(cat "${root}/lib/services.sh")"
 
 fail() {
     echo "$*" >&2
@@ -15,11 +17,8 @@ stages=(
     "检查运行环境"
     "安装系统依赖"
     "配置域名与 TLS 证书"
-    "部署代理与 DNS 服务"
-    "配置分流与系统网络"
-    "生成客户端配置"
-    "启动并检查服务"
-    "配置自动维护"
+    "部署网络服务"
+    "启动并完成配置"
 )
 
 for stage in "${stages[@]}"; do
@@ -29,14 +28,20 @@ done
 [[ "$install_body" == *"✓ 安装完成"* ]] || fail "missing concise completion summary"
 [[ "$install_body" != *"高性能反代系统一键部署"* ]] || fail "legacy install banner must stay removed"
 [[ "$install_body" != *"         部署完成！"* ]] || fail "legacy completion banner must stay removed"
+# shellcheck disable=SC2016 # Match the literal variable reference in install.sh.
+[[ "$install_body" == *'${BASE_DIR}/bin/5gpn-ctl --status'* ]] || fail "completion summary must use the stable management path"
 [[ "$install_body" != *"info()"* ]] || fail "install.sh must reuse the common logger"
 # shellcheck disable=SC2016 # Match the literal variable reference in install.sh.
 [[ "$install_body" != *'cat "${WWW_DIR}/ios-dot.qr.txt"'* ]] || fail "completion summary must not print a full terminal QR code"
 [[ "$common_body" == *"run_install_step()"* ]] || fail "common logger must provide the install runner"
 [[ "$common_body" == *'/var/log/5gpn-install.log'* ]] || fail "installer must keep a persistent detail log"
+[[ "$common_body" == *"collect_port53_confirmation()"* ]] || fail "port 53 confirmation must be separated from quiet execution"
 [[ "$cert_body" != *'info "=================================================="'* ]] || fail "verbose DNS separator must stay removed"
 [[ "$cert_body" != *'info "   TTL:'* ]] || fail "verbose DNS instruction block must stay removed"
 [[ "$cert_body" != *'echo "  请输入你自己的域名"'* ]] || fail "legacy domain-entry banner must stay removed"
+# shellcheck disable=SC2016 # Match the literal variable reference in dns.sh.
+[[ "$dns_body" == *'"${PROMPT_DNS:-0}" == "1"'* ]] || fail "DNS prompts must be opt-in during installation"
+[[ "$services_body" == *'read -r -s -p "Telegram Bot Token'* ]] || fail "Telegram token input must stay hidden"
 
 # shellcheck disable=SC1091 # Source path is resolved dynamically from the test location.
 . "${root}/lib/common.sh"

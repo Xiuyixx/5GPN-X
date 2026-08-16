@@ -58,7 +58,7 @@ generate_domain() {
             err "Invalid DOMAIN: '$DOMAIN'. Provide a fully-qualified domain like dns.example.com"
             exit 1
         fi
-        info "Using pre-configured domain: $DOMAIN"
+        [[ -z "${INSTALL_LOG:-}" ]] || info "Using pre-configured domain: $DOMAIN" >> "$INSTALL_LOG"
         mkdir -p "$CONF_DIR"
         echo "$DOMAIN" > "${CONF_DIR}/.domain"
         return
@@ -67,10 +67,9 @@ generate_domain() {
         err "No domain provided. Set the DOMAIN environment variable (e.g. DOMAIN=dns.example.com) for non-interactive installs."
         exit 1
     fi
-    info "请输入你能管理 DNS 的域名（例如 dns.example.com）"
     local input=""
     while true; do
-        read -r -p "请输入域名: " input
+        read -r -p "域名（如 dns.example.com）: " input
         input="${input## }"; input="${input%% }"
         input="${input#http://}"; input="${input#https://}"
         input="${input%/}"
@@ -81,17 +80,16 @@ generate_domain() {
         fi
         warn "无效域名，请输入形如 dns.example.com 的完整域名"
     done
-    info "Using domain: $DOMAIN"
+    [[ -z "${INSTALL_LOG:-}" ]] || info "Using domain: $DOMAIN" >> "$INSTALL_LOG"
     mkdir -p "$CONF_DIR"
     echo "$DOMAIN" > "${CONF_DIR}/.domain"
 }
 
 collect_domain_dns_confirmation() {
-    info "请确认 A 记录: $DOMAIN -> $PUBLIC_IP"
     if [[ -t 0 ]]; then
         local confirm=""
-        read -r -p "完成后按 Enter 继续（或输入 'skip' 跳过验证）: " confirm
-        [[ "$confirm" == "skip" ]] && SKIP_DOMAIN_DNS_CHECK=1
+        read -r -p "A 记录 $DOMAIN -> $PUBLIC_IP 已配置？[Enter=验证/s=跳过]: " confirm
+        [[ "$confirm" =~ ^([Ss]|skip)$ ]] && SKIP_DOMAIN_DNS_CHECK=1
     fi
 }
 

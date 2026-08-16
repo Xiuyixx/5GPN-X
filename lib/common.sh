@@ -287,6 +287,17 @@ EOF
     systemctl daemon-reload
 }
 
+collect_port53_confirmation() {
+    local confirm=""
+    [[ -n "$(port53_pids)" ]] || return 0
+    read -r -p "端口 53 被 $(port53_owner_summary) 占用，停止它？[Y/n]: " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        err "端口 53 必须空闲，安装已取消。"
+        return 1
+    fi
+    PORT53_CONFIRM="y"
+}
+
 check_port_53() {
     info "Checking port 53 availability..."
     local pid pids proc remaining
@@ -295,7 +306,7 @@ check_port_53() {
         pid=$(printf '%s\n' "$pids" | head -n1)
         proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
         warn "Port 53 is already in use by: $(port53_owner_summary)"
-        local confirm=""
+        local confirm="${PORT53_CONFIRM:-}"
         if [[ "$proc" == "dnsdist" || "$proc" == "mosdns" ]]; then
             info "Stopping the existing $proc service for DNS migration/update..."
         else

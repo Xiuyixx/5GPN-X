@@ -24,16 +24,21 @@ if (-not $mainInstallMatch.Success) {
 }
 
 $mainInstall = $mainInstallMatch.Value
-$configureIndex = $mainInstall.IndexOf("configure_dns_upstreams")
-$servicesIndex = $mainInstall.IndexOf('run_install_step "部署代理与 DNS 服务"')
+$certificateIndex = $mainInstall.IndexOf('run_install_step "配置域名与 TLS 证书"')
+$servicesIndex = $mainInstall.IndexOf('run_install_step "部署网络服务"')
 
-if ($configureIndex -lt 0 -or $servicesIndex -lt 0 -or $configureIndex -gt $servicesIndex) {
+if ($certificateIndex -lt 0 -or $servicesIndex -lt 0 -or $certificateIndex -gt $servicesIndex) {
     throw "configure_dns_upstreams must run before install_sniproxy so sniproxy resolver uses custom remote DNS"
 }
 
-$servicesStageMatch = [regex]::Match($install, '(?s)install_stage_services\(\) \{.*?\n\}')
+$certificateStageMatch = [regex]::Match($install, '(?s)install_stage_certificate\(\) \{.*?\n\}')
+if (-not $certificateStageMatch.Success -or -not $certificateStageMatch.Value.Contains("configure_dns_upstreams")) {
+    throw "install_stage_certificate must configure DNS before service deployment"
+}
+
+$servicesStageMatch = [regex]::Match($install, '(?s)install_stage_deploy\(\) \{.*?\n\}')
 if (-not $servicesStageMatch.Success -or -not $servicesStageMatch.Value.Contains("install_sniproxy")) {
-    throw "install_stage_services must install sniproxy"
+    throw "install_stage_deploy must install sniproxy"
 }
 
 Assert-Contains $sniproxy 'resolver {' 'resolver stanza'

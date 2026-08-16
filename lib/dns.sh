@@ -173,11 +173,10 @@ configure_dns_upstreams() {
     if [[ -z "$local_selected" ]]; then
         local_selected=$(cat "${mosdns_dir}/.local_dns" 2>/dev/null || cat /etc/dnsdist/.local_dns 2>/dev/null || true)
     fi
-    if [[ -z "$remote_selected" && -t 0 ]]; then
-        echo ""
+    if [[ -z "$remote_selected" && -t 0 && "${PROMPT_DNS:-0}" == "1" ]]; then
         read -r -p "国际 DNS remote [1.1.1.1,8.8.8.8,9.9.9.9]: " remote_selected
     fi
-    if [[ -z "$local_selected" && -t 0 ]]; then
+    if [[ -z "$local_selected" && -t 0 && "${PROMPT_DNS:-0}" == "1" ]]; then
         read -r -p "国内 DNS local [101.226.4.6,218.30.118.6,180.76.76.76,119.29.29.29]: " local_selected
     fi
     [[ -n "$remote_selected" ]] || remote_selected="${DEFAULT_REMOTE_DNS[*]}"
@@ -191,7 +190,11 @@ configure_dns_upstreams() {
     echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_private_dns"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.overseas_public_dns"
     echo "$REMOTE_DNS" > "${CONF_DIR}/.sniproxy_dns"
-    info "DNS: remote=$REMOTE_DNS local=$LOCAL_DNS"
+    if [[ -n "${INSTALL_LOG:-}" ]]; then
+        info "DNS: remote=$REMOTE_DNS local=$LOCAL_DNS" >> "$INSTALL_LOG"
+    else
+        info "DNS: remote=$REMOTE_DNS local=$LOCAL_DNS"
+    fi
 }
 
 configure_overseas_dns() { configure_dns_upstreams; }
@@ -381,4 +384,3 @@ force_set_dot_domain() {
     warn "DoT domain forcibly updated without issuing a new certificate. Run --renew-cert after fixing certbot/port 80 issues."
     ok "DoT domain forcibly updated: $DOMAIN"
 }
-

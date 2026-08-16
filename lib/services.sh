@@ -517,9 +517,8 @@ collect_tgbot_settings() {
     local token="${TG_BOT_TOKEN:-}"
     local ids="${TG_ADMIN_IDS:-}"
     if [[ -z "$token" && -t 0 ]]; then
+        read -r -s -p "Telegram Bot Token（留空跳过）: " token
         echo ""
-        info "可选：配置 Telegram 控制 Bot（直接在 Telegram 上运维）"
-        read -r -p "Telegram Bot Token (留空跳过): " token
     fi
     if [[ -z "$token" ]]; then
         TG_BOT_TOKEN=""
@@ -528,7 +527,7 @@ collect_tgbot_settings() {
         return 0
     fi
     if [[ -z "$ids" && -t 0 ]]; then
-        read -r -p "授权的 Telegram 数字 ID（逗号分隔，可留空，稍后用 /id 获取再填）: " ids
+        read -r -p "管理员 Telegram ID: " ids
     fi
     ids="$(printf '%s' "$ids" | tr ', ' '\n' | grep -E '^[0-9]+$' | paste -sd ',' - 2>/dev/null || true)"
     TG_BOT_TOKEN="$token"
