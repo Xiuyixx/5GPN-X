@@ -5,9 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: ShellCheck
@@ -21,6 +26,7 @@ jobs:
 
   shell-python-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Run shell test suite
@@ -36,8 +42,43 @@ jobs:
             python3 "$t"
           done
 
+  # Cross-distro coverage: install.sh claims Debian + RHEL-family support, so
+  # run the hermetic policy tests inside apt-based and dnf-based containers.
+  distro-matrix-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        container: ["debian:12", "rockylinux:9"]
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test deps
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update && apt-get install -y --no-install-recommends python3 procps
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y python3 procps
+          fi
+      - name: Run shell test suite
+        run: |
+          set -e
+          for t in tests/*.sh; do
+            echo "RUN $t"
+            bash "$t"
+          done
+      - name: Run python test suite
+        run: |
+          set -e
+          for t in tests/*.py; do
+            echo "RUN $t"
+            python3 "$t"
+          done
+
   powershell-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Run PowerShell policy tests
@@ -49,6 +90,7 @@ jobs:
 
   go-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

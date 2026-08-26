@@ -102,11 +102,18 @@ install_deps() {
 }
 
 install_mosdns_binary() {
-    local version="${MOSDNS_VERSION:-$MOSDNS_VERSION_DEFAULT}" arch asset url tmpdir
+    local version="${MOSDNS_VERSION:-$MOSDNS_VERSION_DEFAULT}" arch asset url tmpdir want_sha got_sha
     case "$(uname -m)" in
         x86_64|amd64) arch="amd64" ;;
         aarch64|arm64) arch="arm64" ;;
         *) err "Unsupported mosdns architecture: $(uname -m)"; exit 1 ;;
+    esac
+    # Pinned digests of the official release archives for the locked version;
+    # mosdns runs as a DNS-facing root service, so verify before installing.
+    case "${version}/${arch}" in
+        "5.3.4/amd64") want_sha="3abcc73080789eb1ccca78dab5049b85ac1e9b8f865ab60158a527b77cd72e85" ;;
+        "5.3.4/arm64") want_sha="82d80a1a21606fca0bc6b65ac6f90d30cff6bb4a19a6ab6a246cf247dbb78bc0" ;;
+        *) want_sha="" ;;
     esac
     if command -v mosdns >/dev/null 2>&1 && mosdns version 2>/dev/null | grep -q "v${version}"; then
         info "mosdns v${version} already installed"
@@ -117,6 +124,17 @@ install_mosdns_binary() {
     url="https://github.com/IrineSistiana/mosdns/releases/download/v${version}/${asset}"
     tmpdir=$(mktemp -d /tmp/mosdns.XXXXXX)
     curl -fsSL --retry 3 --connect-timeout 15 "$url" -o "${tmpdir}/${asset}"
+    if [[ -n "$want_sha" ]]; then
+        got_sha="$(sha256sum "${tmpdir}/${asset}" | awk '{print $1}')"
+        if [[ "$got_sha" != "$want_sha" ]]; then
+            rm -rf "$tmpdir"
+            err "mosdns v${version} (${arch}) checksum mismatch; aborting install (expected ${want_sha}, got ${got_sha})"
+            exit 1
+        fi
+        info "mosdns archive checksum verified (${arch})"
+    else
+        warn "No pinned checksum for mosdns v${version}/${arch}; skipping integrity verification"
+    fi
     python3 - "${tmpdir}/${asset}" "$tmpdir" <<'PYEOF'
 import sys
 import zipfile

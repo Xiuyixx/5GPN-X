@@ -80,7 +80,7 @@ list_exit_names() {
 ensure_mihomo() {
     [[ -x "${MIHOMO_BIN}" ]] && return 0
     info "Installing locked mihomo ${MIHOMO_VERSION_DEFAULT} (TUN engine for URI exits)..."
-    local ver arch tmp url
+    local ver arch tmp url want_sha got_sha
     ver="${MIHOMO_VERSION:-${MIHOMO_VERSION_DEFAULT}}"
     case "$(uname -m)" in
         x86_64) arch=amd64 ;;
@@ -88,10 +88,29 @@ ensure_mihomo() {
         armv7l) arch=armv7 ;;
         *) err "Unsupported architecture for mihomo: $(uname -m)"; return 1 ;;
     esac
+    # Pinned digests of the official release artifacts for the locked version.
+    # The binary runs as root, so a mismatch must abort the install instead of
+    # being installed. Override MIHOMO_VERSION without a pin => explicit warning.
+    case "${ver}/${arch}" in
+        "1.19.28/amd64") want_sha="d5967e079d9f793515a5a8193aabda455f7e012427eccd567dbc4f2f15498204" ;;
+        "1.19.28/arm64") want_sha="2474450cd1c41dfa53036a54a4e85579f493d3af524d86c3d4b8e2b240b56cd2" ;;
+        *) want_sha="" ;;
+    esac
     url="https://github.com/MetaCubeX/mihomo/releases/download/v${ver}/mihomo-linux-${arch}-v${ver}.gz"
     tmp="$(mktemp -d)"
     if ! curl -fsSL --max-time 90 "$url" -o "$tmp/mihomo.gz"; then
         rm -rf "$tmp"; err "Failed to download mihomo ${ver}. Set MIHOMO_VERSION=<ver> and retry. URL: $url"; return 1
+    fi
+    if [[ -n "$want_sha" ]]; then
+        got_sha="$(sha256sum "$tmp/mihomo.gz" | awk '{print $1}')"
+        if [[ "$got_sha" != "$want_sha" ]]; then
+            rm -rf "$tmp"
+            err "mihomo ${ver} (${arch}) checksum mismatch; aborting install (expected ${want_sha}, got ${got_sha})"
+            return 1
+        fi
+        info "mihomo checksum verified (${arch})"
+    else
+        warn "No pinned checksum for mihomo ${ver}/${arch}; skipping integrity verification"
     fi
     if ! gzip -dc "$tmp/mihomo.gz" > "$tmp/mihomo"; then
         rm -rf "$tmp"; err "Failed to extract mihomo archive"; return 1

@@ -1,0 +1,72 @@
+name: Upstream version check
+
+# install.sh pins mihomo/mosdns for reproducible installs. This workflow runs
+# monthly, compares the pinned defaults against the latest upstream releases,
+# and opens (or updates) a single tracking issue when they drift. It never
+# bumps versions automatically.
+
+on:
+  schedule:
+    - cron: '30 3 1 * *' # 03:30 UTC on the 1st of every month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: version-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare pinned vs latest upstream versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          pinned_mihomo="$(sed -nE 's/^MIHOMO_VERSION_DEFAULT="([^"]+)"/\1/p' install.sh)"
+          pinned_mosdns="$(sed -nE 's/^MOSDNS_VERSION_DEFAULT="([^"]+)"/\1/p' install.sh)"
+
+          latest_mihomo="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r .tag_name | sed 's/^v//')"
+          latest_mosdns="$(curl -fsSL https://api.github.com/repos/IrineSistiana/mosdns/releases/latest | jq -r .tag_name | sed 's/^v//')"
+
+          echo "mihomo: pinned=${pinned_mihomo} latest=${latest_mihomo}"
+          echo "mosdns: pinned=${pinned_mosdns} latest=${latest_mosdns}"
+
+          drift=()
+          [[ "$pinned_mihomo" == "$latest_mihomo" ]] || drift+=("mihomo")
+          [[ "$pinned_mosdns" == "$latest_mosdns" ]] || drift+=("mosdns")
+
+          if [[ ${#drift[@]} -eq 0 ]]; then
+            echo "All pinned versions are up to date."
+            exit 0
+          fi
+
+          title="上游版本更新提醒：${drift[*]} 有新 release"
+          body_file="$(mktemp)"
+          {
+            echo "月度版本检查发现以下锁定版本已落后于上游，请评估后手动升级 \`install.sh\` 并更新对应 sha256 校验值："
+            echo
+            echo "| 组件 | 当前锁定 | 最新 release |"
+            echo "|---|---|---|"
+            [[ "$pinned_mihomo" == "$latest_mihomo" ]] || echo "| mihomo | v${pinned_mihomo} | v${latest_mihomo} |"
+            [[ "$pinned_mosdns" == "$latest_mosdns" ]] || echo "| mosdns | v${pinned_mosdns} | v${latest_mosdns} |"
+            echo
+            echo "升级步骤：改 \`MIHOMO_VERSION_DEFAULT\` / \`MOSDNS_VERSION_DEFAULT\`，下载新 release 产物重新计算 sha256 并更新 \`lib/exits.sh\` / \`lib/services.sh\` 中的校验表。"
+            echo
+            echo "_此 issue 由 version-check 工作流自动创建；同标题存在 open issue 时不会重复创建。_"
+          } > "$body_file"
+
+          existing="$(gh issue list --state open --search "${title} in:title" --json number --jq 'length')"
+          if [[ "$existing" -eq 0 ]]; then
+            gh issue create --title "$title" --body-file "$body_file"
+          else
+            echo "Tracking issue already open; skipping."
+          fi

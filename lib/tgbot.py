@@ -2191,6 +2191,37 @@ def set_commands():
 # --------------------------------------------------------------------------- #
 # Main loop
 # --------------------------------------------------------------------------- #
+
+# Persisted getUpdates offset so a restart resumes where it left off instead of
+# replaying (or being flooded by) every update that queued up during downtime.
+_STATE_PATH = os.environ.get("TG_STATE_FILE", "/var/lib/5gpn/tgbot-state.json")
+
+
+def _load_offset():
+    """Return the next offset from persisted state, or None when absent."""
+    try:
+        with open(_STATE_PATH) as f:
+            state = json.load(f)
+        return int(state["offset"]) + 1
+    except Exception:
+        return None
+
+
+def _save_offset(update_id):
+    """Atomically persist the highest processed update id (best-effort)."""
+    try:
+        parent = os.path.dirname(_STATE_PATH)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = _STATE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"offset": update_id, "ts": int(time.time())}, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _STATE_PATH)
+    except Exception as e:
+        print("[warn] cannot persist offset state: %s" % e, file=sys.stderr)
+
+
 def main():
     if not TOKEN:
         print("TG_BOT_TOKEN is not set", file=sys.stderr)
@@ -2202,7 +2233,10 @@ def main():
 
     set_commands()
     print("5gpn tgbot started; admins=%s" % sorted(ADMIN_IDS), file=sys.stderr)
-    offset = None
+    offset = _load_offset()
+    if offset is not None:
+        print("resuming from persisted update offset %d" % offset, file=sys.stderr)
+    fail_delay = 3
     while True:
         # Stay below common 30s idle TCP timeouts so the next update does not
         # wait for a stale long-poll socket to fail first.
@@ -2211,10 +2245,25 @@ def main():
             params["offset"] = offset
         resp = tg("getUpdates", **params)
         if not resp.get("ok"):
-            time.sleep(3)
+            # Honor Telegram 429 rate limits via parameters.retry_after; use
+            # capped exponential backoff for every other failure mode.
+            retry_after = (resp.get("parameters") or {}).get("retry_after")
+            if resp.get("error_code") == 429 and retry_after:
+                delay = max(1, int(retry_after))
+                print("[warn] rate limited by Telegram; retrying in %ds" % delay, file=sys.stderr)
+            else:
+                delay = fail_delay
+                fail_delay = min(fail_delay * 2, 60)
+                reason = resp.get("error") or resp.get("description") or "unknown error"
+                print("[warn] getUpdates failed (%s); retrying in %ds" % (reason, delay),
+                      file=sys.stderr)
+            time.sleep(delay)
             continue
+        fail_delay = 3
+        batch_max = None
         for upd in resp.get("result", []):
             offset = upd["update_id"] + 1
+            batch_max = upd["update_id"]
             try:
                 if "message" in upd:
                     handle_message(upd["message"])
@@ -2222,6 +2271,8 @@ def main():
                     handle_callback(upd["callback_query"])
             except Exception as e:  # never let one bad update kill the loop
                 print("[err] handling update: %s" % e, file=sys.stderr)
+        if batch_max is not None:
+            _save_offset(batch_max)
 
 
 if __name__ == "__main__":
