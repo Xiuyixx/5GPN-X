@@ -57,9 +57,9 @@ jobs:
       - name: Install test deps
         run: |
           if command -v apt-get >/dev/null 2>&1; then
-            apt-get update && apt-get install -y --no-install-recommends python3 procps
+            apt-get update && apt-get install -y --no-install-recommends python3 procps systemd
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y python3 procps
+            dnf install -y python3 procps systemd
           fi
       - name: Run shell test suite
         run: |
