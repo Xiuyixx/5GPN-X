@@ -57,9 +57,9 @@ jobs:
       - name: Install test deps
         run: |
           if command -v apt-get >/dev/null 2>&1; then
-            apt-get update && apt-get install -y --no-install-recommends python3 procps systemd
+            apt-get update && apt-get install -y --no-install-recommends python3 procps systemd openssl
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y python3 procps systemd
+            dnf install -y python3 procps systemd openssl
           fi
       - name: Run shell test suite
         run: |
