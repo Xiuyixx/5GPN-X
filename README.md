@@ -24,6 +24,7 @@
 - iOS WhatsApp Patch：wa-shim 监听 TCP 443，仅分流客户端网段内 `ED`/`WA` 开头的无 SNI Noise 连接，其余 fail-open 交给 sniproxy。
 - 智能分流：mihomo `smart` 出口按域名 / IP / GEOSITE / GEOIP / RULE-SET 分流，远程规则集自动更新。
 - Telegram Bot：状态、出口管理、分流规则、DNS/DoT 设置、日志、iOS 二维码。
+- 供应链校验：mihomo / mosdns 二进制从官方 release 下载并锁定 sha256 校验，不匹配即中止安装。
 - 低内存模式：≤ 1 GB 内存自动降低缓存与内核参数，512 MB VPS 可运行。
 
 ## 环境要求
@@ -57,6 +58,8 @@ sudo ./install.sh
 安装前请先把域名 A 记录指向服务器公网 IP；脚本输入域名后会自动验证解析，无需额外确认。已有证书会直接复用，没有证书时才申请 Let's Encrypt 证书。
 
 安装终端仅显示阶段状态和必要交互；完整命令输出写入 `/var/log/5gpn-install.log`。
+
+mihomo 与 mosdns 二进制从官方 release 下载并校验锁定的 sha256 摘要，校验失败会中止安装；使用 `MIHOMO_VERSION` / `MOSDNS_VERSION` 覆盖非锁定版本时会跳过校验（安装时给出警告）。
 
 ## 客户端配置
 
@@ -158,6 +161,8 @@ sudo ./install.sh --setup-tgbot
 
 添加出口：`🌐 出口 -> ➕ 添加出口`，直接粘贴节点链接（`ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://`），备注会自动作为出口名。
 
+轮询进度持久化在 `/var/lib/5gpn/tgbot-state.json`（权限 600），服务重启后从断点继续，不会重放停机期间积压的更新；被 Telegram 限流（429）时按 `retry_after` 等待，其他轮询失败指数退避（上限 60s）。如需自定义状态文件路径，把 `TG_STATE_FILE` 写入 `/opt/5gpn/etc/tgbot.env` 后重启服务。
+
 ## 配置参考
 
 ### 仓库结构
@@ -173,10 +178,10 @@ tests/            # 策略测试
 
 | 路径 | 说明 |
 | --- | --- |
-| `/opt/5gpn` | 项目目录（一键安装拉取） |
-| `/opt/5gpn` | 运行时主目录（含 `bin/5gpn-ctl`、`bin/tgbot.py`、`bin/mihomo` 等） |
+| `/opt/5gpn` | 项目与运行时主目录（源码、`bin/5gpn-ctl`、`bin/tgbot.py`、`bin/mihomo` 等） |
 | `/opt/5gpn/etc/current-exit` | 当前出口 |
 | `/opt/5gpn/etc/tgbot.env` | Bot Token 和管理员 ID（权限 600） |
+| `/var/lib/5gpn/tgbot-state.json` | tgbot 轮询断点，重启续传（权限 600） |
 | `/etc/mosdns/config.yaml` | mosdns 实际配置 |
 | `/etc/mosdns/gfwlist-extra-local.txt` | 本地补充 GFWList 域名 |
 | `/etc/sniproxy.conf` | sniproxy 配置（resolver 强制 `ipv4_only`） |
@@ -199,9 +204,11 @@ EMAIL="admin@example.com"       # ACME 邮箱
 REMOTE_DNS="1.1.1.1,8.8.8.8,9.9.9.9"     # 海外 DNS 池
 LOCAL_DNS="101.226.4.6,218.30.118.6,180.76.76.76,119.29.29.29"  # 国内 DNS 竞速池（4路 UDP 并发）
 LOWMEM=1                        # 强制低内存模式（≤1GB 自动启用）
-MIHOMO_VERSION="1.19.28"        # 可覆盖锁定版，建议保持默认
+MIHOMO_VERSION="1.19.28"        # 覆盖锁定版；非锁定版本跳过 sha256 校验（安装时 warn）
+MOSDNS_VERSION="5.3.4"          # 覆盖锁定版；行为同 MIHOMO_VERSION
 TG_BOT_TOKEN="123456:ABC"
 TG_ADMIN_IDS="11111111,22222222"
+TG_STATE_FILE="/var/lib/5gpn/tgbot-state.json"  # tgbot 轮询断点路径；自定义时写入 tgbot.env
 FIREWALL_MODE=preserve          # preserve(默认)/auto/managed，见下方说明
 PGW_TUNING=essential            # essential(默认)/performance 内核调优档位
 ```
