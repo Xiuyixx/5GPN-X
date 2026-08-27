@@ -98,7 +98,7 @@ ensure_mihomo() {
     esac
     url="https://github.com/MetaCubeX/mihomo/releases/download/v${ver}/mihomo-linux-${arch}-v${ver}.gz"
     tmp="$(mktemp -d)"
-    if ! curl -fsSL --max-time 90 "$url" -o "$tmp/mihomo.gz"; then
+    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 90 "$url" -o "$tmp/mihomo.gz"; then
         rm -rf "$tmp"; err "Failed to download mihomo ${ver}. Set MIHOMO_VERSION=<ver> and retry. URL: $url"; return 1
     fi
     if [[ -n "$want_sha" ]]; then

@@ -172,6 +172,8 @@ Environment variables (for non-interactive use):
   TG_BOT_TOKEN   Telegram bot token; enables the control bot when set
   TG_ADMIN_IDS   Comma-separated Telegram numeric IDs allowed to operate the bot
   MIHOMO_VERSION Override the locked mihomo version (default: ${MIHOMO_VERSION_DEFAULT})
+  MOSDNS_VERSION Override the locked mosdns version (default: ${MOSDNS_VERSION_DEFAULT})
+  TG_STATE_FILE   tgbot getUpdates offset state file (default: /var/lib/5gpn/tgbot-state.json)
   FIREWALL_MODE  preserve (default) | auto | managed.
                  preserve keeps the existing host firewall untouched and only
                  manages the project's own egress-marking rules; auto adds the
