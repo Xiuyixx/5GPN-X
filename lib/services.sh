@@ -10,6 +10,7 @@
 install_deps() {
     info "Installing system dependencies..."
     local pcre_dev_pkg="libpcre3-dev" pkg_log package_install_ok=0 temporary_pkg_log=0
+    local apt_lock_timeout="${APT_LOCK_TIMEOUT:-300}"
     if [[ -n "${INSTALL_LOG:-}" ]]; then
         pkg_log="$INSTALL_LOG"
     else
@@ -22,7 +23,7 @@ install_deps() {
     case "$PKG_MGR" in
         apt-get)
             export DEBIAN_FRONTEND=noninteractive
-            if ! apt-get update -qq >>"$pkg_log" 2>&1; then
+            if ! apt-get -o DPkg::Lock::Timeout="$apt_lock_timeout" update -qq >>"$pkg_log" 2>&1; then
                 warn "apt update failed; trying a direct public DNS path for Debian mirrors..."
                 if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
                     sed -i 's/^URIs: .*/URIs: http:\/\/deb.debian.org\/debian/' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
@@ -30,13 +31,13 @@ install_deps() {
                 if [[ -f /etc/apt/sources.list ]]; then
                     sed -i 's|^[[:space:]]*deb[[:space:]]\+mirror+file:/etc/apt/mirrors/.*|deb http://deb.debian.org/debian trixie main|g' /etc/apt/sources.list 2>/dev/null || true
                 fi
-                if ! apt-get update -qq >>"$pkg_log" 2>&1; then
+                if ! apt-get -o DPkg::Lock::Timeout="$apt_lock_timeout" update -qq >>"$pkg_log" 2>&1; then
                     err "apt update failed. Package-manager log: $pkg_log"
                     grep -Ei '(^E:|^Error:|error|failed)' "$pkg_log" | tail -n 8 | sed 's/^/  /' >&2 || true
                     return 1
                 fi
             fi
-            if apt-get install -y -qq \
+            if apt-get -o DPkg::Lock::Timeout="$apt_lock_timeout" install -y -qq \
                 build-essential git wget curl ca-certificates \
                 libev-dev "${pcre_dev_pkg}" libudns-dev libssl-dev \
                 autoconf automake libtool pkg-config \

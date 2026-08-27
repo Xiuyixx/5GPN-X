@@ -51,14 +51,24 @@ output="$(install_deps 2>&1)"
     echo "installer must print one concise package completion message" >&2
     exit 1
 }
-grep -q '^update -qq$' "$MOCK_CALLS" || {
-    echo "installer must still update apt metadata" >&2
+grep -q '^-o DPkg::Lock::Timeout=300 update -qq$' "$MOCK_CALLS" || {
+    echo "installer must wait for the dpkg lock while updating apt metadata" >&2
     exit 1
 }
-grep -q '^install -y -qq .*libpcre2-dev' "$MOCK_CALLS" || {
-    echo "installer must still install Debian 13 dependencies" >&2
+grep -q '^-o DPkg::Lock::Timeout=300 install -y -qq .*libpcre2-dev' "$MOCK_CALLS" || {
+    echo "installer must wait for the dpkg lock while installing Debian 13 dependencies" >&2
     exit 1
 }
+
+APT_LOCK_TIMEOUT=17
+export APT_LOCK_TIMEOUT
+: > "$MOCK_CALLS"
+install_deps >/dev/null 2>&1
+grep -q '^-o DPkg::Lock::Timeout=17 install -y -qq ' "$MOCK_CALLS" || {
+    echo "installer must honor the configured apt lock timeout" >&2
+    exit 1
+}
+unset APT_LOCK_TIMEOUT
 
 INSTALL_LOG="${tmp}/persistent-install.log"
 if ! persistent_output="$(install_deps 2>&1)"; then
