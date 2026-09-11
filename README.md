@@ -1,3 +1,5 @@
+
+
 # 5GPN-X
 
 服务器端透明代理网关：mosdns DoT + SNI/QUIC 透明代理 + 可切换多协议出口。客户端只需把 DNS/DoT 指向服务器域名，无需安装任何代理客户端。
@@ -36,7 +38,7 @@
 一键安装（自动拉取仓库到 `/opt/5gpn`）：
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Xiuyixx/5GPN-X/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/Xiuyixx/5GPN-X/main/quick-install.sh -o /tmp/5gpn.sh && sudo bash /tmp/5gpn.sh
 ```
 
 手动安装：
