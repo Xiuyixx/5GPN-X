@@ -140,6 +140,12 @@ class APNsDNSIntegrationTests(unittest.TestCase):
                 self.assertEqual(query(self.port, name), '203.0.113.7')
                 self.assertIsNone(query(self.port, name, qtype=28))
                 self.assertEqual(query(self.port, name, private=False), '198.51.100.7')
+        for name in ('imap.gmail.com', 'smtp.gmail.com', 'imap.googlemail.com'):
+            with self.subTest(name=name):
+                # Mail endpoints must bypass the gateway's web-only listener
+                # and resolve to real addresses for IMAP/SMTP ports.
+                self.assertEqual(query(self.port, name), '203.0.113.7')
+                self.assertIsNone(query(self.port, name, qtype=28))
         for name in ('example.org', 'apple.com', 'notpush.apple.com',
                      'push.apple.com.example.org'):
             self.assertEqual(query(self.port, name), '192.0.2.1')

@@ -43,6 +43,21 @@ plugins:
       exps:
         - "domain:push.apple.com"
 
+  # Gmail's IMAP/SMTP endpoints use TCP/993, 465 and 587. This gateway only
+  # proxies web ports, so resolve the mail endpoints to their real addresses
+  # instead of synthesizing the gateway IP and making iOS Mail report an
+  # account error. Keep this exception limited to mail hostnames.
+  - tag: mail_direct_domains
+    type: domain_set
+    args:
+      exps:
+        - "domain:imap.gmail.com"
+        - "domain:smtp.gmail.com"
+        - "domain:pop.gmail.com"
+        - "domain:imap.googlemail.com"
+        - "domain:smtp.googlemail.com"
+        - "domain:pop.googlemail.com"
+
   - tag: remote_primary
     type: forward
     args:
@@ -192,6 +207,9 @@ __LOCAL_SECONDARY_UPSTREAMS__
       # exception precedes downloaded lists and default private A synthesis.
       - matches:
           - qname $apple_push_domains
+        exec: goto remote_resolve
+      - matches:
+          - qname $mail_direct_domains
         exec: goto remote_resolve
       - matches:
           - qname $china_domains

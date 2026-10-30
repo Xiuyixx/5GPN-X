@@ -8,7 +8,7 @@
 
 ## 安装
 
-项目版本：**1.1.7**（见 [CHANGELOG](CHANGELOG.md)）。首次安装和升级使用同一个入口：
+项目版本：**1.1.8**（见 [CHANGELOG](CHANGELOG.md)）。首次安装和升级使用同一个入口：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Xiuyixx/5GPN-X/main/install.sh | sudo bash
@@ -46,6 +46,7 @@ sudo /opt/5gpn/bin/5gpn-ctl --uninstall           # 卸载
 
 - **加密 DNS**：设备通过 DoT 连接服务器，国内域名优先使用国内 DNS。
 - **透明代理**：指定私网设备访问其他域名时，由服务器转发 TCP / QUIC 流量；HTTPS/SVCB 记录会被抑制，避免 `ipv4hint` 让客户端绕过网关。
+- **邮件兼容**：Gmail/Googlemail 的 IMAP、SMTP、POP 主机名解析为真实地址，避免 iOS Mail 把非 Web 邮件端口错误送到网关后显示“账户错误”。
 - **多种出口**：支持本机直出、WireGuard，以及 SOCKS5、SS、VMess、Trojan、VLESS、Hysteria2、TUIC、AnyTLS、HTTP 等节点。
 - **按需分流**：可按域名、IP 或规则集选择不同出口。
 - **聊天管理**：通过 Telegram Bot 查看状态、切换出口、管理规则和 DNS。

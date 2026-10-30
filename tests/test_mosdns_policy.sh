@@ -32,12 +32,18 @@ has "$template" 'qname $china_domains' \
     "ChinaList domains must retain domestic resolution"
 has "$template" 'domain:push.apple.com' \
     "APNs domains must resolve to Apple's real addresses"
+has "$template" 'domain:imap.gmail.com' \
+    "Gmail IMAP must resolve to its real address for iOS Mail"
+has "$template" 'domain:smtp.gmail.com' \
+    "Gmail SMTP must resolve to its real address for iOS Mail"
 
 china_line=$(grep -n 'qname \$china_domains' "${root}/lib/mosdns.yaml.template" | head -n1 | cut -d: -f1)
 spoof_line=$(grep -n 'exec: black_hole __SERVER_IP__' "${root}/lib/mosdns.yaml.template" | tail -n1 | cut -d: -f1)
 [[ "$china_line" -lt "$spoof_line" ]] || fail "ChinaList matching must run before default private A spoofing"
 apple_line=$(grep -n 'qname \$apple_push_domains' "${root}/lib/mosdns.yaml.template" | head -n1 | cut -d: -f1)
 [[ "$apple_line" -lt "$china_line" ]] || fail "APNs exception must run before ChinaList/default private synthesis"
+mail_line=$(grep -n 'qname \$mail_direct_domains' "${root}/lib/mosdns.yaml.template" | head -n1 | cut -d: -f1)
+[[ "$mail_line" -lt "$china_line" ]] || fail "mail exception must run before ChinaList/default private synthesis"
 override_proxy_line=$(grep -n 'qname \$override_proxy_domains' "${root}/lib/mosdns.yaml.template" | head -n1 | cut -d: -f1)
 [[ "$override_proxy_line" -lt "$apple_line" ]] || fail "explicit proxy overrides must retain precedence over APNs exception"
 

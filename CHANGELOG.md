@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.8 — 2026-10-30
+
+- 修复 iOS Mail 使用 Gmail/Googlemail 的 IMAP、SMTP 或 POP 时，邮件服务器被透明网关合成地址而无法访问的问题；`imap/smtp/pop.gmail.com` 及对应 `googlemail.com` 主机名现在解析真实地址，供 TCP/993、465、587、995、110、143 直连。网关仍不开放这些邮件端口。
+- 增加 Gmail 邮件端点解析和策略优先级回归测试。
+
 ## 1.1.7 — 2026-10-30
 
 - 修复现代浏览器和 iOS 查询 HTTPS/SVCB（QTYPE 65/64）记录时，使用 `ipv4hint` 真实地址绕过透明代理的问题；网关现在返回 NOERROR/NODATA，强制回退到网关 A 记录。保留 ChinaList、显式直连和 APNs 的域名优先级处理。
