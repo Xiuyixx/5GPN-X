@@ -161,6 +161,15 @@ __LOCAL_SECONDARY_UPSTREAMS__
       - matches:
           - qtype 28
         exec: reject 0
+      # HTTPS/SVCB records may contain ipv4hint/ipv6hint with real endpoint
+      # addresses. Suppress them so private clients fall back to the gateway
+      # A record instead of bypassing transparent TCP/QUIC proxying.
+      - matches:
+          - qtype 64
+        exec: reject 0
+      - matches:
+          - qtype 65
+        exec: reject 0
 
   - tag: private_client
     type: sequence

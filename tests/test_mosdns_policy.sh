@@ -20,6 +20,10 @@ has "$template" 'exec: goto remote_resolve' \
     "public client non-ChinaList domains must use remote resolve"
 has "$template" 'exec: reject 0' \
     "AAAA queries must be globally rejected (IPv4-only policy)"
+has "$template" 'qtype 64' \
+    "SVCB queries must be suppressed to prevent ipv4hint bypass"
+has "$template" 'qtype 65' \
+    "HTTPS queries must be suppressed to prevent ipv4hint bypass"
 has "$template" 'exec: black_hole __SERVER_IP__' \
     "private overseas A queries must resolve to the gateway"
 [[ "$(grep -c 'exec: accept' "${root}/lib/mosdns.yaml.template")" -ge 2 ]] \

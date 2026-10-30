@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.7 — 2026-10-30
+
+- 修复现代浏览器和 iOS 查询 HTTPS/SVCB（QTYPE 65/64）记录时，使用 `ipv4hint` 真实地址绕过透明代理的问题；网关现在返回 NOERROR/NODATA，强制回退到网关 A 记录。保留 ChinaList、显式直连和 APNs 的域名优先级处理。
+- 增加 HTTPS/SVCB 分流策略回归检查。
+
 ## 1.1.6 — 2026-10-30
 
 - 修复已安装的自包含 `5gpn-ctl --upgrade` 在自身 `/opt/5gpn/bin/lib` 目录上重复安装文件时报 `same file` 并中止的问题；源代码目录升级与自包含运行时升级均保持幂等。
