@@ -172,8 +172,9 @@ sudo /opt/5gpn/bin/5gpn-ctl --update-rules
 面向 5G NPN / N6 互通、私网终端出海和轻量透明代理场景：
 
 - `172.22.0.0/16` 私网客户端把 DNS/DoT 指向网关。
-- ChinaList 域名（所有来源）走国内 DNS 竞速代理（4 路 UDP 并发 + TCP fallback + 海外兜底含 `22.22.22.22`），保持本地访问体验。
-- 内网来源非 ChinaList 的 A 查询返回服务器 IP，流量进入 TCP/QUIC 代理。
+- ChinaList 域名默认走国内 DNS 竞速代理（4 路 UDP 并发 + TCP fallback + 海外兜底含 `22.22.22.22`），保持本地访问体验。
+- 私网客户端的 `push.apple.com` 及其子域优先返回海外 DNS 的真实地址，供设备直达 Apple TCP/5223（443 回退）；显式域名覆盖仍优先。不新增网关监听，不扩大为整个 `apple.com`。
+- 内网来源其余非 ChinaList 的 A 查询返回服务器 IP，流量进入 TCP/QUIC 代理。
 - 其他来源：被墙域名不劫持，正常海外解析；其他域名也正常海外解析。
 - wa-shim / sniproxy / quic-proxy 负责 WhatsApp Noise、SNI/Host 和 QUIC 转发，出站由当前出口控制。
 - 所有来源的 AAAA 查询返回 NOERROR/NODATA，保持现有 IPv4-only 透明代理策略，避免 IPv6 绕过代理。

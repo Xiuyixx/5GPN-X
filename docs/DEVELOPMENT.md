@@ -28,6 +28,14 @@ for t in tests/*.py; do python3 "$t"; done
 for t in tests/*.ps1; do pwsh -NoProfile -File "$t"; done
 ```
 
+APNs DNS 行为测试用真实 mosdns `5.3.4` 和回环假上游验证分流、后缀边界、显式覆盖优先级、公网策略和 AAAA；不访问公网 DNS，也不改主机配置。使用已核验的锁定二进制：
+
+```bash
+PGW_TEST_MOSDNS=/absolute/path/to/mosdns python3 tests/test_apns_dns_integration.py
+```
+
+未设置该变量时此项跳过；Ubuntu CI 下载并校验项目锁定二进制后强制执行。此测试不代表 iPhone 锁屏推送或设备所在网络直达 APNs 已验收。
+
 QUIC 代理测试需要 Go：
 
 ```bash

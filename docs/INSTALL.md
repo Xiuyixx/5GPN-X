@@ -116,3 +116,11 @@ dig +tls @dns.example.com -p 853 youtube.com
 mihomo 和 mosdns 默认使用锁定版本及 SHA256 校验。通过 `MIHOMO_VERSION` 或 `MOSDNS_VERSION` 覆盖版本会跳过对应锁定摘要校验，并在安装时警告。
 
 管道安装意味着信任本仓库 GitHub `main`；固定 SHA 可以复现源码，但不是发布签名认证。首次安装涉及的系统包、网络规则和服务更改不支持跨阶段全量回滚；升级中的局部事务保护也不等于整台主机能原子恢复。
+
+### iOS 通知延迟 / 打开应用才收到
+
+`push.apple.com` 及其子域默认返回真实地址，避免 APNs 的 TCP/5223 连接被送到不支持该端口的网关；显式 `--proxy-domain` 覆盖仍优先。设备所在的蜂窝/专网需允许直达 Apple TCP/5223（443 回退），不应仅在本网关开放入站 5223 来代替。
+
+升级后切换一次飞行模式，让 iOS 重建 DNS 和 APNs 连接，然后锁屏空闲 5–10 分钟，由另一设备发送消息验证。不要强制结束应用。若仍延迟，应检查实际 APNs DNS 响应、设备到 Apple 的路由及端口、iOS 通知权限/专注模式/定时摘要；只验证服务启动或 DNS 正常不能证明推送已恢复。
+
+历史性能档的 30 秒 TCP conntrack 超时会迁移到 86400 秒；essential 档和自定义超时不变。可只读核对：`sysctl net.netfilter.nf_conntrack_tcp_timeout_established`。不要清空 conntrack 或重装描述文件来诊断。

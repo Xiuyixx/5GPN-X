@@ -99,7 +99,10 @@ net.netfilter.nf_conntrack_max=${sy_conntrack_max}
 net.netfilter.nf_conntrack_tcp_max_retrans=2
 net.netfilter.nf_conntrack_tcp_timeout_close=2
 net.netfilter.nf_conntrack_tcp_timeout_close_wait=2
-net.netfilter.nf_conntrack_tcp_timeout_established=30
+# Keep idle TLS sessions (including iOS/APNs push connections) tracked long
+# enough to survive normal idle periods. A 30s conntrack timeout is shorter
+# than common push heartbeats, regardless of whether SO_KEEPALIVE is enabled.
+net.netfilter.nf_conntrack_tcp_timeout_established=86400
 net.netfilter.nf_conntrack_tcp_timeout_fin_wait=2
 net.netfilter.nf_conntrack_tcp_timeout_last_ack=2
 net.netfilter.nf_conntrack_tcp_timeout_max_retrans=2
@@ -121,6 +124,43 @@ EOF
     if grep -qE '^[[:space:]]*vm\.swappiness[[:space:]]*=' /etc/sysctl.conf 2>/dev/null; then
         sed -i -E 's/^([[:space:]]*vm\.swappiness[[:space:]]*=)/# disabled by 5gpn (see 99-5gpn.conf): \1/' /etc/sysctl.conf
     fi
+}
+migrate_push_conntrack_timeout() {
+    local sysctl_file=/etc/sysctl.d/99-5gpn.conf
+    local key=net.netfilter.nf_conntrack_tcp_timeout_established current runtime tmp
+    [[ -f "$sysctl_file" && ! -L "$sysctl_file" ]] || return 0
+    [[ "${PGW_TUNING:-}" != essential ]] || return 0
+    grep -qE '^# Proxy Gateway Optimizations \(profile: (standard|low-memory|performance)' "$sysctl_file" || return 0
+    current="$(sed -n 's/^net\.netfilter\.nf_conntrack_tcp_timeout_established=\([0-9][0-9]*\)$/\1/p' "$sysctl_file")"
+    # Preserve custom file values; only the legacy default and repaired default
+    # belong to this narrow upgrade migration.
+    [[ "$current" == 30 || "$current" == 86400 ]] || return 0
+    runtime="$(sysctl -n "$key")" || return 1
+    [[ "$runtime" =~ ^[0-9]+$ ]] || return 1
+    # If the live kernel value is not the old project default, leave both the
+    # file and runtime value alone. This avoids overwriting an administrator's
+    # longer/custom live setting with the managed default.
+    [[ "$runtime" == 30 ]] || return 0
+    if [[ "$current" == 30 ]]; then
+        tmp="$(mktemp "${sysctl_file}.XXXXXX")" || return 1
+        cp -p "$sysctl_file" "$tmp" || { rm -f "$tmp"; return 1; }
+        if ! sed 's/^net\.netfilter\.nf_conntrack_tcp_timeout_established=30$/net.netfilter.nf_conntrack_tcp_timeout_established=86400/' "$sysctl_file" > "$tmp"; then
+            rm -f "$tmp"; return 1
+        fi
+        mv -f "$tmp" "$sysctl_file" || { rm -f "$tmp"; return 1; }
+    fi
+    # Repair the known old live value only, including interrupted migrations
+    # with a repaired file but stale kernel. Preserve all custom live values.
+    push_sysctl_old_runtime="$runtime"
+    push_sysctl_restore=1
+    sysctl -w "$key=86400" >/dev/null || return 1
+    [[ "$(sysctl -n "$key")" == 86400 ]] || return 1
+}
+rollback_push_conntrack_timeout() {
+    [[ "${push_sysctl_restore:-0}" == 1 ]] || return 0
+    local key=net.netfilter.nf_conntrack_tcp_timeout_established
+    sysctl -w "$key=${push_sysctl_old_runtime}" >/dev/null || return 1
+    [[ "$(sysctl -n "$key")" == "$push_sysctl_old_runtime" ]]
 }
 system_tuning() {
     local profile; profile="$(resolve_tuning_profile)"

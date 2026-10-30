@@ -25,6 +25,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ "$install" == *'现有安装不完整；升级未修改配置'* ]] || fail "partial install must refuse upgrade"
 [[ "$install" == *'/var/backups/5gpn/upgrade.'* ]] || fail "upgrade backup missing"
 [[ "$install" == *'tgbot.env'* && "$install" == *'upgrade_code'* ]] || fail "bot state preservation path missing"
+[[ "$install" == *'migrate_push_conntrack_timeout'* && "$install" == *'upgrade_stage=sysctl-migration'* ]] || fail "upgrade must migrate the long-lived TCP conntrack timeout"
 [[ "$install" == *'install_ctl_entrypoint || return $?'* ]] || fail "fresh install must refresh self-contained CLI"
 
 echo "quick installer upgrade policy OK"

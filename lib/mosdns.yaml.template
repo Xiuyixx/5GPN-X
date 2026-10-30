@@ -34,6 +34,15 @@ plugins:
       files:
         - /etc/mosdns/override-block.txt
 
+  # APNs needs a persistent device-to-Apple connection on TCP/5223 (443
+  # fallback). Never synthesize the gateway IP for these hostnames: this
+  # gateway only proxies HTTP(S)/QUIC, not arbitrary ports or no-SNI APNs.
+  - tag: apple_push_domains
+    type: domain_set
+    args:
+      exps:
+        - "domain:push.apple.com"
+
   - tag: remote_primary
     type: forward
     args:
@@ -170,6 +179,11 @@ __LOCAL_SECONDARY_UPSTREAMS__
       - matches:
           - has_resp
         exec: accept
+      # Explicit user overrides above remain authoritative. This narrow
+      # exception precedes downloaded lists and default private A synthesis.
+      - matches:
+          - qname $apple_push_domains
+        exec: goto remote_resolve
       - matches:
           - qname $china_domains
         exec: goto local_resolve

@@ -487,6 +487,7 @@ upgrade_code() (
     routing_lock
     upgrade_stage=dns-preflight
     local txn committed=0 name remote_dns local_dns unit path i build_dir=""
+    local push_sysctl_restore=0 push_sysctl_old_runtime=""
     remote_dns="$(normalize_dns_upstreams "$(cat /etc/mosdns/.remote_dns)")"
     local_dns="$(normalize_dns_upstreams "$(cat /etc/mosdns/.local_dns)")"
     [[ -n "$remote_dns" && -n "$local_dns" ]] || return 1
@@ -494,6 +495,7 @@ upgrade_code() (
     txn="$(mktemp -d "${BASE_DIR}/.upgrade-txn.XXXXXX")"
     local paths=("$BASE_DIR/bin" "$CONF_DIR/mihomo" "$RULES_DEFAULT"
         "$EXITS_DIR/smart.yaml" "$EXITS_DIR/smart.type" "$EXITS_DIR/smart.yaml.tmp" "$RULESET_CACHE"
+        /etc/sysctl.d/99-5gpn.conf
         /etc/mosdns/config.yaml.template /etc/mosdns/config.yaml
         /etc/mosdns/gfwlist.txt /etc/mosdns/chinalist.txt
         /etc/mosdns/override-direct.txt /etc/mosdns/override-proxy.txt /etc/mosdns/override-block.txt
@@ -517,6 +519,7 @@ upgrade_code() (
         fi
         if (( ! committed )); then
             set +e
+            rollback_push_conntrack_timeout || recovery=1
             for i in "${!paths[@]}"; do
                 path="${paths[$i]}"
                 rm -rf "$path" || recovery=1
@@ -541,6 +544,8 @@ upgrade_code() (
     trap upgrade_rollback EXIT
     trap 'exit 130' INT
     trap 'exit 143' HUP TERM
+    upgrade_stage=sysctl-migration
+    migrate_push_conntrack_timeout
     upgrade_stage=deploy-code
     write_quic_dns_file "$remote_dns"
     install_ctl_entrypoint
@@ -636,7 +641,7 @@ main_upgrade() {
     local paths=() path
     for path in "$BASE_DIR/bin" "$CONF_DIR" /etc/5gpn /etc/wireguard /etc/mosdns \
         /etc/sniproxy.conf /etc/letsencrypt /var/lib/5gpn /etc/systemd/system \
-        /usr/local/bin/update-mosdns-rules.sh /usr/local/bin/mosdns; do
+        /usr/local/bin/update-mosdns-rules.sh /usr/local/bin/mosdns /etc/sysctl.d/99-5gpn.conf; do
         [[ ! -e "$path" ]] || paths+=("${path#/}")
     done
     tar -C / -czf "$backup/config-code.tar.gz" "${paths[@]}"

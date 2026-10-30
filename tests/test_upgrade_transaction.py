@@ -43,6 +43,9 @@ class UpgradeTransactionTests(unittest.TestCase):
             self.put('/etc/mosdns/' + f, 'old-' + f + '\n')
         self.put('/etc/mosdns/domain-overrides.conf', 'example.org=proxy\n')
         self.put('/etc/mosdns/.public_ip', '192.0.2.1\n')
+        self.put('/etc/sysctl.d/99-5gpn.conf',
+                 '# Proxy Gateway Optimizations (profile: performance)\n'
+                 'net.netfilter.nf_conntrack_tcp_timeout_established=30\n')
         self.put('/etc/5gpn/rules.conf', 'DOMAIN-SUFFIX,example.org,direct\n')
         self.put('/etc/5gpn/rules-default.conf', 'old-default\n')
         # A complete existing installation maps all shipped default categories.
@@ -92,6 +95,27 @@ echo held >> "$TEST_ROOT/lock-proof"
 [[ "$FAIL" != build ]] || exit 31
 printf 'new-quic\n' > quic-proxy
 ''')
+        self.kernel = self.root / 'kernel-timeout'
+        self.kernel.write_text('30')
+        self.mock('sysctl', '''#!/bin/bash
+set -eu
+key=net.netfilter.nf_conntrack_tcp_timeout_established
+case "$1" in
+ -n)
+   [[ "$2" == "$key" ]]
+   [[ "$FAIL" != sysctl_read ]] || exit 32
+   cat "$TEST_ROOT/kernel-timeout";;
+ -w)
+   [[ "$2" == "$key="* ]]
+   echo "sysctl $*" >> "$TEST_ROOT/events"
+   if [[ "$2" == "$key=86400" ]]; then
+     [[ "$FAIL" != sysctl_write ]] || exit 33
+     [[ "$FAIL" != sysctl_verify ]] || exit 0
+   fi
+   printf '%s' "${2#*=}" > "$TEST_ROOT/kernel-timeout";;
+ *) exit 99;;
+esac
+''')
         for command in ('curl', 'wget', 'useradd', 'iptables', 'ip'):
             self.mock(command, '#!/bin/bash\necho forbidden >&2\nexit 99\n')
         self.env = dict(os.environ, TEST_ROOT=str(self.root), FAIL='',
@@ -125,6 +149,9 @@ printf 'completed\\n'
         p.write_text(text)
         p.chmod(0o755)
 
+    def restore_mosdns_mock(self):
+        self.put('/usr/local/bin/mosdns', '#!/bin/bash\n[[ "$FAIL" != renderer ]]\n', 0o755)
+
     def snapshot(self):
         return {str(p.relative_to(self.fs)): (p.read_bytes(), p.stat().st_mode & 0o777)
                 for p in self.fs.rglob('*') if p.is_file()}
@@ -145,12 +172,14 @@ printf 'completed\\n'
 
     def assert_rollback(self, fail):
         before, states = self.snapshot(), self.states()
+        kernel_before = self.kernel.read_text()
         result = self.run_upgrade(fail)
         self.assertNotEqual(result.returncode, 0, self.detail)
         self.assertNotIn('completed', result.stdout)
         self.assertNotIn('unbound variable', self.detail)
         self.assertEqual(before, self.snapshot(), self.detail)
         self.assertEqual(states, self.states(), self.detail)
+        self.assertEqual(kernel_before, self.kernel.read_text(), self.detail)
         self.assertFalse(list(self.fs.glob('opt/5gpn/.upgrade-*')))
 
     def test_renderer_failure_rolls_back_through_actual_step(self):
@@ -210,6 +239,7 @@ printf 'completed\\n'
         self.assertEqual(result.returncode, 0, self.detail)
         self.assertEqual(states, self.states())
         self.assertIn('completed', result.stdout)
+        self.assertEqual(self.kernel.read_text(), '86400')
         self.assertEqual((self.root / 'lock-proof').read_text(), 'held\n')
         events = (self.root / 'events').read_text()
         for unit in ('sniproxy', 'wa-shim', '5gpn-mihomo@smart'):
@@ -218,7 +248,58 @@ printf 'completed\\n'
         self.assertEqual([line for line in events.splitlines() if line.startswith('restart mosdns')],
                          ['restart mosdns.service'])
         self.assertEqual((self.fs / 'var/lib/5gpn-quic/remote-dns').read_text(), '1.1.1.1\n')
+        self.assertIn('net.netfilter.nf_conntrack_tcp_timeout_established=86400',
+                      (self.fs / 'etc/sysctl.d/99-5gpn.conf').read_text())
         self.assertFalse(list(self.fs.glob('opt/5gpn/.upgrade-*')))
+
+    def test_sysctl_read_failure_restores_files(self):
+        self.assert_rollback('sysctl_read')
+
+    def test_sysctl_write_failure_restores_files_and_kernel(self):
+        self.assert_rollback('sysctl_write')
+
+    def test_sysctl_readback_mismatch_restores_files_and_kernel(self):
+        self.assert_rollback('sysctl_verify')
+
+    def test_new_file_with_stale_kernel_is_repaired_and_idempotent(self):
+        p = self.fs / 'etc/sysctl.d/99-5gpn.conf'
+        p.write_text(p.read_text().replace('=30', '=86400'))
+        for _ in range(2):
+            self.restore_mosdns_mock()
+            result = self.run_upgrade()
+            self.assertEqual(result.returncode, 0, self.detail)
+            self.assertEqual(self.kernel.read_text(), '86400')
+        events = (self.root / 'events').read_text()
+        self.assertEqual(events.count('sysctl -w '), 1)
+
+    def test_custom_file_and_non_project_profiles_are_preserved(self):
+        for profile, value, explicit in (
+                ('performance', '3600', ''), ('essential', '30', ''),
+                ('custom', '30', ''), ('performance', '30', 'essential')):
+            with self.subTest(profile=profile, value=value, explicit=explicit):
+                data = ('# Proxy Gateway Optimizations (profile: ' + profile + ')\n'
+                        'net.netfilter.nf_conntrack_tcp_timeout_established=' + value + '\n')
+                p = self.put('/etc/sysctl.d/99-5gpn.conf', data)
+                self.kernel.write_text('30')
+                self.env['PGW_TUNING'] = explicit
+                self.restore_mosdns_mock()
+                result = self.run_upgrade()
+                self.assertEqual(result.returncode, 0, self.detail)
+                self.assertEqual(p.read_text(), data)
+                self.assertEqual(self.kernel.read_text(), '30')
+
+    def test_custom_runtime_is_not_lowered_or_overwritten(self):
+        for value in ('3600', '432000'):
+            with self.subTest(value=value):
+                self.put('/etc/sysctl.d/99-5gpn.conf',
+                         '# Proxy Gateway Optimizations (profile: performance)\n'
+                         'net.netfilter.nf_conntrack_tcp_timeout_established=30\n')
+                self.kernel.write_text(value)
+                self.restore_mosdns_mock()
+                result = self.run_upgrade()
+                self.assertEqual(result.returncode, 0, self.detail)
+                self.assertEqual(self.kernel.read_text(), value)
+                self.assertIn('=30\n', (self.fs / 'etc/sysctl.d/99-5gpn.conf').read_text())
 
     def test_active_smart_upgrade_does_not_apply_routes_or_migrate_legacy_units(self):
         (self.state / '5gpn-mihomo@smart').write_text('active')

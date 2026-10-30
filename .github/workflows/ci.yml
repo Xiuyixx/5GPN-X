@@ -29,6 +29,23 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: APNs real mosdns loopback integration
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d)"
+          trap 'rm -rf "$dir"' EXIT
+          curl -fsSL --retry 3 --max-time 120 https://github.com/IrineSistiana/mosdns/releases/download/v5.3.4/mosdns-linux-amd64.zip -o "$dir/mosdns.zip"
+          echo "3abcc73080789eb1ccca78dab5049b85ac1e9b8f865ab60158a527b77cd72e85  $dir/mosdns.zip" | sha256sum -c -
+          python3 - "$dir" <<'PY'
+          import pathlib, sys, zipfile
+          base = pathlib.Path(sys.argv[1])
+          with zipfile.ZipFile(base / "mosdns.zip") as archive:
+              member = next(name for name in archive.namelist() if name.rstrip("/").endswith("mosdns"))
+              binary = base / "mosdns"
+              binary.write_bytes(archive.read(member))
+              binary.chmod(0o755)
+          PY
+          PGW_TEST_MOSDNS="$dir/mosdns" python3 tests/test_apns_dns_integration.py
       - name: Run shell test suite
         run: |
           for t in tests/*.sh; do

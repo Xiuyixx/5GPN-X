@@ -28,6 +28,7 @@ Assert-Contains 'net.ipv4.tcp_wmem=8192 131072 ${sy_buf_max}' 'templated TCP sen
 Assert-Contains 'sy_buf_max=134217728' 'standard-profile large TCP buffers'
 Assert-Contains 'net.netfilter.nf_conntrack_max=${sy_conntrack_max}' 'templated conntrack table'
 Assert-Contains 'sy_conntrack_max=10240000' 'standard-profile large conntrack table'
+Assert-Contains 'net.netfilter.nf_conntrack_tcp_timeout_established=86400' 'long-lived TCP push session tracking'
 Assert-Contains 'disable-transparent-huge-pages.service' 'THP disable service'
 Assert-Contains 'SystemMaxUse=384M' 'journald bounded disk usage'
 
