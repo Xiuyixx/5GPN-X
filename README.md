@@ -8,7 +8,7 @@
 
 ## 安装
 
-项目版本：**1.1.5**（见 [CHANGELOG](CHANGELOG.md)）。首次安装和升级使用同一个入口：
+项目版本：**1.1.6**（见 [CHANGELOG](CHANGELOG.md)）。首次安装和升级使用同一个入口：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Xiuyixx/5GPN-X/main/install.sh | sudo bash

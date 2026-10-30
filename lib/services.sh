@@ -637,15 +637,24 @@ install_ctl_entrypoint() {
         host-setup.sh
     )
     mkdir -p "${ctl_lib}"
-    local f
+    local f src dst
     for f in "${libs[@]}"; do
-        if [[ ! -f "${LIB_DIR}/${f}" ]]; then
+        src="${LIB_DIR}/${f}"
+        dst="${ctl_lib}/${f}"
+        if [[ ! -f "$src" ]]; then
             err "lib/${f} not found in ${LIB_DIR}; cannot build a self-contained 5gpn-ctl"
             return 1
         fi
-        install -m 0644 "${LIB_DIR}/${f}" "${ctl_lib}/${f}"
+        # The installed self-contained CLI may rebuild itself from the exact
+        # same /opt/5gpn/bin/lib tree. GNU install rejects that no-op as
+        # "same file"; skip it while still copying source-repository files.
+        if [[ "$(readlink -f "$src")" != "$(readlink -f "$dst" 2>/dev/null || true)" ]]; then
+            install -m 0644 "$src" "$dst"
+        fi
     done
-    install -m 0755 "${SCRIPT_PATH}" "${ctl_dir}/5gpn-ctl"
+    if [[ "$(readlink -f "$SCRIPT_PATH")" != "$(readlink -f "${ctl_dir}/5gpn-ctl" 2>/dev/null || true)" ]]; then
+        install -m 0755 "$SCRIPT_PATH" "${ctl_dir}/5gpn-ctl"
+    fi
 }
 
 setup_tgbot() {
