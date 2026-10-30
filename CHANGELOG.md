@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.5 — 2026-10-30
+
+- QUIC 代理支持 draft-29（`0xff00001d`）的 Initial Salt，修正长包头保护掩码为低四位。
+- 按偏移重组单个 Initial 内的乱序 CRYPTO 帧，正确处理 PING/PADDING 和 ACK，拒绝缺口、冲突重叠及超界输入；保持转发数据原样不变。修复现场 iOS TikTok API 握手被丢弃的问题，不声称跨数据报 ClientHello 重组或所有手机功能已验收。
+- 增加合成 v1/draft-29、损坏/截断包及帧边界回归测试，不公开手机抓包。
+
 ## 1.1.4 — 2026-10-30
 
 - 修正 iOS APNs 域名被默认合成为网关 IP 的链路缺口：`push.apple.com` 及其子域默认返回真实地址，不再把 TCP/5223 推送连接送到只代理 HTTP(S)/QUIC 的网关。保留显式 block/direct/proxy 覆盖优先级、公网客户端行为和 IPv4-only 策略；不新增监听或防火墙放行。

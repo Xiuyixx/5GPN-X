@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/binary"
 	"encoding/hex"
 	"net"
 	"os"
@@ -54,6 +57,131 @@ func TestExtractSNIDoesNotMutateInitialPacket(t *testing.T) {
 	}
 	if !bytes.Equal(packet, original) {
 		t.Fatalf("extractSNI mutated the packet")
+	}
+}
+
+// Synthetic ClientHello: no device identifiers, tickets or captured user traffic.
+func testHello() []byte {
+	host := []byte("api.example.test")
+	sni := []byte{0, byte(len(host) + 3), 0, 0, byte(len(host))}
+	sni = append(sni, host...)
+	ext := []byte{0, 0, 0, byte(len(sni))}
+	ext = append(ext, sni...)
+	body := append([]byte{3, 3}, make([]byte, 32)...)
+	body = append(body, 0, 0, 2, 0x13, 1, 1, 0, 0, byte(len(ext)))
+	body = append(body, ext...)
+	return append([]byte{1, 0, 0, byte(len(body))}, body...)
+}
+
+func cryptoFrame(offset byte, data []byte) []byte {
+	frame := []byte{6, offset, 0x40 | byte(len(data)>>8), byte(len(data))}
+	return append(frame, data...)
+}
+
+func testInitial(t *testing.T, version uint32, salt string, plaintext []byte) []byte {
+	t.Helper()
+	dcid := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	secret := hkdfExpandLabel(hkdfExtract([]byte(salt), dcid), "client in", nil, 32)
+	key := hkdfExpandLabel(secret, "quic key", nil, 16)
+	iv := hkdfExpandLabel(secret, "quic iv", nil, 12)
+	hp := hkdfExpandLabel(secret, "quic hp", nil, 16)
+	// Pad to a 1200-byte client Initial datagram. One-byte packet number.
+	const headerLen = 19
+	plain := append([]byte(nil), plaintext...)
+	plain = append(plain, make([]byte, 1200-headerLen-16-len(plain))...)
+	header := []byte{0xc0, 0, 0, 0, 0, 8}
+	binary.BigEndian.PutUint32(header[1:], version)
+	header = append(header, dcid...)
+	header = append(header, 0, 0) // empty SCID and token
+	length := 1 + len(plain) + 16
+	header = append(header, 0x40|byte(length>>8), byte(length), 1)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iv[11] ^= 1
+	packet := gcm.Seal(append([]byte(nil), header...), iv, plain, header)
+	hpBlock, err := aes.NewCipher(hp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mask := make([]byte, 16)
+	hpBlock.Encrypt(mask, packet[22:38]) // pn_offset + 4
+	packet[0] ^= mask[0] & 0x0f
+	packet[18] ^= mask[1]
+	return packet
+}
+
+func TestInitialVersionsAndCryptoReassembly(t *testing.T) {
+	hello := testHello()
+	// Like the observed client: shuffled CRYPTO offsets interspersed with PING.
+	frames := []byte{1, 0}
+	frames = append(frames, cryptoFrame(30, hello[30:])...)
+	frames = append(frames, 1)
+	frames = append(frames, cryptoFrame(0, hello[:12])...)
+	frames = append(frames, cryptoFrame(12, hello[12:30])...)
+	for _, tc := range []struct {
+		version uint32
+		salt    string
+	}{
+		{0x00000001, "38762cf7f55934b34d179ae6a4c80cadccbb7f0a"},
+		{0xff00001d, "afbfec289993d24c9e9786f19c6111e04390a899"},
+	} {
+		salt, _ := hex.DecodeString(tc.salt)
+		packet := testInitial(t, tc.version, string(salt), frames)
+		before := append([]byte(nil), packet...)
+		if host, ok := extractSNI(packet); !ok || host != "api.example.test" {
+			t.Fatalf("version %x: %q %v", tc.version, host, ok)
+		}
+		if !bytes.Equal(packet, before) {
+			t.Fatal("packet mutated")
+		}
+		for n := 0; n < len(packet); n++ {
+			if _, ok := extractSNI(packet[:n]); ok {
+				t.Fatalf("accepted truncated packet %d", n)
+			}
+		}
+		packet[len(packet)-1] ^= 1
+		if _, ok := extractSNI(packet); ok {
+			t.Fatal("accepted corrupted authentication tag")
+		}
+		binary.BigEndian.PutUint32(packet[1:5], 0x12345678)
+		if _, ok := extractSNI(packet); ok {
+			t.Fatal("accepted unknown version")
+		}
+	}
+}
+
+func TestCryptoFrameValidation(t *testing.T) {
+	hello := testHello()
+	good := cryptoFrame(0, hello)
+	cases := map[string][]byte{
+		"gap":           cryptoFrame(1, hello[1:]),
+		"truncated":     good[:len(good)-1],
+		"overflow":      {6, 0x80, 0x01, 0, 0, 1, 0},
+		"ack truncated": {2, 0},
+		"unknown":       {0x1f},
+	}
+	conflict := append([]byte(nil), good...)
+	conflict = append(conflict, cryptoFrame(0, []byte{2})...)
+	cases["overlap conflict"] = conflict
+	for name, data := range cases {
+		if _, ok := parseCryptoFrames(data); ok {
+			t.Errorf("accepted %s", name)
+		}
+	}
+	duplicate := append(append([]byte(nil), good...), good...)
+	if _, ok := parseCryptoFrames(duplicate); !ok {
+		t.Error("rejected matching retransmission")
+	}
+	for _, ack := range [][]byte{{2, 0, 0, 0, 0}, {3, 0, 0, 0, 0, 0, 0, 0}} {
+		if _, ok := parseCryptoFrames(append(ack, good...)); !ok {
+			t.Error("rejected ACK before CRYPTO")
+		}
 	}
 }
 

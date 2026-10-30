@@ -1,5 +1,5 @@
 // quic-proxy.go - Lightweight QUIC SNI transparent proxy
-// Listens on UDP :443, extracts SNI from QUIC Initial packets (RFC 9000),
+// Listens on UDP :443, extracts SNI from QUIC v1/draft-29 Initial packets,
 // then forwards UDP datagrams to the backend server.
 //
 // Pure Go standard library only (no external deps).
@@ -27,12 +27,25 @@ import (
 )
 
 const (
-	quicVersion1      = 0x00000001
-	longHeaderForm    = 0x80
-	initialPacketType = 0x00 // bits 4-5 of first byte = 00
-	initialSaltV1     = "\x38\x76\x2c\xf7\xf5\x59\x34\xb3\x4d\x17\x9a\xe6\xa4\xc8\x0c\xad\xcc\xbb\x7f\x0a"
-	tagSize           = 16
+	quicVersion1       = 0x00000001
+	quicVersionDraft29 = 0xff00001d
+	longHeaderForm     = 0x80
+	initialPacketType  = 0x00 // bits 4-5 of first byte = 00
+	initialSaltV1      = "\x38\x76\x2c\xf7\xf5\x59\x34\xb3\x4d\x17\x9a\xe6\xa4\xc8\x0c\xad\xcc\xbb\x7f\x0a"
+	initialSaltDraft29 = "\xaf\xbf\xec\x28\x99\x93\xd2\x4c\x9e\x97\x86\xf1\x9c\x61\x11\xe0\x43\x90\xa8\x99"
+	tagSize            = 16
 )
+
+func initialSaltForVersion(version uint32) ([]byte, bool) {
+	switch version {
+	case quicVersion1:
+		return []byte(initialSaltV1), true
+	case quicVersionDraft29:
+		return []byte(initialSaltDraft29), true
+	default:
+		return nil, false
+	}
+}
 
 var (
 	listenAddr  = flag.String("l", ":443", "Listen address (UDP)")
@@ -309,7 +322,7 @@ func (m *SessionManager) gcLoop() {
 	}
 }
 
-// extractSNI decrypts a QUIC v1 Initial packet and returns the SNI hostname.
+// extractSNI decrypts a supported QUIC Initial packet and returns the SNI hostname.
 func extractSNI(data []byte) (string, bool) {
 	if len(data) < 5 {
 		return "", false
@@ -318,7 +331,8 @@ func extractSNI(data []byte) (string, bool) {
 		return "", false // short header
 	}
 	version := binary.BigEndian.Uint32(data[1:5])
-	if version != quicVersion1 {
+	initialSalt, ok := initialSaltForVersion(version)
+	if !ok {
 		return "", false
 	}
 	pktType := (data[0] & 0x30) >> 4
@@ -365,7 +379,7 @@ func extractSNI(data []byte) (string, bool) {
 	protected := data[off : off+int(length)]
 
 	// Derive keys
-	initialSecret := hkdfExtract([]byte(initialSaltV1), dcid)
+	initialSecret := hkdfExtract(initialSalt, dcid)
 	clientInitialSecret := hkdfExpandLabel(initialSecret, "client in", nil, 32)
 	key := hkdfExpandLabel(clientInitialSecret, "quic key", nil, 16)
 	iv := hkdfExpandLabel(clientInitialSecret, "quic iv", nil, 12)
@@ -390,7 +404,9 @@ func extractSNI(data []byte) (string, bool) {
 	mask := make([]byte, 16)
 	hpCipher.Encrypt(mask, sample)
 
-	firstByte := data[0] ^ (mask[0] & 0x1f)
+	// Long-header protection masks only the low four bits; bit 4-5 are the
+	// packet type and remain visible for Initial packet classification.
+	firstByte := data[0] ^ (mask[0] & 0x0f)
 	pnLen := int(firstByte&0x03) + 1
 	if len(protected) < pnLen {
 		return "", false
@@ -498,113 +514,97 @@ func hkdfExpandLabel(secret []byte, label string, context []byte, length int) []
 	return hkdfExpand(secret, lbl, length)
 }
 
-// parseCryptoFrames scans QUIC frames for a CRYPTO frame containing ClientHello.
+// parseCryptoFrames reassembles bounded, possibly out-of-order CRYPTO frames
+// within an Initial packet. PING is payload-free, unlike ACK.
 func parseCryptoFrames(plaintext []byte) (string, bool) {
-	off := 0
-	for off < len(plaintext) {
-		if off >= len(plaintext) {
-			break
+	const maxHello = 65536
+	data := make([]byte, maxHello)
+	present := make([]bool, maxHello)
+	end := 0
+	read := func() (uint64, bool) {
+		v, n := readVarint(plaintext)
+		if n == 0 {
+			return 0, false
 		}
-		frameType := plaintext[off]
-		off++
-		switch frameType {
-		case 0x00:
-			for off < len(plaintext) && plaintext[off] == 0x00 {
-				off++
-			}
-		case 0x06:
-			_, n := readVarint(plaintext[off:])
-			if n == 0 {
+		plaintext = plaintext[n:]
+		return v, true
+	}
+	for len(plaintext) > 0 {
+		kind, ok := read()
+		if !ok {
+			return "", false
+		}
+		switch kind {
+		case 0, 1: // PADDING, PING
+		case 6: // CRYPTO
+			offset, ok := read()
+			if !ok {
 				return "", false
 			}
-			off += n
-			dataLen, n := readVarint(plaintext[off:])
-			if n == 0 || uint64(len(plaintext)-off) < dataLen {
+			length, ok := read()
+			if !ok || length > uint64(len(plaintext)) || offset > maxHello || length > maxHello-offset {
 				return "", false
 			}
-			off += n
-			data := plaintext[off : off+int(dataLen)]
-			sni, ok := extractSNIFromClientHello(data)
-			if ok && sni != "" {
-				return sni, true
-			}
-			off += int(dataLen)
-		case 0x01, 0x02, 0x03:
-			_, n := readVarint(plaintext[off:])
-			if n == 0 {
-				return "", false
-			}
-			off += n
-			_, n = readVarint(plaintext[off:])
-			if n == 0 {
-				return "", false
-			}
-			off += n
-			ackRangeCount, n := readVarint(plaintext[off:])
-			if n == 0 {
-				return "", false
-			}
-			off += n
-			_, n = readVarint(plaintext[off:])
-			if n == 0 {
-				return "", false
-			}
-			off += n
-			for i := uint64(0); i < ackRangeCount; i++ {
-				_, n = readVarint(plaintext[off:])
-				if n == 0 {
+			for i, value := range plaintext[:int(length)] {
+				pos := int(offset) + i
+				if present[pos] && data[pos] != value {
 					return "", false
 				}
-				off += n
-				_, n = readVarint(plaintext[off:])
-				if n == 0 {
+				data[pos], present[pos] = value, true
+			}
+			if last := int(offset + length); last > end {
+				end = last
+			}
+			plaintext = plaintext[int(length):]
+		case 2, 3: // ACK, ACK_ECN
+			if _, ok := read(); !ok {
+				return "", false
+			}
+			if _, ok := read(); !ok {
+				return "", false
+			}
+			ranges, ok := read()
+			if !ok {
+				return "", false
+			}
+			if _, ok := read(); !ok {
+				return "", false
+			}
+			if ranges > uint64(len(plaintext)/2) {
+				return "", false
+			}
+			for i := uint64(0); i < ranges; i++ {
+				if _, ok := read(); !ok {
 					return "", false
 				}
-				off += n
+				if _, ok := read(); !ok {
+					return "", false
+				}
 			}
-			if frameType == 0x03 {
+			if kind == 3 {
 				for i := 0; i < 3; i++ {
-					_, n = readVarint(plaintext[off:])
-					if n == 0 {
+					if _, ok := read(); !ok {
 						return "", false
 					}
-					off += n
 				}
 			}
 		default:
-			if frameType&0x08 != 0 {
-				_, n := readVarint(plaintext[off:])
-				if n == 0 {
-					return "", false
-				}
-				off += n
-				if frameType&0x04 != 0 {
-					_, n = readVarint(plaintext[off:])
-					if n == 0 {
-						return "", false
-					}
-					off += n
-				}
-				var dataLen uint64
-				if frameType&0x02 != 0 {
-					dataLen, n = readVarint(plaintext[off:])
-					if n == 0 {
-						return "", false
-					}
-					off += n
-				} else {
-					dataLen = uint64(len(plaintext) - off)
-				}
-				if uint64(len(plaintext)-off) < dataLen {
-					return "", false
-				}
-				off += int(dataLen)
-			} else {
-				return "", false
-			}
+			return "", false // Unknown/invalid Initial frames are not guessed.
 		}
 	}
-	return "", false
+	if end < 4 || data[0] != 1 {
+		return "", false
+	}
+	size := 4 + (int(data[1]) << 16) + (int(data[2]) << 8) + int(data[3])
+	if size > end || size > maxHello {
+		return "", false
+	}
+	for _, exists := range present[:size] {
+		if !exists {
+			return "", false
+		}
+	}
+	return extractSNIFromClientHello(data[:size])
 }
 
 // extractSNIFromClientHello parses a TLS ClientHello from either a TLS record
