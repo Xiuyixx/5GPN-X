@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2329
 # The configuration globals near the top of this file are shared with the
 # sourced lib/*.sh modules. Per-file shellcheck cannot see that cross-module
 # use (the original single-file install.sh made it obvious), so SC2034 is

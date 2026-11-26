@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2329
 # 5GPN-X module: rules
 # Extracted verbatim from install.sh (original formatting preserved).
 # Sourced by install.sh; not meant to run standalone.
