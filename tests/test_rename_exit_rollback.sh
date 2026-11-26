@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2317 # set_exit is redefined to exercise two rollback outcomes.
+# shellcheck disable=SC2317,SC2329 # set_exit is redefined and invoked indirectly.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
