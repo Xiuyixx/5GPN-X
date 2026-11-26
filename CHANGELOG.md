@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.9
+
+- 补齐 CI 对实际参与部署的 `lib/host-setup.sh` 的 ShellCheck 覆盖，避免主机调优与防火墙模块绕过远端静态检查。
+
 ## 1.1.8 — 2026-10-30
 
 - 修复 iOS Mail 使用 Gmail/Googlemail 的 IMAP、SMTP 或 POP 时，邮件服务器被透明网关合成地址而无法访问的问题；`imap/smtp/pop.gmail.com` 及对应 `googlemail.com` 主机名现在解析真实地址，供 TCP/993、465、587、995、110、143 直连。网关仍不开放这些邮件端口。
