@@ -101,9 +101,17 @@ COMMIT="${COMMIT,,}"
 export PGW_COMMIT="$COMMIT"
 mode=install
 if [[ $# -eq 0 ]]; then
-    # A checkout alone is NOT an installation. Recognize deployed runtime
-    # state, including historical non-Git installs without a version marker.
-    if [[ -f "$MARKER" || -f "$ATTEMPT" || -f "${RUNTIME_DIR}/bin/5gpn-ctl" || -s "${RUNTIME_DIR}/etc/.domain" ]]; then
+    # A checkout alone is NOT an installation. A failed first install may leave
+    # a domain or attempt marker, but without the runtime prerequisites it must
+    # retry the first-install flow instead of entering the strict upgrade path.
+    runtime_complete=0
+    if [[ -f "$MARKER" ||
+          ( -s "${RUNTIME_DIR}/etc/.domain" &&
+            -s /etc/mosdns/config.yaml &&
+            -x "${RUNTIME_DIR}/bin/quic-proxy" ) ]]; then
+        runtime_complete=1
+    fi
+    if [[ "$runtime_complete" == 1 ]]; then
         mode=upgrade
         installed="$(cat "$MARKER" 2>/dev/null || true)"
         if [[ "$installed" == "$COMMIT" && ! -e "$ATTEMPT" ]]; then
@@ -111,6 +119,8 @@ if [[ $# -eq 0 ]]; then
             exit 0
         fi
         info "检测到已有安装（${installed:-legacy/unversioned}），保留配置并升级。"
+    elif [[ -e "$ATTEMPT" || -s "${RUNTIME_DIR}/etc/.domain" ]]; then
+        info "检测到上次首次安装未完成，保留已有输入并重试首次安装。"
     else
         info "未检测到已有安装，开始首次安装。"
     fi

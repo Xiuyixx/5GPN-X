@@ -77,10 +77,19 @@ exit "${FAIL_INSTALL:-0}"
                 (self.runtime / ".installed-commit").write_text(marker)
             result = self.run_launcher()
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.base / "install.calls").read_text(), "--upgrade\n--upgrade\n")
+        self.assertEqual((self.base / "install.calls").read_text(), "\n--upgrade\n")
         self.assertEqual((self.runtime / "etc/.domain").read_text(), "saved.example.org\n")
         self.assertFalse((self.runtime / ".git").exists())
         self.assertEqual((self.base / "input").read_text(), "")
+
+    def test_incomplete_first_install_retries_fresh_flow(self):
+        (self.runtime / "etc").mkdir(parents=True)
+        (self.runtime / "etc/.domain").write_text("saved.example.org\n")
+        (self.runtime / ".install-attempt").write_text("mode=install\n")
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base / "install.calls").read_text(), "\n")
+        self.assertEqual((self.base / "input").read_text(), "payload\n")
 
     def test_failure_preserves_marker_and_retry(self):
         self.legacy()

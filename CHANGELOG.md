@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.13
+
+- 修复首次安装中途失败后留下 `.install-attempt` 或域名输入时，重复执行安装器误判为旧安装并进入升级前置检查的问题；不完整运行时现在会保留输入并重试首次安装。
+
 ## 1.1.12
 
 - 修复 Debian 13（Autoconf 2.72）首次安装 sniproxy 时未初始化旧版 libtool/aclocal 宏，导致 `AC_LIB_*` 宏未定义、`configure` 生成失败的问题。
