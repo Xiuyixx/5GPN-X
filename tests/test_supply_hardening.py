@@ -68,7 +68,7 @@ install_deps
         self.assertIn('rm -f aclocal.m4 configure config.log config.status configure~ ltmain.sh', block)
         self.assertIn('rm -f m4/libtool.m4 m4/ltoptions.m4 m4/ltsugar.m4', block)
         self.assertIn('libtoolize --install --copy --force', block)
-        self.assertIn('aclocal --install --force -I m4', block)
+        self.assertIn('aclocal --install --force -I m4 -I /usr/share/aclocal', block)
         self.assertLess(block.index('rm -f aclocal.m4'), block.index('source_status'))
 
     def test_sniproxy_fetch_failure_never_builds(self):

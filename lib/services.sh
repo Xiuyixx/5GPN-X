@@ -216,7 +216,7 @@ install_sniproxy() {
             # autogen.sh. Seed the macros before autoreconf, otherwise
             # configure is generated with literal AC_LIB_* calls and fails.
             libtoolize --install --copy --force || exit 1
-            aclocal --install --force -I m4 || exit 1
+            aclocal --install --force -I m4 -I /usr/share/aclocal || exit 1
             DEBEMAIL="root@localhost" DEBFULLNAME="root" ./autogen.sh || exit 1
             ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns || exit 1
             make -j"${MAKE_JOBS:-$(nproc)}" || exit 1

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.16
+
+- 修复 Debian 13 sniproxy 构建缺少系统 Autotools 宏搜索路径的问题；`aclocal` 现在同时加载项目 `m4` 和 `/usr/share/aclocal`，可正确展开旧版 `AC_LIB_*` 宏。
+
 ## 1.1.15
 
 - 修复 sniproxy 重试时将安装器上一轮生成的 `ltmain.sh`、`m4/*.m4` 等未跟踪构建文件误判为源码修改，导致每次重试都在清理前退出的问题。
