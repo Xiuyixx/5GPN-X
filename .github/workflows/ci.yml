@@ -116,11 +116,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
-      - name: Test Go core and quic-proxy
+      - name: Test Go core and runtime installer
         run: |
           set -euo pipefail
           go test ./...
           go vet ./...
+          bash tests/test_go_runtime_installer.sh
+          PGW_GO_PREFIX="$(mktemp -d)" PGW_GO_CONFIG="$(mktemp -u)" PGW_GO_OFFSET="$(mktemp -u)" PGW_GO_ENABLE=0 scripts/install-go-runtime.sh >/tmp/5gpn-go-install.out
+          test -s /tmp/5gpn-go-install.out
           for prog in quic-proxy; do
             dir="$(mktemp -d)"
             cp "lib/${prog}.go" "lib/${prog}_test.go" "$dir/"
