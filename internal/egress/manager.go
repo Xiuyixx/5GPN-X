@@ -64,7 +64,8 @@ func (m *Manager) SetApp(key, target string) error {
 	return m.saveLocked()
 }
 
-func validateEgress(cfg config.Config, name string) error {
+// ValidateTarget checks whether a routing target is DIRECT or a configured egress.
+func ValidateTarget(cfg config.Config, name string) error {
 	if name == "" || name == Direct {
 		return nil
 	}
@@ -74,6 +75,10 @@ func validateEgress(cfg config.Config, name string) error {
 		}
 	}
 	return fmt.Errorf("unknown egress %q", name)
+}
+
+func validateEgress(cfg config.Config, name string) error {
+	return ValidateTarget(cfg, name)
 }
 
 func (m *Manager) saveLocked() error {
