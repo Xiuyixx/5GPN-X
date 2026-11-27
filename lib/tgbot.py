@@ -950,11 +950,13 @@ def exits_detail_text(name):
 
 def exit_detail_menu(name):
     rows = []
+    current = (_read_file("/opt/5gpn/etc/current-exit") or "local").strip()
     if name != "local":
-        rows.append([{"text": "✅ 设为默认出口", "callback_data": "exit_set:" + name},
-                     {"text": "🩺 测试", "callback_data": "exit_test:" + name}])
-        rows.append([{"text": "✏️ 重命名", "callback_data": "exit_rename:" + name},
-                     {"text": "🗑 删除", "callback_data": "exit_delete:" + name}])
+        if name != current:
+            rows.append([{"text": "设为默认出口", "callback_data": "exit_set:" + name}])
+        rows.append([{"text": "测试", "callback_data": "exit_test:" + name},
+                     {"text": "改名", "callback_data": "exit_rename:" + name}])
+        rows.append([{"text": "删除", "callback_data": "exit_delete:" + name}])
     rows.append([{"text": "« 返回出口", "callback_data": "menu:exits"}])
     return rows
 
@@ -1968,19 +1970,21 @@ def policy_targets_menu(idx):
 
 
 def exits_menu():
+    current = (_read_file("/opt/5gpn/etc/current-exit") or "local").strip()
     rows, row = [], []
     for name in parse_exit_names():
         if name == "smart":
             continue
         label = "本机直出" if name == "local" else name
-        row.append({"text": "➡ " + label, "callback_data": "exit:" + name})
+        mark = "●" if name == current else "○"
+        row.append({"text": "%s %s" % (mark, label), "callback_data": "exit:" + name})
         if len(row) == 2:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([{"text": "➕ 添加出口", "callback_data": "exit_add"}])
-    rows.append([{"text": "🩺 检查出口连通性", "callback_data": "exits:check"}])
+    rows.append([{"text": "添加出口", "callback_data": "exit_add"}])
+    rows.append([{"text": "检查出口连通性", "callback_data": "exits:check"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
     return rows
 
