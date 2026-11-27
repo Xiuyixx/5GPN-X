@@ -104,7 +104,6 @@ install_deps() {
         printf '%s\n' 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
     fi
     ok "Go version: $(go version)"
-    install_pcre1_if_needed || return 1
     if command -v certbot >/dev/null 2>&1; then
         if ! certbot --version >/dev/null 2>&1; then
             err "Certbot is installed but cannot run; refusing an unpinned root pip upgrade"
@@ -244,6 +243,7 @@ install_sniproxy() {
             git fetch --quiet https://github.com/dlundquist/sniproxy.git "$sniproxy_commit" || exit 1
             git checkout --quiet --detach "$sniproxy_commit" || exit 1
             [[ "$(git rev-parse HEAD)" == "$sniproxy_commit" ]] || exit 1
+            install_pcre1_if_needed || exit 1
             # Debian 13 ships Autoconf 2.72 and this pinned sniproxy commit
             # references libtool macros that are not initialized by its legacy
             # autogen.sh. Seed the macros before autoreconf, otherwise
