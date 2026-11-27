@@ -1548,11 +1548,21 @@ def op_set_app(key, action):
     return result
 
 
+def app_menu_text():
+    selected = []
+    for key, _, label, _, _ in APP_CATALOG:
+        action = _app_rule_state(key)
+        if action:
+            selected.append("%s → %s" % (label, action))
+    if selected:
+        return "📱 <b>应用分流</b>\n\n<b>已单独设置</b>\n" + "\n".join(selected) + "\n\n选择应用进行设置。"
+    return "📱 <b>应用分流</b>\n\n<i>给常用应用单独选择出口；未设置时跟随默认出口。</i>\n\n选择应用进行设置。"
+
+
 def app_menu():
     rows, row = [], []
     for key, emoji, label, icon_id, _ in APP_CATALOG:
-        row.append({"text": label,
-                    "icon_custom_emoji_id": icon_id, "callback_data": "app:" + key})
+        row.append({"text": label, "icon_custom_emoji_id": icon_id, "callback_data": "app:" + key})
         if len(row) == 2:
             rows.append(row)
             row = []
@@ -1563,19 +1573,20 @@ def app_menu():
 
 
 def app_targets_menu(key):
+    current = _app_rule_state(key)
     rows, row = [], []
-    for name in _targets():
-        if name == "smart":
-            continue
-        row.append({"text": name, "callback_data": "appset:%s:%s" % (key, name)})
-        if len(row) == 3:
+    choices = [("", "跟随默认"), ("direct", "本机直出")]
+    choices += [(name, name) for name in _targets() if name != "smart"]
+    for value, label in choices:
+        shown = ("● " if value == current or (not value and not current) else "") + label
+        arg = value or "-"
+        row.append({"text": shown, "callback_data": "appset:%s:%s" % (key, arg)})
+        if len(row) == 2:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([{"text": "本机直出", "callback_data": "appset:%s:local" % key}])
-    rows.append([{"text": "↩️ 跟随默认", "callback_data": "appset:%s:-" % key},
-                 {"text": "« 返回应用", "callback_data": "apps"}])
+    rows.append([{"text": "« 返回应用", "callback_data": "apps"}])
     return rows
 
 
@@ -2259,7 +2270,7 @@ def handle_callback(cb):
     elif data == "menu:rules":
         edit(cb, "📑 <b>分流管理</b>：按域名把代理流量分到不同出口 / 直连 / 拒绝。", rules_menu())
     elif data == "apps":
-        edit(cb, "📱 <b>应用分流</b>\n\n选择常用应用，为其快捷指定出口。", app_menu())
+        edit(cb, app_menu_text(), app_menu())
     elif data.startswith("app:"):
         key = data[4:]
         item = _app_entry(key)
