@@ -12,11 +12,17 @@ import (
 // Fields intentionally mirror 5gpn-next so later services can share the model.
 type Config struct {
 	Egress      []EgressConfig    `json:"egress"`
+	Bot         BotConfig         `json:"bot,omitempty"`
 	Rules       []string          `json:"rules"`
 	RuleSets    []RuleSetConfig   `json:"rulesets,omitempty"`
 	Final       string            `json:"final"`
 	Apps        map[string]string `json:"apps,omitempty"`
 	AppsChanged map[string]int64  `json:"apps_changed,omitempty"`
+}
+
+type BotConfig struct {
+	Token  string  `json:"token"`
+	Admins []int64 `json:"admins"`
 }
 
 type RuleSetConfig struct {
