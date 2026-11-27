@@ -12,6 +12,7 @@ import (
 	"github.com/Xiuyixx/5GPN-X/internal/bot"
 	"github.com/Xiuyixx/5GPN-X/internal/config"
 	gdns "github.com/Xiuyixx/5GPN-X/internal/dns"
+	"github.com/Xiuyixx/5GPN-X/internal/ingress"
 	"github.com/Xiuyixx/5GPN-X/internal/manage"
 	"github.com/Xiuyixx/5GPN-X/internal/migrate"
 	"github.com/Xiuyixx/5GPN-X/internal/quic"
@@ -148,6 +149,15 @@ func runAll(m *manage.Manager) error {
 		errs <- p.Wait()
 	}()
 	go func() {
+		if cfg.WhatsApp.NativeRelay {
+			p, err := ingress.NewTCPProxy(cfg.WhatsApp.Listen, cfg.WhatsApp.Upstream)
+			if err != nil {
+				errs <- err
+				return
+			}
+			errs <- p.Serve(ctx)
+			return
+		}
 		if !cfg.WhatsApp.Enabled {
 			errs <- nil
 			return

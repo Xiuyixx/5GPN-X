@@ -30,11 +30,12 @@ type QUICConfig struct {
 	DNSFile string `json:"dns_file,omitempty"`
 }
 type WhatsAppConfig struct {
-	Enabled  bool   `json:"enabled"`
-	Binary   string `json:"binary,omitempty"`
-	Listen   string `json:"listen,omitempty"`
-	Upstream string `json:"upstream,omitempty"`
-	DNS      string `json:"dns,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Binary      string `json:"binary,omitempty"`
+	Listen      string `json:"listen,omitempty"`
+	Upstream    string `json:"upstream,omitempty"`
+	DNS         string `json:"dns,omitempty"`
+	NativeRelay bool   `json:"native_relay,omitempty"`
 }
 
 type DNSConfig struct {
