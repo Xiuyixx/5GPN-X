@@ -4,6 +4,8 @@
 
 - 默认透明代理客户端网段：`172.22.0.0/16`
 - 项目版本：**1.1.23**（见 [CHANGELOG](CHANGELOG.md)）
+
+> 当前主架构：Go runtime（`go-install.sh`）。旧 `install.sh` 仅作为迁移回滚入口，Go-first 安装完成服务器验收后将移除。Web 面板和广告拦截不属于本次 Go 重构范围。
 - 支持：Ubuntu 20.04+、Debian 11+、RHEL 系 8+、Fedora 39+；`amd64` / `arm64`
 
 > [!IMPORTANT]
