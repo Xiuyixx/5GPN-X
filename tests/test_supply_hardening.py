@@ -64,8 +64,10 @@ install_deps
         marker = '[[ "$(git rev-parse HEAD)" == "$sniproxy_commit" ]]'
         start = text.index(marker)
         block = text[start:text.index('make -j', start)]
+        self.assertIn('rm -rf autom4te.cache', block)
+        self.assertIn('rm -f aclocal.m4 configure config.log config.status', block)
         self.assertIn('libtoolize --install --copy --force', block)
-        self.assertIn('aclocal --install --force', block)
+        self.assertIn('aclocal --install --force -I m4', block)
 
     def test_sniproxy_fetch_failure_never_builds(self):
         with tempfile.TemporaryDirectory() as tmp:
