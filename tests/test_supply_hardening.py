@@ -71,6 +71,11 @@ install_deps
         self.assertIn('aclocal --install --force -I m4 -I /usr/share/aclocal', block)
         self.assertLess(block.index('rm -f aclocal.m4'), block.index('source_status'))
 
+    def test_sniproxy_build_dependencies_include_gettext_macros(self):
+        text = (ROOT / "lib/services.sh").read_text()
+        self.assertIn('autoconf automake libtool gettext pkg-config', text)
+        self.assertIn('autoconf automake libtool gettext pkgconfig', text)
+
     def test_sniproxy_fetch_failure_never_builds(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "sniproxy"

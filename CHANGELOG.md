@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.17
+
+- 修复 Debian 13 sniproxy 构建缺少 gettext 提供的 `lib-prefix.m4` / `lib-link.m4` 系统宏问题；Debian 与 RHEL 系依赖现在显式安装 `gettext`。
+
 ## 1.1.16
 
 - 修复 Debian 13 sniproxy 构建缺少系统 Autotools 宏搜索路径的问题；`aclocal` 现在同时加载项目 `m4` 和 `/usr/share/aclocal`，可正确展开旧版 `AC_LIB_*` 宏。

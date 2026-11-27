@@ -40,7 +40,7 @@ install_deps() {
             if apt-get -o DPkg::Lock::Timeout="$apt_lock_timeout" install -y -qq \
                 build-essential git wget curl ca-certificates \
                 libev-dev "${pcre_dev_pkg}" libudns-dev libssl-dev \
-                autoconf automake libtool pkg-config \
+                autoconf automake libtool gettext pkg-config \
                 certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap2-bin \
                 nftables qrencode wireguard-tools >>"$pkg_log" 2>&1; then
@@ -54,7 +54,7 @@ install_deps() {
             if "$PKG_MGR" install -y -q \
                 gcc gcc-c++ make git wget curl ca-certificates \
                 libev-devel pcre-devel openssl-devel \
-                autoconf automake libtool pkgconfig \
+                autoconf automake libtool gettext pkgconfig \
                 certbot python3-certbot-dns-cloudflare \
                 python3 python3-pip jq libcap-ng-utils \
                 nftables qrencode wireguard-tools >>"$pkg_log" 2>&1; then
