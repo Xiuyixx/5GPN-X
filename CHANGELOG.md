@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.21
+
+- 重构智能分流规则校验：保持现有规则/出口/Bot/UI 兼容，强化 first-match 语义，要求 `FINAL` 位于末尾，规范化域名与 CIDR，并拒绝无效值和控制字符。
+
 ## 1.1.20
 
 - 修复 sniproxy 重建时复用无 libudns 对象文件的问题，强制删除旧 C/Libtool 对象并显式启用 libudns。

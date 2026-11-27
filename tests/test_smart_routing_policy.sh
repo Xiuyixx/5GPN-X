@@ -54,6 +54,14 @@ printf 'DOMAIN-SUFFIX,example.com,typo-exit\n' > "${tmp}/bad.conf"
 if EXITS_DIR="${tmp}/exits" WG_DIR="${tmp}/wg" python3 "${gen}" "${tmp}/bad.conf" >/dev/null 2>&1; then
     fail "unknown rule targets must not silently fall back to direct"
 fi
+printf 'FINAL,us\nDOMAIN-SUFFIX,late.example,us\n' > "${tmp}/final-middle.conf"
+if EXITS_DIR="${tmp}/exits" WG_DIR="${tmp}/wg" python3 "${gen}" "${tmp}/final-middle.conf" >/dev/null 2>&1; then
+    fail "rules after FINAL must be rejected"
+fi
+printf 'DOMAIN-SUFFIX,Example.COM,us\nIP-CIDR,1.2.3.9/24,us\nFINAL,block\n' > "${tmp}/normalize.conf"
+out="$(EXITS_DIR="${tmp}/exits" WG_DIR="${tmp}/wg" python3 "${gen}" "${tmp}/normalize.conf")"
+grep -q 'DOMAIN-SUFFIX,example.com,us' <<<"$out" || fail "domain rules must normalize"
+grep -q 'IP-CIDR,1.2.3.0/24,us' <<<"$out" || fail "CIDR rules must normalize"
 
 [[ "${install_body}" == *'set_rules()'* && "${install_body}" == *'add_rule()'* && "${install_body}" == *'add_ruleset()'* ]] || fail "rule management functions missing"
 [[ "${install_body}" == *'--set-rules)'* && "${install_body}" == *'--add-rule)'* && "${install_body}" == *'--add-ruleset)'* ]] || fail "rule dispatch missing"

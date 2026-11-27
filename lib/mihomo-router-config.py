@@ -152,6 +152,24 @@ def cache_content(content, suffix):
     return path
 
 
+def normalize_rule_value(kind, value, line_number):
+    value = value.strip()
+    if not value or any(ord(ch) < 32 for ch in value):
+        die("line %d: %s value is empty or contains control characters" % (line_number, kind))
+    if kind in ("DOMAIN", "DOMAIN-SUFFIX"):
+        value = value.lower().strip(".")
+        if not DOMAIN_RE.match(value):
+            die("line %d: invalid %s domain '%s'" % (line_number, kind, value))
+    elif kind == "DOMAIN-KEYWORD":
+        value = value.lower()
+    elif kind in ("IP-CIDR", "IP-CIDR6"):
+        try:
+            value = str(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            die("line %d: invalid IP-CIDR '%s'" % (line_number, value))
+    return value
+
+
 def main():
     if len(sys.argv) != 2:
         die("usage: mihomo-router-config.py <rules-file>")
@@ -243,6 +261,7 @@ def main():
                 providers[tag] = {"type": "file", "behavior": "classical", "format": "yaml", "path": cached}
         rules.append("RULE-SET,%s,%s" % (tag, policy))
 
+    parsed_lines = []
     with open(rules_path, encoding="utf-8") as handle:
         for line_number, raw in enumerate(handle, 1):
             line = raw.strip()
@@ -250,28 +269,37 @@ def main():
                 continue
             parts = [part.strip() for part in line.split(",")]
             kind = parts[0].upper().replace("_", "-")
-            if kind == "FINAL":
-                if len(parts) < 2:
-                    die("line %d: FINAL needs a policy" % line_number)
-                final = target(parts[1])
-                continue
-            if len(parts) < 3:
-                die("line %d: rule needs <type>,<value>,<policy>" % line_number)
-            value, policy = parts[1], target(parts[2])
-            if kind in ("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6"):
-                rules.append("%s,%s,%s" % (kind, value, policy))
-            elif kind == "GEOSITE":
-                tag = "geosite_" + re.sub(r"[^a-z0-9_-]", "", value.lower())
-                add_mrs(tag, GEOSITE_MRS % value.lower(), "domain")
-                rules.append("RULE-SET,%s,%s" % (tag, policy))
-            elif kind == "GEOIP":
-                tag = "geoip_" + re.sub(r"[^a-z0-9_-]", "", value.lower())
-                add_mrs(tag, GEOIP_MRS % value.lower(), "ipcidr")
-                rules.append("RULE-SET,%s,%s" % (tag, policy))
-            elif kind in ("RULE-SET", "RULESET"):
-                add_ruleset(value, policy)
-            else:
-                die("line %d: unsupported rule type '%s'" % (line_number, parts[0]))
+            parsed_lines.append((line_number, kind, parts))
+
+    final_seen = False
+    for line_number, kind, parts in parsed_lines:
+        if final_seen:
+            die("line %d: rules after FINAL are not allowed; FINAL must be last" % line_number)
+        if kind == "FINAL":
+            if len(parts) != 2 or not parts[1]:
+                die("line %d: FINAL needs exactly one policy" % line_number)
+            final = target(parts[1])
+            final_seen = True
+            continue
+        if len(parts) < 3:
+            die("line %d: rule needs <type>,<value>,<policy>" % line_number)
+        value = parts[1]
+        policy = target(parts[2])
+        if kind in ("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6"):
+            value = normalize_rule_value(kind, value, line_number)
+            rules.append("%s,%s,%s" % (kind, value, policy))
+        elif kind == "GEOSITE":
+            tag = "geosite_" + re.sub(r"[^a-z0-9_-]", "", value.lower())
+            add_mrs(tag, GEOSITE_MRS % value.lower(), "domain")
+            rules.append("RULE-SET,%s,%s" % (tag, policy))
+        elif kind == "GEOIP":
+            tag = "geoip_" + re.sub(r"[^a-z0-9_-]", "", value.lower())
+            add_mrs(tag, GEOIP_MRS % value.lower(), "ipcidr")
+            rules.append("RULE-SET,%s,%s" % (tag, policy))
+        elif kind in ("RULE-SET", "RULESET"):
+            add_ruleset(value, policy)
+        else:
+            die("line %d: unsupported rule type '%s'" % (line_number, parts[0]))
     rules.append("MATCH,%s" % final)
     config = {"mode": "rule", "log-level": "warning", "ipv6": False, "find-process-mode": "off",
               "tun": {"enable": True, "stack": os.environ.get("MIHOMO_STACK", "gvisor"),
