@@ -3,10 +3,12 @@ package policy
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/Xiuyixx/5GPN-X/internal/apps"
 	"github.com/Xiuyixx/5GPN-X/internal/config"
+	"github.com/Xiuyixx/5GPN-X/internal/rules"
 )
 
 type Action string
@@ -21,9 +23,15 @@ type Decision struct {
 	Rule   string
 }
 
-type Engine struct{ cfg config.Config }
+type Engine struct {
+	cfg    config.Config
+	parsed []rules.Rule
+}
 
-func New(cfg config.Config) Engine { return Engine{cfg: cfg} }
+func New(cfg config.Config) Engine {
+	parsed, _ := rules.Parse(cfg.Rules, func(target string) bool { return ValidateTarget(cfg, target) == nil })
+	return Engine{cfg: cfg, parsed: parsed}
+}
 
 func (e Engine) Match(appKey, domain string) Decision {
 	if target, ok := e.cfg.Apps[appKey]; ok {
@@ -35,10 +43,9 @@ func (e Engine) Match(appKey, domain string) Decision {
 			}
 		}
 	}
-	for _, rule := range e.cfg.Rules {
-		parts := strings.Split(rule, ",")
-		if len(parts) >= 3 && strings.HasSuffix(strings.ToLower(domain), strings.TrimPrefix(strings.ToLower(parts[1]), ".")) {
-			return Decision{Action: parts[2], Rule: rule}
+	for _, rule := range e.parsed {
+		if rule.Matches(domain, netip.Addr{}) {
+			return Decision{Action: rule.Target, Rule: rule.Raw}
 		}
 	}
 	return Decision{Action: e.cfg.Final, Rule: "FINAL"}

@@ -13,9 +13,17 @@ import (
 type Config struct {
 	Egress      []EgressConfig    `json:"egress"`
 	Rules       []string          `json:"rules"`
+	RuleSets    []RuleSetConfig   `json:"rulesets,omitempty"`
 	Final       string            `json:"final"`
 	Apps        map[string]string `json:"apps,omitempty"`
 	AppsChanged map[string]int64  `json:"apps_changed,omitempty"`
+}
+
+type RuleSetConfig struct {
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Path     string `json:"path,omitempty"`
+	Behavior string `json:"behavior,omitempty"`
 }
 
 type EgressConfig struct {
