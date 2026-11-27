@@ -17,7 +17,7 @@ if [[ ! -f "$config" && -f "$legacy_rules" ]]; then
   trap 'rm -rf "$temp_root"' EXIT
   mkdir -p "$temp_root/bin" "$temp_root/etc"
   cp "$bin" "$temp_root/bin/5gpn-go"
-  PGW_GO_CONFIG="$config" "$temp_root/bin/5gpn-go" migrate
+  PGW_GO_CONFIG="$config" PGW_LEGACY_CONF="$legacy_conf" PGW_LEGACY_EXITS="$legacy_exits" PGW_LEGACY_RULES="$legacy_rules" "$temp_root/bin/5gpn-go" migrate
 fi
 chmod 0755 "$bin"
 # Generate the unit with stable paths and explicit service hardening.

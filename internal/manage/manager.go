@@ -59,6 +59,13 @@ func (m *Manager) Decision(appKey, domain string) policy.Decision {
 	return policy.New(m.cfg).Match(appKey, domain)
 }
 
+func (m *Manager) SetBot(token string, admins []int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg.Bot = config.BotConfig{Token: token, Admins: append([]int64(nil), admins...)}
+	return m.saveLocked()
+}
+
 func (m *Manager) AddURI(raw string) (config.EgressConfig, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
