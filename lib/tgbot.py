@@ -348,8 +348,13 @@ def console_async(chat_id, text_fn, keyboard=None, mono=False, keyboard_fn=None,
     generation = _chat_generation(chat_id) if generation is None else generation
 
     def go():
-        text = text_fn()
-        kb = keyboard_fn() if keyboard_fn else keyboard
+        try:
+            text = text_fn()
+            kb = keyboard_fn() if keyboard_fn else keyboard
+        except Exception as exc:
+            print("[err] console task failed: %s" % type(exc).__name__, file=sys.stderr)
+            text = "❌ 操作失败，请稍后重试；如持续异常，请查看 Bot 日志。"
+            kb = keyboard
         upsert_console(chat_id, text, kb, mono, message_id=mid, generation=generation)
 
     background(go)
@@ -446,7 +451,11 @@ def edit_async(cb, text_fn, keyboard=None, mono=False):
 
     def go():
         try:
-            text = text_fn()
+            try:
+                text = text_fn()
+            except Exception as exc:
+                print("[err] callback task failed: %s" % type(exc).__name__, file=sys.stderr)
+                text = "❌ 操作失败，请稍后重试；如持续异常，请查看 Bot 日志。"
             # Check under the lock, but perform editMessageText outside it:
             # Telegram/DNS stalls must not serialize unrelated callbacks.
             with _GENERATION_LOCK:
@@ -466,7 +475,11 @@ def edit_ios_async(cb, chat_id):
 
     def go():
         try:
-            res = op_ios_send_inline(cb, generation)
+            try:
+                res = op_ios_send_inline(cb, generation)
+            except Exception as exc:
+                print("[err] iOS callback task failed: %s" % type(exc).__name__, file=sys.stderr)
+                res = "❌ iOS 描述文件操作失败，请稍后重试。"
             with _GENERATION_LOCK:
                 current = generation == _chat_generation(chat_id)
             if current and res:
@@ -1709,21 +1722,24 @@ def ios_back(cb):
         if IOS_PAGES.get(key) == ("closed", photo_mid):
             answer_callback_async(cb["id"])
             return
-        deleted = delete_message(chat_id, photo_mid)
-        cleared = deleted or clear_message_keyboard(chat_id, photo_mid)
-        # The callback carries the source ID, so this also works after restart.
         target = CONSOLE.get(chat_id, source_mid)
-        restored = upsert_console(chat_id, main_menu_text(), main_menu(), message_id=target)
-        if restored is not None:
+
+    # Telegram I/O must not run while holding the navigation lock. A slow or
+    # stale connection must not block other callbacks from the same chat.
+    deleted = delete_message(chat_id, photo_mid)
+    cleared = deleted or clear_message_keyboard(chat_id, photo_mid)
+    restored = upsert_console(chat_id, main_menu_text(), main_menu(), message_id=target)
+    if restored is not None:
+        with _GENERATION_LOCK:
             IOS_PAGES[key] = ("closed", photo_mid)
-        if not deleted or restored is None:
-            text = ("二维码未能删除，请手动删除。" if not deleted else "")
-            if not cleared:
-                text += "二维码按钮也未能清除。"
-            text += ("主菜单已恢复。" if restored is not None else "主菜单恢复失败，请发送 /menu 重试。")
-            tg("answerCallbackQuery", callback_query_id=cb["id"], text=text, show_alert=True)
-        else:
-            answer_callback_async(cb["id"])
+    if not deleted or restored is None:
+        text = ("二维码未能删除，请手动删除。" if not deleted else "")
+        if not cleared:
+            text += "二维码按钮也未能清除。"
+        text += ("主菜单已恢复。" if restored is not None else "主菜单恢复失败，请发送 /menu 重试。")
+        tg("answerCallbackQuery", callback_query_id=cb["id"], text=text, show_alert=True)
+    else:
+        answer_callback_async(cb["id"])
 
 
 # --------------------------------------------------------------------------- #

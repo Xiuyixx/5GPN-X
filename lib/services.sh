@@ -456,9 +456,9 @@ generate_ios_profile() {
                 </dict>
             </array>
             <key>PayloadDescription</key>
-            <string>Use ${DOMAIN} DNS over TLS only on cellular networks.</string>
+            <string>仅在蜂窝网络启用加密 DNS（DoT），连接 Wi-Fi 时自动停用。</string>
             <key>PayloadDisplayName</key>
-            <string>Proxy Gateway Cellular DoT</string>
+            <string>5GPN-X</string>
             <key>PayloadIdentifier</key>
             <string>com.5gpn.${DOMAIN}.dnssettings</string>
             <key>PayloadType</key>
@@ -470,13 +470,13 @@ generate_ios_profile() {
         </dict>
     </array>
     <key>PayloadDescription</key>
-    <string>Installs a DNS over TLS profile for cellular networks only.</string>
+    <string>仅在蜂窝网络启用加密 DNS（DoT），连接 Wi-Fi 时自动停用。</string>
     <key>PayloadDisplayName</key>
-    <string>Proxy Gateway Cellular DoT</string>
+    <string>5GPN-X</string>
     <key>PayloadIdentifier</key>
     <string>com.5gpn.${DOMAIN}</string>
     <key>PayloadOrganization</key>
-    <string>Proxy Gateway</string>
+    <string>5GPN-X</string>
     <key>PayloadRemovalDisallowed</key>
     <false/>
     <key>PayloadType</key>
@@ -494,11 +494,12 @@ EOF
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Proxy Gateway iOS DoT</title>
+  <title>5GPN-X 蜂窝网络加密 DNS</title>
 </head>
 <body>
-  <h1>Proxy Gateway iOS DoT</h1>
-  <p><a href="/ios-dot.mobileconfig">下载 iOS 蜂窝网络 DoT 描述文件</a></p>
+  <h1>5GPN-X</h1>
+  <p>此描述文件仅在蜂窝网络启用加密 DNS（DoT），连接 Wi-Fi 时自动停用。</p>
+  <p><a href="/ios-dot.mobileconfig">下载 5GPN-X 描述文件</a></p>
 </body>
 </html>
 EOF

@@ -66,6 +66,33 @@ class ReliabilityTest(unittest.TestCase):
         jobs.pop()()
         self.assertEqual(json.loads(Path(bot._STATE_PATH).read_text())['pending'], {})
 
+    def test_console_task_failure_renders_error_and_finishes_update(self):
+        bot = self.bot
+        jobs = []
+        renders = []
+        bot._BG_EXECUTOR.submit = jobs.append
+        bot.upsert_console = lambda *args, **kwargs: renders.append(args)
+        bot.handle_message = lambda msg: bot.console_async(
+            1, lambda: (_ for _ in ()).throw(RuntimeError("hidden")))
+        bot._dispatch_update({'update_id': 7, 'message': {}})
+        self.assertEqual(json.loads(Path(bot._STATE_PATH).read_text())['pending'], {'7': 1})
+        jobs.pop()()
+        self.assertEqual(json.loads(Path(bot._STATE_PATH).read_text())['pending'], {})
+        self.assertIn("操作失败", renders[0][1])
+
+    def test_callback_task_failure_renders_error_and_releases_busy(self):
+        bot = self.bot
+        jobs = []
+        renders = []
+        bot.background = lambda fn, *args: jobs.append(lambda: fn(*args))
+        bot.edit = lambda cb, text, *args: renders.append(text)
+        cb = {'message': {'chat': {'id': 1}, 'message_id': 7}}
+        bot.edit_async(cb, lambda: (_ for _ in ()).throw(RuntimeError("hidden")))
+        self.assertIn((1, 7), bot.BUSY)
+        jobs.pop()()
+        self.assertNotIn((1, 7), bot.BUSY)
+        self.assertIn("操作失败", renders[0])
+
     def test_old_edit_executes_write_but_does_not_replace_new_menu(self):
         bot = self.bot
         jobs, writes, renders = [], [], []
