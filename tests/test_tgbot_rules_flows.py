@@ -144,11 +144,15 @@ class RulesFlowsTest(unittest.TestCase):
         self.cb("ps:0:hk")
         self.assertTrue(any("--set-policy" in c for c in self.mgmt_calls[-1]))
 
-    def test_update_rules_and_enable_smart(self):
+    def test_update_rules_without_smart_button(self):
         result = self.cb("act:update_rules")
         self.assertIn("GFWList：111", result)
-        self.cb("rules:enable")
-        self.assertIn(["bash", bot.MGMT, "--set-exit", "smart"], self.mgmt_calls)
+        self.assertNotIn("smart", " ".join(self.mgmt_calls[-1]) if self.mgmt_calls else "")
+
+    def test_smart_is_hidden_from_exit_menu(self):
+        rows = bot.exits_menu()
+        callbacks = [button["callback_data"] for row in rows for button in row]
+        self.assertNotIn("exit:smart", callbacks)
 
     def test_cancel_returns_to_rules_menu(self):
         self.cb("rules:set")

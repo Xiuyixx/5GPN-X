@@ -921,6 +921,24 @@ def op_set_exit(name):
     return "✅ 已切换到 <b>%s</b>（%s）%s" % (html.escape(name), html.escape(t), tail)
 
 
+def exits_detail_text(name):
+    if name == "local":
+        return "🌐 <b>本机直出</b>\n\n默认使用服务器公网出口，不经过远程节点。"
+    t = _read_file("/etc/5gpn/exits/%s.type" % name) or "未知协议"
+    return "🌐 <b>%s</b>\n\n协议：<code>%s</code>\n\n选择操作：" % (html.escape(name), html.escape(t))
+
+
+def exit_detail_menu(name):
+    rows = []
+    if name != "local":
+        rows.append([{"text": "✅ 设为默认出口", "callback_data": "exit_set:" + name},
+                     {"text": "🩺 测试", "callback_data": "exit_test:" + name}])
+        rows.append([{"text": "✏️ 重命名", "callback_data": "exit_rename:" + name},
+                     {"text": "🗑 删除", "callback_data": "exit_delete:" + name}])
+    rows.append([{"text": "« 返回出口", "callback_data": "menu:exits"}])
+    return rows
+
+
 def exits_overview_text():
     cur = _read_file("/opt/5gpn/etc/current-exit") or "local"
     if cur == "local":
@@ -1487,7 +1505,7 @@ def op_set_rules(text):
     if ok:
         m = re.search(r"\((\d+) rules\)", out)
         count = m.group(1) if m else "0"
-        return ("✅ <b>分流规则已更新</b>（%s 条）\n用「⚡ 启用分流」或在 🌐 出口 选 smart 生效。"
+        return ("✅ <b>分流规则已更新</b>（%s 条）\n规则已校验并发布；在 🌐 出口页选择目标出口即可生效。"
                 % count)
     return "❌ <b>规则设置失败</b>\n%s" % html.escape(_reason(out))
 
@@ -1762,15 +1780,14 @@ def main_menu():
 def rules_menu():
     return [
         [{"text": "📋 规则列表", "callback_data": "rules:show"},
-         {"text": "📚 规则集", "callback_data": "rules:showrs"},
+         {"text": "➕ 添加规则", "callback_data": "rules:add"}],
+        [{"text": "🗑 删除规则", "callback_data": "menu:rules_del"},
          {"text": "✏️ 规则设置", "callback_data": "rules:set"}],
-        [{"text": "➕ 添加规则", "callback_data": "rules:add"},
-         {"text": "🗑 删除规则", "callback_data": "menu:rules_del"}],
-        [{"text": "➕ 添加规则集", "callback_data": "rules:addset"},
-         {"text": "🗑 删规则集", "callback_data": "menu:rulesets_del"}],
-        [{"text": "🎯 分类→出口映射", "callback_data": "menu:policy"}],
-        [{"text": "🔄 更新规则", "callback_data": "act:update_rules"},
-         {"text": "⚡ 启用分流", "callback_data": "rules:enable"}],
+        [{"text": "📚 规则集状态", "callback_data": "rules:showrs"},
+         {"text": "➕ 添加规则集", "callback_data": "rules:addset"}],
+        [{"text": "🗑 删除规则集", "callback_data": "menu:rulesets_del"}],
+        [{"text": "🧱 内置规则", "callback_data": "rules:builtin"}],
+        [{"text": "🔄 更新规则", "callback_data": "act:update_rules"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
 
@@ -1843,10 +1860,11 @@ def policy_targets_menu(idx):
 def exits_menu():
     rows = []
     for name in parse_exit_names():
-        rows.append([{"text": "➡ " + name, "callback_data": "exit:" + name}])
-    rows.append([{"text": "➕ 添加出口", "callback_data": "exit_add"},
-                 {"text": "✏️ 重命名", "callback_data": "menu:exits_rename"}])
-    rows.append([{"text": "🗑 删除出口", "callback_data": "menu:exits_del"}])
+        if name == "smart":
+            continue
+        label = "本机直出" if name == "local" else name
+        rows.append([{"text": "➡ " + label, "callback_data": "exit:" + name}])
+    rows.append([{"text": "➕ 添加出口", "callback_data": "exit_add"}])
     rows.append([{"text": "🩺 检查出口连通性", "callback_data": "exits:check"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
     return rows
@@ -2297,6 +2315,8 @@ def handle_callback(cb):
         edit(cb, op_show_rules(), back_kb("menu:rules"))
     elif data == "rules:showrs":
         edit(cb, op_show_rulesets(), back_kb("menu:rules"))
+    elif data == "rules:builtin":
+        edit(cb, "🧱 <b>内置规则</b>\n\n系统保护、国内直连和协议兼容规则由网关自动维护，不需要手动启用。", back_kb("menu:rules"))
     elif data == "act:status":
         edit(cb, "⏳ 正在获取运行状态…")
         edit_async(cb, op_status, status_kb())
@@ -2339,13 +2359,29 @@ def handle_callback(cb):
     elif data == "act:restart":
         edit(cb, "⏳ 正在重启服务…")
         edit_async(cb, op_restart_services, back_kb("menu:dot"))
-    elif data == "rules:enable":
-        edit(cb, "⏳ 正在启用智能分流…")
-        edit_async(cb, lambda: op_set_exit("smart"), back_kb("menu:rules"))
     elif data.startswith("exit:"):
         name = data[len("exit:"):]
-        edit(cb, "⏳ 正在切换出口到 <b>%s</b>…" % html.escape(name))
-        edit_async(cb, lambda: op_set_exit(name), back_kb("menu:exits"))
+        if name == "smart":
+            edit(cb, "出口已变化，请重新打开。", exits_menu())
+        else:
+            edit(cb, "⏳ 正在获取出口详情…")
+            edit_async(cb, lambda: exits_detail_text(name), keyboard_fn=lambda: exit_detail_menu(name))
+    elif data.startswith("exit_set:"):
+        name = data[len("exit_set:"):]
+        edit(cb, "⏳ 正在切换默认出口…")
+        edit_async(cb, lambda: op_set_exit(name), keyboard_fn=lambda: exit_detail_menu(name))
+    elif data.startswith("exit_test:"):
+        name = data[len("exit_test:"):]
+        edit(cb, "⏳ 正在测试出口…")
+        edit_async(cb, lambda: op_check_exits(), keyboard=back_kb("menu:exits"))
+    elif data.startswith("exit_rename:"):
+        name = data[len("exit_rename:"):]
+        PENDING[chat_id] = {"action": "rename_exit", "old": name, "prompt_mid": cb_mid}
+        edit(cb, "✏️ <b>重命名出口</b>\n\n请发送新的出口名称。", cancel_kb("exits"))
+    elif data.startswith("exit_delete:"):
+        name = data[len("exit_delete:"):]
+        edit(cb, "⏳ 正在删除出口…")
+        edit_async(cb, lambda: op_del_exit(name), back_kb("menu:exits"))
     elif data.startswith("exitdel:"):
         name = data[len("exitdel:"):]
         edit(cb, "⏳ 正在删除出口 <b>%s</b>…" % html.escape(name))
