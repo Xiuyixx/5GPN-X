@@ -1551,7 +1551,7 @@ def op_set_app(key, action):
 def app_menu():
     rows, row = [], []
     for key, emoji, label, icon_id, _ in APP_CATALOG:
-        row.append({"text": "%s %s" % (emoji, label),
+        row.append({"text": label,
                     "icon_custom_emoji_id": icon_id, "callback_data": "app:" + key})
         if len(row) == 2:
             rows.append(row)
@@ -2268,7 +2268,7 @@ def handle_callback(cb):
             edit(cb, "应用已变化，请重新打开。", app_menu())
         else:
             current = _app_rule_state(key) or "跟随默认"
-            edit(cb, "📱 <b>%s</b>\n\n<b>当前出口</b>　%s\n\n<i>为这个应用选择单独的出口；未设置时跟随默认出口。</i>" %
+            edit(cb, "<b>%s</b>\n\n<b>当前出口</b>　%s\n\n<i>为这个应用选择单独的出口；未设置时跟随默认出口。</i>" %
                  (html.escape(item[2]), html.escape(current)), app_targets_menu(key))
     elif data.startswith("appset:"):
         parts = data.split(":", 2)
