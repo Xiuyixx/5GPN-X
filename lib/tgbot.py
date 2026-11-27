@@ -102,7 +102,7 @@ SUPPORTED_EXIT_LINKS = "ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// a
 APP_CATALOG = [
     ("google", "🔍", "Google", "5855241013836127351", ["GEOSITE,google"]),
     ("youtube", "▶️", "YouTube", "5818947960364342679", ["GEOSITE,youtube"]),
-    ("chatgpt", "🤖", "ChatGPT", "5861557158712345678", ["DOMAIN-SUFFIX,openai.com", "DOMAIN-SUFFIX,chatgpt.com"]),
+    ("chatgpt", "🤖", "ChatGPT", "5861557411784957025", ["DOMAIN-SUFFIX,openai.com", "DOMAIN-SUFFIX,chatgpt.com"]),
     ("claude", "✳️", "Claude", "5872779796257184592", ["GEOSITE,anthropic"]),
     ("gemini", "✨", "Gemini", "5866057150236727962", ["GEOSITE,google-gemini"]),
     ("netflix", "🎬", "Netflix", "5818843480989899185", ["GEOSITE,netflix"]),
