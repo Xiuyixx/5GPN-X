@@ -21,7 +21,11 @@ cat > "${tmp}/bin/certbot" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "${tmp}/bin/apt-get" "${tmp}/bin/go" "${tmp}/bin/certbot"
+cat > "${tmp}/bin/pkg-config" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${tmp}/bin/apt-get" "${tmp}/bin/go" "${tmp}/bin/certbot" "${tmp}/bin/pkg-config"
 
 export MOCK_CALLS="${tmp}/calls"
 PATH="${tmp}/bin:${PATH}"
