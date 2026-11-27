@@ -116,9 +116,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
-      - name: Test quic-proxy
+      - name: Test Go core and quic-proxy
         run: |
           set -euo pipefail
+          go test ./...
+          go vet ./...
           for prog in quic-proxy; do
             dir="$(mktemp -d)"
             cp "lib/${prog}.go" "lib/${prog}_test.go" "$dir/"
