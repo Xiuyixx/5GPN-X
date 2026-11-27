@@ -2,7 +2,10 @@ module github.com/Xiuyixx/5GPN-X
 
 go 1.23
 
-require github.com/miekg/dns v1.1.62
+require (
+	github.com/google/uuid v1.6.0
+	github.com/miekg/dns v1.1.62
+)
 
 require (
 	golang.org/x/mod v0.18.0 // indirect
