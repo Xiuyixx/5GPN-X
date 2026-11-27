@@ -14,6 +14,8 @@ import (
 	gdns "github.com/Xiuyixx/5GPN-X/internal/dns"
 	"github.com/Xiuyixx/5GPN-X/internal/manage"
 	"github.com/Xiuyixx/5GPN-X/internal/migrate"
+	"github.com/Xiuyixx/5GPN-X/internal/quic"
+	"github.com/Xiuyixx/5GPN-X/internal/whatsapp"
 )
 
 const defaultConfig = "/opt/5gpn/etc/5gpn-go.json"
@@ -114,7 +116,7 @@ func runAll(m *manage.Manager) error {
 	cfg := m.Snapshot()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	errs := make(chan error, 2)
+	errs := make(chan error, 4)
 	go func() {
 		if cfg.Bot.Token == "" {
 			errs <- nil
@@ -129,7 +131,39 @@ func runAll(m *manage.Manager) error {
 		}
 		errs <- runDNSContext(ctx, m)
 	}()
-	for i := 0; i < 2; i++ {
+	go func() {
+		if !cfg.QUIC.Enabled {
+			errs <- nil
+			return
+		}
+		p, err := quic.NewProcess(cfg.QUIC.Binary, quic.Config{Listen: cfg.QUIC.Listen, DNSFile: cfg.QUIC.DNSFile})
+		if err != nil {
+			errs <- err
+			return
+		}
+		if err := p.Start(ctx); err != nil {
+			errs <- err
+			return
+		}
+		errs <- p.Wait()
+	}()
+	go func() {
+		if !cfg.WhatsApp.Enabled {
+			errs <- nil
+			return
+		}
+		p, err := whatsapp.NewProcess(cfg.WhatsApp.Binary, whatsapp.Config{Listen: cfg.WhatsApp.Listen, Upstream: cfg.WhatsApp.Upstream, DNS: cfg.WhatsApp.DNS})
+		if err != nil {
+			errs <- err
+			return
+		}
+		if err := p.Start(ctx); err != nil {
+			errs <- err
+			return
+		}
+		errs <- p.Wait()
+	}()
+	for i := 0; i < 4; i++ {
 		if err := <-errs; err != nil {
 			stop()
 			return err

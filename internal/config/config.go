@@ -14,11 +14,27 @@ type Config struct {
 	Egress      []EgressConfig    `json:"egress"`
 	Bot         BotConfig         `json:"bot,omitempty"`
 	DNS         DNSConfig         `json:"dns,omitempty"`
+	QUIC        QUICConfig        `json:"quic,omitempty"`
+	WhatsApp    WhatsAppConfig    `json:"whatsapp,omitempty"`
 	Rules       []string          `json:"rules"`
 	RuleSets    []RuleSetConfig   `json:"rulesets,omitempty"`
 	Final       string            `json:"final"`
 	Apps        map[string]string `json:"apps,omitempty"`
 	AppsChanged map[string]int64  `json:"apps_changed,omitempty"`
+}
+
+type QUICConfig struct {
+	Enabled bool   `json:"enabled"`
+	Binary  string `json:"binary,omitempty"`
+	Listen  string `json:"listen,omitempty"`
+	DNSFile string `json:"dns_file,omitempty"`
+}
+type WhatsAppConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Binary   string `json:"binary,omitempty"`
+	Listen   string `json:"listen,omitempty"`
+	Upstream string `json:"upstream,omitempty"`
+	DNS      string `json:"dns,omitempty"`
 }
 
 type DNSConfig struct {
