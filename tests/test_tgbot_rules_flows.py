@@ -153,6 +153,11 @@ class RulesFlowsTest(unittest.TestCase):
         rows = bot.exits_menu()
         callbacks = [button["callback_data"] for row in rows for button in row]
         self.assertNotIn("exit:smart", callbacks)
+        targets = bot.app_targets_menu("chatgpt")
+        callbacks = [button["callback_data"] for row in targets for button in row]
+        self.assertIn("appset:chatgpt:-", callbacks)
+        self.assertIn("appset:chatgpt:local", callbacks)
+        self.assertNotIn("appset:chatgpt:block", callbacks)
 
     def test_cancel_returns_to_rules_menu(self):
         self.cb("rules:set")

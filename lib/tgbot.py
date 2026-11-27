@@ -1573,8 +1573,7 @@ def app_targets_menu(key):
             row = []
     if row:
         rows.append(row)
-    rows.append([{"text": "🌍 直连", "callback_data": "appset:%s:direct" % key},
-                 {"text": "🚫 拦截", "callback_data": "appset:%s:block" % key}])
+    rows.append([{"text": "本机直出", "callback_data": "appset:%s:local" % key}])
     rows.append([{"text": "↩️ 跟随默认", "callback_data": "appset:%s:-" % key},
                  {"text": "« 返回应用", "callback_data": "apps"}])
     return rows
@@ -2273,7 +2272,7 @@ def handle_callback(cb):
     elif data.startswith("appset:"):
         parts = data.split(":", 2)
         key, action = parts[1], parts[2] if len(parts) > 2 else ""
-        action = "" if action == "-" else action
+        action = "" if action == "-" else ("direct" if action == "local" else action)
         edit(cb, "⏳ 正在应用快捷分流…")
         edit_async(cb, lambda: op_set_app(key, action), keyboard=app_menu())
     elif data == "menu:rules_del":

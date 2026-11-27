@@ -189,7 +189,7 @@ def main():
     def target(policy):
         raw = policy.strip()
         low = raw.lower()
-        if low in ("direct", "direct-out", "dir"):
+        if low in ("direct", "direct-out", "dir", "local"):
             return "DIRECT"
         if low in ("block", "reject", "reject-drop"):
             return "REJECT"
