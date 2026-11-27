@@ -48,7 +48,7 @@ func main() {
 }
 
 func run(cmd string, args []string, configPath string) error {
-	paths := manage.Paths{Config: configPath, Legacy: migrate.Paths{ConfDir: legacyConf, ExitsDir: legacyExits, Rules: legacyRules}}
+	paths := manage.Paths{Config: configPath, Legacy: migrate.Paths{ConfDir: envOr("PGW_LEGACY_CONF", legacyConf), ExitsDir: envOr("PGW_LEGACY_EXITS", legacyExits), Rules: envOr("PGW_LEGACY_RULES", legacyRules)}}
 	if cmd == "migrate" {
 		cfg, err := migrate.LoadLegacy(paths.Legacy)
 		if err != nil {
@@ -244,6 +244,13 @@ func validateTarget(cfg config.Config, target string) error {
 	}
 	return fmt.Errorf("unknown target %q", target)
 }
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
 func displayTarget(target string) string {
 	if target == "" {
 		return "follow default"

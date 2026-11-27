@@ -8,8 +8,16 @@ offset="${PGW_GO_OFFSET:-/var/lib/5gpn/tgbot-go.offset}"
 user="${PGW_GO_USER:-root}"
 mkdir -p "${prefix}/bin" "$(dirname "$config")" "$(dirname "$offset")"
 "${root}/scripts/build-go.sh" "$bin" >/dev/null
-if [[ ! -f "$config" && -f /etc/5gpn/rules.conf ]]; then
-  PGW_GO_CONFIG="$config" "$bin" migrate
+legacy_conf="${PGW_LEGACY_CONF:-/opt/5gpn/etc}"
+legacy_exits="${PGW_LEGACY_EXITS:-/etc/5gpn/exits}"
+legacy_rules="${PGW_LEGACY_RULES:-/etc/5gpn/rules.conf}"
+if [[ ! -f "$config" && -f "$legacy_rules" ]]; then
+  # Migration is intentionally explicit and path-isolated for reinstall/rollback tests.
+  temp_root="$(mktemp -d)"
+  trap 'rm -rf "$temp_root"' EXIT
+  mkdir -p "$temp_root/bin" "$temp_root/etc"
+  cp "$bin" "$temp_root/bin/5gpn-go"
+  PGW_GO_CONFIG="$config" "$temp_root/bin/5gpn-go" migrate
 fi
 chmod 0755 "$bin"
 # Generate the unit with stable paths and explicit service hardening.
