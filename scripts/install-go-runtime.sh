@@ -37,4 +37,7 @@ if [[ "${PGW_GO_ENABLE:-0}" == "1" ]] && command -v systemctl >/dev/null 2>&1; t
   systemctl daemon-reload
   systemctl enable --now 5gpn-go.service
 fi
+if [[ "${PGW_GO_CHECK:-0}" == "1" ]]; then
+  "$bin" check
+fi
 printf '%s\n' "$bin"
