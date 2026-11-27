@@ -13,11 +13,21 @@ import (
 type Config struct {
 	Egress      []EgressConfig    `json:"egress"`
 	Bot         BotConfig         `json:"bot,omitempty"`
+	DNS         DNSConfig         `json:"dns,omitempty"`
 	Rules       []string          `json:"rules"`
 	RuleSets    []RuleSetConfig   `json:"rulesets,omitempty"`
 	Final       string            `json:"final"`
 	Apps        map[string]string `json:"apps,omitempty"`
 	AppsChanged map[string]int64  `json:"apps_changed,omitempty"`
+}
+
+type DNSConfig struct {
+	DoTListen string   `json:"dot_listen,omitempty"`
+	DNSListen string   `json:"dns_listen,omitempty"`
+	Upstream  []string `json:"upstream,omitempty"`
+	GatewayIP string   `json:"gateway_ip,omitempty"`
+	CertFile  string   `json:"cert_file,omitempty"`
+	KeyFile   string   `json:"key_file,omitempty"`
 }
 
 type BotConfig struct {

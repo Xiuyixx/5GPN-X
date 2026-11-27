@@ -11,6 +11,7 @@ import (
 
 	"github.com/Xiuyixx/5GPN-X/internal/bot"
 	"github.com/Xiuyixx/5GPN-X/internal/config"
+	gdns "github.com/Xiuyixx/5GPN-X/internal/dns"
 	"github.com/Xiuyixx/5GPN-X/internal/manage"
 	"github.com/Xiuyixx/5GPN-X/internal/migrate"
 )
@@ -63,6 +64,9 @@ func run(cmd string, args []string, configPath string) error {
 	}
 	if cmd == "run" {
 		return runBot(m)
+	}
+	if cmd == "run-dns" {
+		return runDNS(m)
 	}
 	switch cmd {
 	case "status":
@@ -118,6 +122,17 @@ func runBot(m *manage.Manager) error {
 		path = "/var/lib/5gpn/tgbot-go.offset"
 	}
 	return bot.Poll(ctx, client, &bot.OffsetStore{Path: path}, h.Handle)
+}
+
+func runDNS(m *manage.Manager) error {
+	cfg := m.Snapshot()
+	srv, err := gdns.NewServer(gdns.Config{DoTListen: cfg.DNS.DoTListen, DNSListen: cfg.DNS.DNSListen, Upstream: cfg.DNS.Upstream, GatewayIP: cfg.DNS.GatewayIP, CertFile: cfg.DNS.CertFile, KeyFile: cfg.DNS.KeyFile})
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return srv.Serve(ctx)
 }
 
 func printStatus(cfg config.Config) error {
