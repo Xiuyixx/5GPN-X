@@ -1549,11 +1549,15 @@ def op_set_app(key, action):
 
 
 def app_menu():
-    rows = []
+    rows, row = [], []
     for key, emoji, label, icon_id, _ in APP_CATALOG:
-        action = _app_rule_state(key)
-        rows.append([{"text": "%s %s · %s" % (emoji, label, action or "默认"),
-                      "icon_custom_emoji_id": icon_id, "callback_data": "app:" + key}])
+        row.append({"text": "%s %s" % (emoji, label),
+                    "icon_custom_emoji_id": icon_id, "callback_data": "app:" + key})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
     rows.append([{"text": "« 返回分流", "callback_data": "menu:rules"}])
     return rows
 
@@ -1950,12 +1954,17 @@ def policy_targets_menu(idx):
 
 
 def exits_menu():
-    rows = []
+    rows, row = [], []
     for name in parse_exit_names():
         if name == "smart":
             continue
         label = "本机直出" if name == "local" else name
-        rows.append([{"text": "➡ " + label, "callback_data": "exit:" + name}])
+        row.append({"text": "➡ " + label, "callback_data": "exit:" + name})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
     rows.append([{"text": "➕ 添加出口", "callback_data": "exit_add"}])
     rows.append([{"text": "🩺 检查出口连通性", "callback_data": "exits:check"}])
     rows.append([{"text": "« 返回", "callback_data": "menu:main"}])
