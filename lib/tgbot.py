@@ -1547,6 +1547,11 @@ def op_set_app(key, action):
         return "应用不存在。"
     if action not in ("", "direct", "block") and action not in _targets():
         return "目标出口不存在，请刷新后重试。"
+    current_exit = (_read_file("/opt/5gpn/etc/current-exit") or "local").strip()
+    if current_exit not in ("local", "smart"):
+        ok, out = run2(["bash", MGMT, "--set-exit", "smart"], timeout=120)
+        if not ok:
+            return "❌ 无法启用智能分流路由器\n%s" % html.escape(_reason(out))
     result = op_set_rules(_app_rules_text(key, action))
     if result.startswith("✅"):
         target = "跟随默认出口" if not action else ("本机直出" if action == "direct" else "拦截" if action == "block" else "出口 " + action)

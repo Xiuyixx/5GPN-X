@@ -62,6 +62,12 @@ printf 'DOMAIN-SUFFIX,Example.COM,us\nIP-CIDR,1.2.3.9/24,us\nFINAL,block\n' > "$
 out="$(EXITS_DIR="${tmp}/exits" WG_DIR="${tmp}/wg" python3 "${gen}" "${tmp}/normalize.conf")"
 grep -q 'DOMAIN-SUFFIX,example.com,us' <<<"$out" || fail "domain rules must normalize"
 grep -q 'IP-CIDR,1.2.3.0/24,us' <<<"$out" || fail "CIDR rules must normalize"
+printf 'DOMAIN-SUFFIX,openai.com,direct\n' > "${tmp}/app.conf"
+out="$(EXITS_DIR="${tmp}/exits" WG_DIR="${tmp}/wg" PGW_POLICY_MAP="${tmp}/policy-map.conf" PGW_DEFAULT_TARGET=us python3 "${gen}" "${tmp}/app.conf")"
+grep -q 'DOMAIN-SUFFIX,openai.com,DIRECT' <<<"$out" || fail "app direct rule must compile to DIRECT"
+grep -q 'MATCH,DIRECT' <<<"$out" || fail "router must provide a direct fallback when no FINAL is supplied"
+
+echo "smart routing policy OK"
 
 [[ "${install_body}" == *'set_rules()'* && "${install_body}" == *'add_rule()'* && "${install_body}" == *'add_ruleset()'* ]] || fail "rule management functions missing"
 [[ "${install_body}" == *'--set-rules)'* && "${install_body}" == *'--add-rule)'* && "${install_body}" == *'--add-ruleset)'* ]] || fail "rule dispatch missing"

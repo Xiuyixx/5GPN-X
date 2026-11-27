@@ -39,6 +39,15 @@ regen_smart() {
     local eff; eff="$(mktemp)"
     [[ -f "${RULES_DEFAULT}" ]] && cat "${RULES_DEFAULT}" >> "$eff"
     cat "${RULES_FILE}" >> "$eff"
+    # The smart router owns default egress selection. When a concrete exit is
+    # active, preserve it as FINAL so app-specific DIRECT/proxy rules override
+    # it without falling back to a standalone exit instance.
+    local smart_default="local"
+    [[ -f "${CONF_DIR}/current-exit" ]] && smart_default="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
+    if [[ "$smart_default" != "smart" && "$smart_default" != "local" ]] &&
+       ! grep -qE '^[[:space:]]*FINAL,' "$eff"; then
+        printf 'FINAL,%s\n' "$smart_default" >> "$eff"
+    fi
     local yaml gen_err; yaml="$(exit_mihomo_conf smart)"
     if ! gen_err="$(EXITS_DIR="${EXITS_DIR}" WG_DIR="${WG_DIR}" PGW_RULESET_CACHE="${RULESET_CACHE}" \
                     PGW_POLICY_MAP="${POLICY_MAP}" \
