@@ -461,7 +461,7 @@ def _release_busy(key):
             BUSY.discard(key)
 
 
-def edit_async(cb, text_fn, keyboard=None, mono=False):
+def edit_async(cb, text_fn, keyboard=None, mono=False, keyboard_fn=None):
     key = _busy_key_from_cb(cb)
     generation = _chat_generation(key[0])
 
@@ -477,7 +477,7 @@ def edit_async(cb, text_fn, keyboard=None, mono=False):
             with _GENERATION_LOCK:
                 current = generation == _chat_generation(key[0])
             if current:
-                edit(cb, text, keyboard, mono)
+                edit(cb, text, keyboard_fn() if keyboard_fn else keyboard, mono)
         finally:
             _release_busy(key)
 
@@ -1554,6 +1554,24 @@ def op_set_app(key, action):
     return result
 
 
+def app_detail_text(key, notice=""):
+    item = _app_entry(key)
+    if not item:
+        return "应用已变化，请重新打开。"
+    current = _app_rule_state(key) or "跟随默认"
+    return ("<b>%s</b>\n\n<b>当前出口</b>　%s\n\n%s%s" %
+            (html.escape(item[2]), html.escape(current),
+             notice + "\n\n" if notice else "",
+             "<i>为这个应用选择单独的出口；未设置时跟随默认出口。</i>"))
+
+
+def set_app_and_render(key, action):
+    result = op_set_app(key, action)
+    if result.startswith("✅"):
+        return app_detail_text(key, result)
+    return app_detail_text(key, result)
+
+
 def app_menu_text():
     selected = []
     for key, _, label, _, _ in APP_CATALOG:
@@ -2285,15 +2303,12 @@ def handle_callback(cb):
         if not item:
             edit(cb, "应用已变化，请重新打开。", app_menu())
         else:
-            current = _app_rule_state(key) or "跟随默认"
-            edit(cb, "<b>%s</b>\n\n<b>当前出口</b>　%s\n\n<i>为这个应用选择单独的出口；未设置时跟随默认出口。</i>" %
-                 (html.escape(item[2]), html.escape(current)), app_targets_menu(key))
+            edit(cb, app_detail_text(key), app_targets_menu(key))
     elif data.startswith("appset:"):
         parts = data.split(":", 2)
         key, action = parts[1], parts[2] if len(parts) > 2 else ""
         action = "" if action == "-" else ("direct" if action == "local" else action)
-        edit(cb, "⏳ 正在应用快捷分流…")
-        edit_async(cb, lambda: op_set_app(key, action), keyboard_fn=lambda: app_targets_menu(key))
+        edit_async(cb, lambda: set_app_and_render(key, action), keyboard_fn=lambda: app_targets_menu(key))
     elif data == "menu:rules_del":
         edit(cb, "选择要删除的规则：", rules_del_menu())
     elif data == "menu:rulesets_del":
