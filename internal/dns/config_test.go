@@ -3,7 +3,7 @@ package dns
 import "testing"
 
 func TestDNSConfigValidation(t *testing.T) {
-	cfg := Config{DoTListen: ":853", DNSListen: "127.0.0.1:5353", Upstream: []string{"1.1.1.1:53"}, GatewayIP: "127.0.0.1"}
+	cfg := Config{DoTListen: ":853", DNSListen: "127.0.0.1:5353", Upstream: []string{"1.1.1.1:53"}, GatewayIP: "127.0.0.1", CertFile: "cert.pem", KeyFile: "key.pem"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}

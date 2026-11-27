@@ -12,6 +12,8 @@ type Config struct {
 	DNSListen string
 	Upstream  []string
 	GatewayIP string
+	CertFile  string
+	KeyFile   string
 }
 
 func (c Config) Validate() error {
@@ -23,6 +25,9 @@ func (c Config) Validate() error {
 	}
 	if c.GatewayIP != "" && net.ParseIP(c.GatewayIP) == nil {
 		return fmt.Errorf("invalid gateway IP %q", c.GatewayIP)
+	}
+	if c.CertFile == "" || c.KeyFile == "" {
+		return fmt.Errorf("TLS certificate and key are required")
 	}
 	if len(c.Upstream) == 0 {
 		return fmt.Errorf("at least one DNS upstream is required")
