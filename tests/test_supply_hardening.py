@@ -61,13 +61,15 @@ install_deps
 
     def test_sniproxy_bootstrap_initializes_autotools_macros(self):
         text = (ROOT / "lib/services.sh").read_text()
-        marker = '[[ "$(git rev-parse HEAD)" == "$sniproxy_commit" ]]'
+        marker = 'cd sniproxy || exit 1'
         start = text.index(marker)
         block = text[start:text.index('make -j', start)]
         self.assertIn('rm -rf autom4te.cache', block)
-        self.assertIn('rm -f aclocal.m4 configure config.log config.status', block)
+        self.assertIn('rm -f aclocal.m4 configure config.log config.status configure~ ltmain.sh', block)
+        self.assertIn('rm -f m4/libtool.m4 m4/ltoptions.m4 m4/ltsugar.m4', block)
         self.assertIn('libtoolize --install --copy --force', block)
         self.assertIn('aclocal --install --force -I m4', block)
+        self.assertLess(block.index('rm -f aclocal.m4'), block.index('source_status'))
 
     def test_sniproxy_fetch_failure_never_builds(self):
         with tempfile.TemporaryDirectory() as tmp:

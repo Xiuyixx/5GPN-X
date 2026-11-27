@@ -194,6 +194,14 @@ install_sniproxy() {
                 git clone --quiet https://github.com/dlundquist/sniproxy.git || exit 1
             fi
             cd sniproxy || exit 1
+            # A failed attempt can leave stale generated Autotools files in the
+            # reused source tree. Remove only known generated files before the
+            # cleanliness check, so the retry is not blocked by its own output
+            # and cannot reuse an incomplete aclocal.m4/configure result.
+            rm -rf autom4te.cache
+            rm -f aclocal.m4 configure config.log config.status configure~ ltmain.sh
+            rm -f m4/libtool.m4 m4/ltoptions.m4 m4/ltsugar.m4 \
+                m4/ltversion.m4 m4/lt~obsolete.m4 m4/pkg.m4
             local source_status
             source_status="$(git status --porcelain --untracked-files=all)" || exit 1
             if [[ -n "$source_status" ]]; then
@@ -203,11 +211,6 @@ install_sniproxy() {
             git fetch --quiet https://github.com/dlundquist/sniproxy.git "$sniproxy_commit" || exit 1
             git checkout --quiet --detach "$sniproxy_commit" || exit 1
             [[ "$(git rev-parse HEAD)" == "$sniproxy_commit" ]] || exit 1
-            # A failed attempt can leave stale generated Autotools files in the
-            # reused source tree. Remove only generated build metadata so a
-            # retry cannot reuse an incomplete aclocal.m4/configure result.
-            rm -rf autom4te.cache
-            rm -f aclocal.m4 configure config.log config.status
             # Debian 13 ships Autoconf 2.72 and this pinned sniproxy commit
             # references libtool macros that are not initialized by its legacy
             # autogen.sh. Seed the macros before autoreconf, otherwise
