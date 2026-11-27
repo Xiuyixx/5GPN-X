@@ -44,6 +44,9 @@ func (e Engine) Match(appKey, domain string) Decision {
 	return Decision{Action: e.cfg.Final, Rule: "FINAL"}
 }
 
+// Default returns the configured fallback action.
+func (e Engine) Default() string { return e.cfg.Final }
+
 func ValidateTarget(cfg config.Config, target string) error {
 	target = apps.NormalizeTarget(target)
 	if target == string(ActionDirect) || target == string(ActionBlock) || target == "" {
