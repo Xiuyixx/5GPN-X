@@ -49,6 +49,7 @@ type EgressConfig struct {
 	DisplayName string `json:"display_name,omitempty"`
 	Proto       string `json:"proto,omitempty"`
 	Server      string `json:"server,omitempty"`
+	URI         string `json:"uri,omitempty"`
 }
 
 func Default() Config {
