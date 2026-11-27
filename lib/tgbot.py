@@ -100,18 +100,18 @@ SUPPORTED_EXIT_LINKS = "ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// a
 
 # 快捷应用分流目录：最终仍写入现有 rules.conf，经现有 mihomo 预检和回滚。
 APP_CATALOG = [
-    ("google", "🔍", "Google", ["GEOSITE,google"]),
-    ("youtube", "▶️", "YouTube", ["GEOSITE,youtube"]),
-    ("chatgpt", "🤖", "ChatGPT", ["DOMAIN-SUFFIX,openai.com", "DOMAIN-SUFFIX,chatgpt.com"]),
-    ("claude", "✳️", "Claude", ["GEOSITE,anthropic"]),
-    ("gemini", "✨", "Gemini", ["GEOSITE,google-gemini"]),
-    ("netflix", "🎬", "Netflix", ["GEOSITE,netflix"]),
-    ("spotify", "🎧", "Spotify", ["GEOSITE,spotify"]),
-    ("tiktok", "🎵", "TikTok", ["GEOSITE,tiktok"]),
-    ("x", "🐦", "X", ["GEOSITE,twitter"]),
-    ("meta", "♾️", "Meta", ["GEOSITE,facebook", "GEOSITE,instagram", "GEOSITE,whatsapp"]),
-    ("github", "🐙", "GitHub", ["GEOSITE,github"]),
-    ("steam", "🎮", "Steam", ["GEOSITE,steam"]),
+    ("google", "🔍", "Google", "5855241013836127351", ["GEOSITE,google"]),
+    ("youtube", "▶️", "YouTube", "5818947960364342679", ["GEOSITE,youtube"]),
+    ("chatgpt", "🤖", "ChatGPT", "5861557158712345678", ["DOMAIN-SUFFIX,openai.com", "DOMAIN-SUFFIX,chatgpt.com"]),
+    ("claude", "✳️", "Claude", "5872779796257184592", ["GEOSITE,anthropic"]),
+    ("gemini", "✨", "Gemini", "5866057150236727962", ["GEOSITE,google-gemini"]),
+    ("netflix", "🎬", "Netflix", "5818843480989899185", ["GEOSITE,netflix"]),
+    ("spotify", "🎧", "Spotify", "5818858298627071637", ["GEOSITE,spotify"]),
+    ("tiktok", "🎵", "TikTok", "5909018290759408000", ["GEOSITE,tiktok"]),
+    ("x", "🐦", "X", "5819115571463068721", ["GEOSITE,twitter"]),
+    ("meta", "♾️", "Meta", "6046128455894965411", ["GEOSITE,facebook", "GEOSITE,instagram", "GEOSITE,whatsapp"]),
+    ("github", "🐙", "GitHub", "5870608651634349775", ["GEOSITE,github"]),
+    ("steam", "🎮", "Steam", "5818678889253183626", ["GEOSITE,steam"]),
 ]
 
 
@@ -1531,7 +1531,7 @@ def _app_rules_text(key, action):
         i += 1
     if action:
         out.append(marker)
-        out.append("%s,%s" % (item[3][0], action))
+        out.append("%s,%s" % (item[4][0], action))
     return "\n".join(out).rstrip("\n") + "\n"
 
 
@@ -1550,9 +1550,10 @@ def op_set_app(key, action):
 
 def app_menu():
     rows = []
-    for key, emoji, label, _ in APP_CATALOG:
+    for key, emoji, label, icon_id, _ in APP_CATALOG:
         action = _app_rule_state(key)
-        rows.append([{"text": "%s %s · %s" % (emoji, label, action or "默认"), "callback_data": "app:" + key}])
+        rows.append([{"text": "%s %s · %s" % (emoji, label, action or "默认"),
+                      "icon_custom_emoji_id": icon_id, "callback_data": "app:" + key}])
     rows.append([{"text": "« 返回分流", "callback_data": "menu:rules"}])
     return rows
 
@@ -2257,9 +2258,9 @@ def handle_callback(cb):
         if not item:
             edit(cb, "应用已变化，请重新打开。", app_menu())
         else:
-            edit(cb, "📱 <b>%s %s</b>\n\n当前：<b>%s</b>\n选择目标出口：" %
-                 (item[1], html.escape(item[2]), html.escape(_app_rule_state(key) or "跟随默认")),
-                 app_targets_menu(key))
+            current = _app_rule_state(key) or "跟随默认"
+            edit(cb, "📱 <b>%s</b>\n\n<b>当前出口</b>　%s\n\n<i>为这个应用选择单独的出口；未设置时跟随默认出口。</i>" %
+                 (html.escape(item[2]), html.escape(current)), app_targets_menu(key))
     elif data.startswith("appset:"):
         parts = data.split(":", 2)
         key, action = parts[1], parts[2] if len(parts) > 2 else ""
