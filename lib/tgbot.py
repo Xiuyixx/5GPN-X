@@ -1878,7 +1878,6 @@ def rules_menu():
         [{"text": "📚 规则集状态", "callback_data": "rules:showrs"},
          {"text": "➕ 添加规则集", "callback_data": "rules:addset"}],
         [{"text": "🗑 删除规则集", "callback_data": "menu:rulesets_del"}],
-        [{"text": "🧱 内置规则", "callback_data": "rules:builtin"}],
         [{"text": "🔄 更新规则", "callback_data": "act:update_rules"}],
         [{"text": "« 返回", "callback_data": "menu:main"}],
     ]
@@ -2266,7 +2265,7 @@ def handle_callback(cb):
         key, action = parts[1], parts[2] if len(parts) > 2 else ""
         action = "" if action == "-" else action
         edit(cb, "⏳ 正在应用快捷分流…")
-        edit_async(cb, lambda: op_set_app(key, action), keyboard_fn=lambda: app_menu())
+        edit_async(cb, lambda: op_set_app(key, action), keyboard=app_menu())
     elif data == "menu:rules_del":
         edit(cb, "选择要删除的规则：", rules_del_menu())
     elif data == "menu:rulesets_del":
@@ -2474,7 +2473,7 @@ def handle_callback(cb):
             edit(cb, "出口已变化，请重新打开。", exits_menu())
         else:
             edit(cb, "⏳ 正在获取出口详情…")
-            edit_async(cb, lambda: exits_detail_text(name), keyboard_fn=lambda: exit_detail_menu(name))
+            edit_async(cb, lambda: exits_detail_text(name), keyboard=exit_detail_menu(name))
     elif data.startswith("exit_set:"):
         name = data[len("exit_set:"):]
         edit(cb, "⏳ 正在切换默认出口…")
