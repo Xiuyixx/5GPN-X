@@ -63,6 +63,9 @@ func run(cmd string, args []string, configPath string) error {
 		return err
 	}
 	if cmd == "run" {
+		return runAll(m)
+	}
+	if cmd == "run-bot" {
 		return runBot(m)
 	}
 	if cmd == "run-dns" {
@@ -107,7 +110,41 @@ func run(cmd string, args []string, configPath string) error {
 	}
 }
 
+func runAll(m *manage.Manager) error {
+	cfg := m.Snapshot()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	errs := make(chan error, 2)
+	go func() {
+		if cfg.Bot.Token == "" {
+			errs <- nil
+			return
+		}
+		errs <- runBotContext(ctx, m)
+	}()
+	go func() {
+		if cfg.DNS.DoTListen == "" {
+			errs <- nil
+			return
+		}
+		errs <- runDNSContext(ctx, m)
+	}()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			stop()
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
 func runBot(m *manage.Manager) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return runBotContext(ctx, m)
+}
+
+func runBotContext(ctx context.Context, m *manage.Manager) error {
 	cfg := m.Snapshot()
 	if cfg.Bot.Token == "" {
 		return fmt.Errorf("bot token is not configured")
@@ -115,8 +152,6 @@ func runBot(m *manage.Manager) error {
 	admins := bot.AdminMap(cfg.Bot.Admins)
 	client := bot.NewTelegramClient(cfg.Bot.Token)
 	h := &bot.Handler{Client: client, Manager: m, Admins: admins}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	path := os.Getenv("PGW_GO_OFFSET")
 	if path == "" {
 		path = "/var/lib/5gpn/tgbot-go.offset"
@@ -125,13 +160,17 @@ func runBot(m *manage.Manager) error {
 }
 
 func runDNS(m *manage.Manager) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return runDNSContext(ctx, m)
+}
+
+func runDNSContext(ctx context.Context, m *manage.Manager) error {
 	cfg := m.Snapshot()
 	srv, err := gdns.NewServer(gdns.Config{DoTListen: cfg.DNS.DoTListen, DNSListen: cfg.DNS.DNSListen, Upstream: cfg.DNS.Upstream, GatewayIP: cfg.DNS.GatewayIP, CertFile: cfg.DNS.CertFile, KeyFile: cfg.DNS.KeyFile})
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	return srv.Serve(ctx)
 }
 
