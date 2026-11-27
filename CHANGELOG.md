@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.19
+
+- 兼容 Debian 13 已移除 `libpcre3-dev` 的环境：若系统没有 PCRE1，安装器会下载固定 SHA256 的 PCRE 8.45 源码并本地构建验证，再继续编译 sniproxy。
+
 ## 1.1.18
 
 - 修复 Debian 13 安装 sniproxy 时错误使用 `libpcre2-dev` 的问题；固定版 sniproxy 依赖 PCRE1，现在统一安装 `libpcre3-dev`。

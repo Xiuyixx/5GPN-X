@@ -71,6 +71,13 @@ install_deps
         self.assertIn('aclocal --install --force -I m4 -I /usr/share/aclocal', block)
         self.assertLess(block.index('rm -f aclocal.m4'), block.index('source_status'))
 
+    def test_pcre1_fallback_is_pinned_and_verified(self):
+        text = (ROOT / "lib/services.sh").read_text()
+        self.assertIn('version="8.45"', text)
+        self.assertIn('sourceforge.net/projects/pcre/files/pcre/${version}/${archive}/download', text)
+        self.assertIn('4e6ce03e0336e8b4a3d6c2b70b1c5e18590a5673a98186da90d4f33c23defc09', text)
+        self.assertIn('pkg-config --exists libpcre', text)
+
     def test_sniproxy_build_dependencies_include_gettext_macros(self):
         text = (ROOT / "lib/services.sh").read_text()
         self.assertIn('autoconf automake libtool gettext pkg-config', text)

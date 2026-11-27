@@ -104,6 +104,7 @@ install_deps() {
         printf '%s\n' 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
     fi
     ok "Go version: $(go version)"
+    install_pcre1_if_needed || return 1
     if command -v certbot >/dev/null 2>&1; then
         if ! certbot --version >/dev/null 2>&1; then
             err "Certbot is installed but cannot run; refusing an unpinned root pip upgrade"
@@ -120,6 +121,38 @@ install_deps() {
         rm -f "$pkg_log"
     fi
     return 0
+}
+
+install_pcre1_if_needed() {
+    pkg-config --exists libpcre 2>/dev/null && return 0
+    info "Installing PCRE1 compatibility library for the pinned sniproxy..."
+    local version="8.45" archive sha tmpdir build_log
+    archive="pcre-${version}.tar.gz"
+    sha="4e6ce03e0336e8b4a3d6c2b70b1c5e18590a5673a98186da90d4f33c23defc09"
+    tmpdir="$(mktemp -d /tmp/5gpn-pcre.XXXXXX)" || return 1
+    build_log="${INSTALL_LOG:-$tmpdir/build.log}"
+    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
+        "https://sourceforge.net/projects/pcre/files/pcre/${version}/${archive}/download" \
+        -o "$tmpdir/$archive" >>"$build_log" 2>&1; then
+        rm -rf "$tmpdir"
+        err "PCRE1 download failed; build log: $build_log"
+        return 1
+    fi
+    if [[ "$(sha256sum "$tmpdir/$archive" | awk '{print $1}')" != "$sha" ]]; then
+        rm -rf "$tmpdir"
+        err "PCRE1 archive checksum mismatch; refusing to build"
+        return 1
+    fi
+    tar -C "$tmpdir" -xzf "$tmpdir/$archive" >>"$build_log" 2>&1 || { rm -rf "$tmpdir"; return 1; }
+    if ! (cd "$tmpdir/pcre-${version}" && ./configure --prefix=/usr/local --disable-static && make -j"${MAKE_JOBS:-$(nproc)}" && make install) >>"$build_log" 2>&1; then
+        rm -rf "$tmpdir"
+        err "PCRE1 build failed; build log: $build_log"
+        return 1
+    fi
+    ldconfig 2>/dev/null || true
+    rm -rf "$tmpdir"
+    pkg-config --exists libpcre || { err "PCRE1 installed but pkg-config cannot find libpcre"; return 1; }
+    ok "PCRE1 compatibility library ready"
 }
 
 install_mosdns_binary() {

@@ -3,7 +3,7 @@
 服务器端透明代理网关：客户端无需安装代理软件，通过加密 DNS 和服务端分流访问网络。
 
 - 默认透明代理客户端网段：`172.22.0.0/16`
-- 项目版本：**1.1.18**（见 [CHANGELOG](CHANGELOG.md)）
+- 项目版本：**1.1.19**（见 [CHANGELOG](CHANGELOG.md)）
 - 支持：Ubuntu 20.04+、Debian 11+、RHEL 系 8+、Fedora 39+；`amd64` / `arm64`
 
 > [!IMPORTANT]
