@@ -923,6 +923,10 @@ def op_rename_exit(old_name, new_name):
 def op_set_exit(name):
     if not EXIT_NAME_RE.match(name):
         return "出口名无效。"
+    current = (_read_file("/opt/5gpn/etc/current-exit") or "local").strip()
+    if name == current:
+        label = "本机直出" if name == "local" else html.escape(name)
+        return "✅ 已是默认出口：<b>%s</b>，无需重复切换。" % label
     ok, out = run2(["bash", MGMT, "--set-exit", name], timeout=60)
     if not ok:
         return "❌ <b>切换失败</b>\n%s" % html.escape(_reason(out))

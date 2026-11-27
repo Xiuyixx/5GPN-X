@@ -745,6 +745,10 @@ set_exit() {
     ip rule add fwmark "${EXIT_MARK}" table "${EXIT_TABLE}" 2>/dev/null || true
     local prev="local"
     [[ -f "${CONF_DIR}/current-exit" ]] && prev="$(cat "${CONF_DIR}/current-exit" 2>/dev/null || echo local)"
+    if [[ "$name" == "$prev" ]]; then
+        ok "Egress already active: $name"
+        return 0
+    fi
     if [[ "$name" == "local" ]]; then
         ip route flush table "${EXIT_TABLE}" 2>/dev/null || true
         echo "local" > "${CONF_DIR}/current-exit"
