@@ -251,7 +251,11 @@ install_sniproxy() {
             libtoolize --install --copy --force || exit 1
             aclocal --install --force -I m4 -I /usr/share/aclocal || exit 1
             DEBEMAIL="root@localhost" DEBFULLNAME="root" ./autogen.sh || exit 1
-            ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns || exit 1
+            # Force recompilation after a previous no-libudns attempt; make
+            # otherwise reuses stale objects and leaves the old feature set.
+            find . -type f \( -name '*.o' -o -name '*.lo' -o -name '*.la' \) -delete
+            CFLAGS="${CFLAGS:-} -DHAVE_LIBUDNS=1" LIBS="${LIBS:-} -ludns" \
+                ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns || exit 1
             make -j"${MAKE_JOBS:-$(nproc)}" || exit 1
             make install || exit 1
         ) >>"$build_log" 2>&1; then
@@ -552,6 +556,7 @@ EOF
 EOF
     local py; py="$(command -v python3 || echo /usr/bin/python3)"
     mkdir -p "${BASE_DIR}/bin"
+    chmod 0755 "${BASE_DIR}/bin"
     if [[ -f "${LIB_DIR}/ios-http.py" ]]; then
         install -m 0755 "${LIB_DIR}/ios-http.py" "${BASE_DIR}/bin/ios-http.py"
     fi

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.20
+
+- 修复 sniproxy 重建时复用无 libudns 对象文件的问题，强制删除旧 C/Libtool 对象并显式启用 libudns。
+- 修复低内存安装后 `/opt/5gpn/bin` 目录权限过严导致 `pxout` 无法执行 quic-proxy 的问题。
+
 ## 1.1.19
 
 - 兼容 Debian 13 已移除 `libpcre3-dev` 的环境：若系统没有 PCRE1，安装器会下载固定 SHA256 的 PCRE 8.45 源码并本地构建验证，再继续编译 sniproxy。
