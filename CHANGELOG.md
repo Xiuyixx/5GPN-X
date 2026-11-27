@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.23
+
+- 补齐参考 5gpn-next 的应用快捷分流：新增常用应用目录，可为 Google、YouTube、ChatGPT、Claude、Gemini、Netflix、Spotify、TikTok、X、Meta、GitHub、Steam 快速选择默认出口、指定出口、手机直连或拦截。
+- 应用快捷设置复用现有 `rules.conf`、mihomo 预检和事务回滚，不引入 Web 端或第二套配置系统。
+
 ## 1.1.22
 
 - 参考 5gpn-next 重构 Telegram 分流与出口界面：出口总览进入单出口详情，支持测试、设为默认、重命名、删除；隐藏内部 `smart` 出口概念。

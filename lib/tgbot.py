@@ -98,6 +98,22 @@ LAST_FAILED_DOT_DOMAIN = {}
 PROXY_URI_RE = re.compile(r"^(ss|vmess|trojan|vless|hysteria2|hy2|tuic|anytls|socks5h|socks5|socks|http|https)://", re.I)
 SUPPORTED_EXIT_LINKS = "ss:// vmess:// trojan:// vless:// hysteria2:// tuic:// anytls:// socks5:// http://"
 
+# 快捷应用分流目录：最终仍写入现有 rules.conf，经现有 mihomo 预检和回滚。
+APP_CATALOG = [
+    ("google", "🔍", "Google", ["GEOSITE,google"]),
+    ("youtube", "▶️", "YouTube", ["GEOSITE,youtube"]),
+    ("chatgpt", "🤖", "ChatGPT", ["DOMAIN-SUFFIX,openai.com", "DOMAIN-SUFFIX,chatgpt.com"]),
+    ("claude", "✳️", "Claude", ["GEOSITE,anthropic"]),
+    ("gemini", "✨", "Gemini", ["GEOSITE,google-gemini"]),
+    ("netflix", "🎬", "Netflix", ["GEOSITE,netflix"]),
+    ("spotify", "🎧", "Spotify", ["GEOSITE,spotify"]),
+    ("tiktok", "🎵", "TikTok", ["GEOSITE,tiktok"]),
+    ("x", "🐦", "X", ["GEOSITE,twitter"]),
+    ("meta", "♾️", "Meta", ["GEOSITE,facebook", "GEOSITE,instagram", "GEOSITE,whatsapp"]),
+    ("github", "🐙", "GitHub", ["GEOSITE,github"]),
+    ("steam", "🎮", "Steam", ["GEOSITE,steam"]),
+]
+
 
 # --------------------------------------------------------------------------- #
 # Telegram API
@@ -1484,6 +1500,81 @@ def _entry_token(text):
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:10]
 
 
+def _app_entry(key):
+    return next((item for item in APP_CATALOG if item[0] == key), None)
+
+
+def _app_rule_state(key):
+    lines = _read_file(RULES_PATH).splitlines()
+    marker = "# 5GPN-APP " + key
+    for i, line in enumerate(lines[:-1]):
+        if line.strip() == marker and lines[i + 1].strip() and not lines[i + 1].lstrip().startswith("#"):
+            parts = lines[i + 1].split(",")
+            return parts[-1].strip() if len(parts) >= 3 else ""
+    return ""
+
+
+def _app_rules_text(key, action):
+    item = _app_entry(key)
+    if not item:
+        return None
+    lines = _read_file(RULES_PATH).splitlines()
+    marker = "# 5GPN-APP " + key
+    out, i = [], 0
+    while i < len(lines):
+        if lines[i].strip() == marker:
+            i += 1
+            if i < len(lines) and lines[i].strip() and not lines[i].lstrip().startswith("#"):
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    if action:
+        out.append(marker)
+        out.append("%s,%s" % (item[3][0], action))
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def op_set_app(key, action):
+    item = _app_entry(key)
+    if not item:
+        return "应用不存在。"
+    if action not in ("", "direct", "block") and action not in _targets():
+        return "目标出口不存在，请刷新后重试。"
+    result = op_set_rules(_app_rules_text(key, action))
+    if result.startswith("✅"):
+        target = "跟随默认出口" if not action else ("手机直连" if action == "direct" else "拦截" if action == "block" else "出口 " + action)
+        return "✅ <b>%s</b> 已设置为 %s" % (html.escape(item[2]), html.escape(target))
+    return result
+
+
+def app_menu():
+    rows = []
+    for key, emoji, label, _ in APP_CATALOG:
+        action = _app_rule_state(key)
+        rows.append([{"text": "%s %s · %s" % (emoji, label, action or "默认"), "callback_data": "app:" + key}])
+    rows.append([{"text": "« 返回分流", "callback_data": "menu:rules"}])
+    return rows
+
+
+def app_targets_menu(key):
+    rows, row = [], []
+    for name in _targets():
+        if name == "smart":
+            continue
+        row.append({"text": name, "callback_data": "appset:%s:%s" % (key, name)})
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([{"text": "🌍 直连", "callback_data": "appset:%s:direct" % key},
+                 {"text": "🚫 拦截", "callback_data": "appset:%s:block" % key}])
+    rows.append([{"text": "↩️ 跟随默认", "callback_data": "appset:%s:-" % key},
+                 {"text": "« 返回应用", "callback_data": "apps"}])
+    return rows
+
+
 def _delete_entry(entries_fn, index, token, empty_text):
     lines, entries = entries_fn()
     if not entries:
@@ -1783,6 +1874,7 @@ def rules_menu():
          {"text": "➕ 添加规则", "callback_data": "rules:add"}],
         [{"text": "🗑 删除规则", "callback_data": "menu:rules_del"},
          {"text": "✏️ 规则设置", "callback_data": "rules:set"}],
+        [{"text": "📱 应用分流", "callback_data": "apps"}],
         [{"text": "📚 规则集状态", "callback_data": "rules:showrs"},
          {"text": "➕ 添加规则集", "callback_data": "rules:addset"}],
         [{"text": "🗑 删除规则集", "callback_data": "menu:rulesets_del"}],
@@ -2158,6 +2250,23 @@ def handle_callback(cb):
         edit(cb, main_menu_text(), main_menu())
     elif data == "menu:rules":
         edit(cb, "📑 <b>分流管理</b>：按域名把代理流量分到不同出口 / 直连 / 拒绝。", rules_menu())
+    elif data == "apps":
+        edit(cb, "📱 <b>应用分流</b>\n\n选择常用应用，为其快捷指定出口。", app_menu())
+    elif data.startswith("app:"):
+        key = data[4:]
+        item = _app_entry(key)
+        if not item:
+            edit(cb, "应用已变化，请重新打开。", app_menu())
+        else:
+            edit(cb, "📱 <b>%s %s</b>\n\n当前：<b>%s</b>\n选择目标出口：" %
+                 (item[1], html.escape(item[2]), html.escape(_app_rule_state(key) or "跟随默认")),
+                 app_targets_menu(key))
+    elif data.startswith("appset:"):
+        parts = data.split(":", 2)
+        key, action = parts[1], parts[2] if len(parts) > 2 else ""
+        action = "" if action == "-" else action
+        edit(cb, "⏳ 正在应用快捷分流…")
+        edit_async(cb, lambda: op_set_app(key, action), keyboard_fn=lambda: app_menu())
     elif data == "menu:rules_del":
         edit(cb, "选择要删除的规则：", rules_del_menu())
     elif data == "menu:rulesets_del":
