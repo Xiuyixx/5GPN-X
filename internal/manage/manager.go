@@ -11,6 +11,7 @@ import (
 	"github.com/Xiuyixx/5GPN-X/internal/config"
 	"github.com/Xiuyixx/5GPN-X/internal/egress"
 	"github.com/Xiuyixx/5GPN-X/internal/migrate"
+	"github.com/Xiuyixx/5GPN-X/internal/node"
 	"github.com/Xiuyixx/5GPN-X/internal/policy"
 )
 
@@ -56,6 +57,79 @@ func (m *Manager) Decision(appKey, domain string) policy.Decision {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return policy.New(m.cfg).Match(appKey, domain)
+}
+
+func (m *Manager) AddURI(raw string) (config.EgressConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, err := node.ParseURI(raw)
+	if err != nil {
+		return config.EgressConfig{}, err
+	}
+	for _, existing := range m.cfg.Egress {
+		if existing.Name == e.Name {
+			return config.EgressConfig{}, fmt.Errorf("egress %q already exists", e.Name)
+		}
+	}
+	m.cfg.Egress = append(m.cfg.Egress, e)
+	if err := m.saveLocked(); err != nil {
+		return config.EgressConfig{}, err
+	}
+	return e, nil
+}
+
+func (m *Manager) DeleteEgress(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if name == "DIRECT" || name == m.cfg.Final {
+		return fmt.Errorf("cannot delete active or DIRECT egress")
+	}
+	found := false
+	kept := make([]config.EgressConfig, 0, len(m.cfg.Egress))
+	for _, e := range m.cfg.Egress {
+		if e.Name == name {
+			found = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if !found {
+		return fmt.Errorf("unknown egress %q", name)
+	}
+	m.cfg.Egress = kept
+	return m.saveLocked()
+}
+
+func (m *Manager) RenameEgress(oldName, newName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if oldName == "DIRECT" || newName == "DIRECT" || oldName == "" || newName == "" {
+		return fmt.Errorf("invalid egress name")
+	}
+	for _, e := range m.cfg.Egress {
+		if e.Name == newName {
+			return fmt.Errorf("egress %q already exists", newName)
+		}
+	}
+	found := false
+	for i := range m.cfg.Egress {
+		if m.cfg.Egress[i].Name == oldName {
+			m.cfg.Egress[i].Name = newName
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("unknown egress %q", oldName)
+	}
+	if m.cfg.Final == oldName {
+		m.cfg.Final = newName
+	}
+	for key, target := range m.cfg.Apps {
+		if target == oldName {
+			m.cfg.Apps[key] = newName
+		}
+	}
+	return m.saveLocked()
 }
 
 func (m *Manager) SetDefault(target string) error {
