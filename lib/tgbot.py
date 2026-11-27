@@ -1549,7 +1549,7 @@ def op_set_app(key, action):
         return "目标出口不存在，请刷新后重试。"
     result = op_set_rules(_app_rules_text(key, action))
     if result.startswith("✅"):
-        target = "跟随默认出口" if not action else ("手机直连" if action == "direct" else "拦截" if action == "block" else "出口 " + action)
+        target = "跟随默认出口" if not action else ("本机直出" if action == "direct" else "拦截" if action == "block" else "出口 " + action)
         return "✅ <b>%s</b> 已设置为 %s" % (html.escape(item[2]), html.escape(target))
     return result
 
@@ -2293,7 +2293,7 @@ def handle_callback(cb):
         key, action = parts[1], parts[2] if len(parts) > 2 else ""
         action = "" if action == "-" else ("direct" if action == "local" else action)
         edit(cb, "⏳ 正在应用快捷分流…")
-        edit_async(cb, lambda: op_set_app(key, action), keyboard=app_menu())
+        edit_async(cb, lambda: op_set_app(key, action), keyboard_fn=lambda: app_targets_menu(key))
     elif data == "menu:rules_del":
         edit(cb, "选择要删除的规则：", rules_del_menu())
     elif data == "menu:rulesets_del":
