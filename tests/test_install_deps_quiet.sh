@@ -55,7 +55,7 @@ grep -q '^-o DPkg::Lock::Timeout=300 update -qq$' "$MOCK_CALLS" || {
     echo "installer must wait for the dpkg lock while updating apt metadata" >&2
     exit 1
 }
-grep -q '^-o DPkg::Lock::Timeout=300 install -y -qq .*libpcre2-dev' "$MOCK_CALLS" || {
+grep -q '^-o DPkg::Lock::Timeout=300 install -y -qq .*libpcre3-dev' "$MOCK_CALLS" || {
     echo "installer must wait for the dpkg lock while installing Debian 13 dependencies" >&2
     exit 1
 }

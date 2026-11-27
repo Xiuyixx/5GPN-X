@@ -17,9 +17,9 @@ install_deps() {
         pkg_log="$(mktemp /tmp/5gpn-packages.XXXXXX.log)"
         temporary_pkg_log=1
     fi
-    if [[ "${OS:-}" == "debian" && "${VER%%.*}" -ge 13 ]]; then
-        pcre_dev_pkg="libpcre2-dev"
-    fi
+    # The pinned sniproxy commit uses the PCRE1 API (libpcre), not PCRE2.
+    # Keep libpcre3-dev on Debian 13 too; substituting libpcre2-dev makes
+    # configure fail with "libpcre was not found".
     case "$PKG_MGR" in
         apt-get)
             export DEBIAN_FRONTEND=noninteractive

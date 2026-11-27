@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.18
+
+- 修复 Debian 13 安装 sniproxy 时错误使用 `libpcre2-dev` 的问题；固定版 sniproxy 依赖 PCRE1，现在统一安装 `libpcre3-dev`。
+
 ## 1.1.17
 
 - 修复 Debian 13 sniproxy 构建缺少 gettext 提供的 `lib-prefix.m4` / `lib-link.m4` 系统宏问题；Debian 与 RHEL 系依赖现在显式安装 `gettext`。
