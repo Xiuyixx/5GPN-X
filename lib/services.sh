@@ -203,6 +203,12 @@ install_sniproxy() {
             git fetch --quiet https://github.com/dlundquist/sniproxy.git "$sniproxy_commit" || exit 1
             git checkout --quiet --detach "$sniproxy_commit" || exit 1
             [[ "$(git rev-parse HEAD)" == "$sniproxy_commit" ]] || exit 1
+            # Debian 13 ships Autoconf 2.72 and this pinned sniproxy commit
+            # references libtool macros that are not initialized by its legacy
+            # autogen.sh. Seed the macros before autoreconf, otherwise
+            # configure is generated with literal AC_LIB_* calls and fails.
+            libtoolize --install --copy --force || exit 1
+            aclocal --install --force || exit 1
             DEBEMAIL="root@localhost" DEBFULLNAME="root" ./autogen.sh || exit 1
             ./configure --prefix=/usr/local --sysconfdir=/etc --enable-dns || exit 1
             make -j"${MAKE_JOBS:-$(nproc)}" || exit 1

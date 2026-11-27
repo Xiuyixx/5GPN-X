@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.12
+
+- 修复 Debian 13（Autoconf 2.72）首次安装 sniproxy 时未初始化旧版 libtool/aclocal 宏，导致 `AC_LIB_*` 宏未定义、`configure` 生成失败的问题。
+- 增加固定 sniproxy commit 的 Debian 13 兼容构建回归检查。
+
 ## 1.1.11
 
 - 重构 README 结构：将快速安装、客户端接入、日常管理、升级排障、安全边界和文档导航分区，保留现有端口、防火墙、权限与能力边界说明。

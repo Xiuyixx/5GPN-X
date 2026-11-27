@@ -59,6 +59,14 @@ install_deps
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(marker.read_text(), "keep")
 
+    def test_sniproxy_bootstrap_initializes_autotools_macros(self):
+        text = (ROOT / "lib/services.sh").read_text()
+        marker = '[[ "$(git rev-parse HEAD)" == "$sniproxy_commit" ]]'
+        start = text.index(marker)
+        block = text[start:text.index('make -j', start)]
+        self.assertIn('libtoolize --install --copy --force', block)
+        self.assertIn('aclocal --install --force', block)
+
     def test_sniproxy_fetch_failure_never_builds(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "sniproxy"
