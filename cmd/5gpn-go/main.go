@@ -1,22 +1,24 @@
-// Command 5gpn-go is the Go management CLI during the architecture migration.
+// Command 5gpn-go is the Go management CLI and runtime entrypoint.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/Xiuyixx/5GPN-X/internal/bot"
 	"github.com/Xiuyixx/5GPN-X/internal/config"
 	"github.com/Xiuyixx/5GPN-X/internal/manage"
 	"github.com/Xiuyixx/5GPN-X/internal/migrate"
 )
 
-const (
-	defaultConfig = "/opt/5gpn/etc/5gpn-go.json"
-	legacyConf    = "/opt/5gpn/etc"
-	legacyExits   = "/etc/5gpn/exits"
-	legacyRules   = "/etc/5gpn/rules.conf"
-)
+const defaultConfig = "/opt/5gpn/etc/5gpn-go.json"
+const legacyConf = "/opt/5gpn/etc"
+const legacyExits = "/etc/5gpn/exits"
+const legacyRules = "/etc/5gpn/rules.conf"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -27,8 +29,7 @@ func main() {
 	if configPath == "" {
 		configPath = defaultConfig
 	}
-	cmd := os.Args[1]
-	args := os.Args[2:]
+	cmd, args := os.Args[1], os.Args[2:]
 	if cmd == "help" || cmd == "--help" || cmd == "-h" {
 		usage()
 		return
@@ -59,6 +60,9 @@ func run(cmd string, args []string, configPath string) error {
 	m, err := manage.Open(paths)
 	if err != nil {
 		return err
+	}
+	if cmd == "run" {
+		return runBot(m)
 	}
 	switch cmd {
 	case "status":
@@ -99,10 +103,26 @@ func run(cmd string, args []string, configPath string) error {
 	}
 }
 
+func runBot(m *manage.Manager) error {
+	cfg := m.Snapshot()
+	if cfg.Bot.Token == "" {
+		return fmt.Errorf("bot token is not configured")
+	}
+	admins := bot.AdminMap(cfg.Bot.Admins)
+	client := bot.NewTelegramClient(cfg.Bot.Token)
+	h := &bot.Handler{Client: client, Manager: m, Admins: admins}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	path := os.Getenv("PGW_GO_OFFSET")
+	if path == "" {
+		path = "/var/lib/5gpn/tgbot-go.offset"
+	}
+	return bot.Poll(ctx, client, &bot.OffsetStore{Path: path}, h.Handle)
+}
+
 func printStatus(cfg config.Config) error {
 	return printJSON(map[string]any{"final": cfg.Final, "egress": len(cfg.Egress), "apps": len(cfg.Apps), "rules": len(cfg.Rules)})
 }
-
 func printExits(cfg config.Config) error {
 	for _, e := range cfg.Egress {
 		mark := "○"
@@ -113,7 +133,6 @@ func printExits(cfg config.Config) error {
 	}
 	return nil
 }
-
 func check(cfg config.Config) error {
 	if cfg.Final == "" {
 		return fmt.Errorf("default egress is empty")
@@ -126,7 +145,6 @@ func check(cfg config.Config) error {
 	fmt.Println("configuration OK")
 	return nil
 }
-
 func validateTarget(cfg config.Config, target string) error {
 	if target == "" || target == "DIRECT" {
 		return nil
@@ -138,7 +156,6 @@ func validateTarget(cfg config.Config, target string) error {
 	}
 	return fmt.Errorf("unknown target %q", target)
 }
-
 func displayTarget(target string) string {
 	if target == "" {
 		return "follow default"
@@ -154,5 +171,5 @@ func printJSON(value any) error {
 	return nil
 }
 func usage() {
-	fmt.Printf("5gpn-go: Go gateway management CLI\n\ncommands: status, list-exits, set-exit, set-app, show-rules, migrate, check, version\nconfig: PGW_GO_CONFIG (default %s)\n", defaultConfig)
+	fmt.Printf("5gpn-go: Go gateway management CLI\n\ncommands: run, status, list-exits, set-exit, set-app, show-rules, migrate, check, version\nconfig: PGW_GO_CONFIG (default %s)\n", defaultConfig)
 }
